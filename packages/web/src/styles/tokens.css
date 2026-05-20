@@ -1,0 +1,85 @@
+/**
+ * Board 设计 token — 见 docs/design-system.md
+ * 基调：Excalidraw 手绘风 × Claude 官网暖色调。
+ * 组件样式一律引用本文件的变量，不写死色值。
+ */
+
+:root {
+  /* ── 基础中性色 ───────────────────────────── */
+  --c-paper: #faf9f5;          /* 画布背景（纸） */
+  --c-cream: #f0eee6;          /* 应用外壳背景 */
+  --c-surface: #ffffff;        /* 卡片 / 工具栏 / 面板 */
+  --c-surface-sunken: #f4f2ea; /* 内嵌区 / 输入框底 / hover 凹陷 */
+  --c-ink: #1a1915;            /* 主文字 & 默认手绘描边 */
+  --c-ink-2: #6e6b62;          /* 次要文字 */
+  --c-ink-3: #a8a498;          /* 占位符 / 禁用 / 三级 */
+  --c-border: #e6e3d8;         /* 默认边框 / 分隔线 */
+  --c-border-strong: #d4d0c0;  /* 强调边框 */
+
+  /* ── 强调色（Claude 陶土橙）────────────────── */
+  --c-accent: #d97757;
+  --c-accent-strong: #be5d3e;
+  --c-accent-tint: #f6e6dd;
+  --c-on-accent: #ffffff;
+
+  /* ── 功能色 ───────────────────────────────── */
+  --c-success: #5e7a52;
+  --c-warning: #c99a3f;
+  --c-danger: #b5544a;
+  --c-info: #5b7c99;
+
+  /* ── 参与者 / 光标色板（PRD §8.2）──────────── */
+  --c-p1: #d97757;  /* 陶土 */
+  --c-p2: #5b7c99;  /* 灰蓝 */
+  --c-p3: #7d8b6a;  /* 鼠尾草 */
+  --c-p4: #c99a3f;  /* 暗金 */
+  --c-p5: #9b6a8c;  /* 梅紫 */
+  --c-p6: #736f66;  /* 暖石 */
+  --c-p7: #b5544a;  /* 砖红 */
+  --c-p8: #5f8a82;  /* 灰青 */
+
+  /* ── 字体 ─────────────────────────────────── */
+  --font-hand: 'Excalifont', 'Virgil', 'Patrick Hand', cursive;
+  --font-ui: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-serif: 'Tiempos', 'Source Serif 4', Georgia, serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
+
+  /* ── 字号 ─────────────────────────────────── */
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-md: 16px;
+  --text-lg: 20px;
+  --text-xl: 24px;
+  --text-2xl: 32px;
+
+  /* ── 间距（4px 基准）─────────────────────── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+
+  /* ── 圆角 ─────────────────────────────────── */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-pill: 999px;
+
+  /* ── 阴影（暖色、柔和）──────────────────────── */
+  --shadow-sm: 0 1px 2px rgba(40, 36, 28, 0.06);
+  --shadow-md: 0 2px 8px rgba(40, 36, 28, 0.08),
+    0 1px 2px rgba(40, 36, 28, 0.06);
+  --shadow-lg: 0 10px 30px rgba(40, 36, 28, 0.14);
+
+  /* ── 焦点环 ───────────────────────────────── */
+  --focus-ring: 0 0 0 3px rgba(217, 119, 87, 0.35);
+
+  /* ── 动效 ─────────────────────────────────── */
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --dur-micro: 150ms;
+  --dur-layout: 240ms;
+}

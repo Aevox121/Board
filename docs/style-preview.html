@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Board 设计系统 · 视觉示意</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Patrick+Hand&display=swap" rel="stylesheet" />
+<style>
+  /* ===== 设计 token（同 packages/web/src/styles/tokens.css）===== */
+  :root {
+    --c-paper:#faf9f5; --c-cream:#f0eee6; --c-surface:#fff; --c-surface-sunken:#f4f2ea;
+    --c-ink:#1a1915; --c-ink-2:#6e6b62; --c-ink-3:#a8a498;
+    --c-border:#e6e3d8; --c-border-strong:#d4d0c0;
+    --c-accent:#d97757; --c-accent-strong:#be5d3e; --c-accent-tint:#f6e6dd; --c-on-accent:#fff;
+    --c-success:#5e7a52; --c-warning:#c99a3f; --c-danger:#b5544a; --c-info:#5b7c99;
+    --font-hand:'Patrick Hand','Excalifont',cursive;
+    --font-ui:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
+    --radius-sm:6px; --radius-md:10px; --radius-lg:16px; --radius-pill:999px;
+    --shadow-sm:0 1px 2px rgba(40,36,28,.06);
+    --shadow-md:0 2px 8px rgba(40,36,28,.08),0 1px 2px rgba(40,36,28,.06);
+    --shadow-lg:0 10px 30px rgba(40,36,28,.14);
+    --focus-ring:0 0 0 3px rgba(217,119,87,.35);
+    --ease:cubic-bezier(.2,0,0,1);
+  }
+  * { box-sizing:border-box; margin:0; }
+  body {
+    font-family:var(--font-ui); background:var(--c-cream); color:var(--c-ink);
+    font-size:14px; line-height:1.5; padding:48px 32px 80px;
+  }
+  .wrap { max-width:1080px; margin:0 auto; }
+
+  /* 页眉 */
+  header.page { margin-bottom:48px; }
+  header.page .kicker { color:var(--c-accent); font-weight:600; letter-spacing:.04em; font-size:13px; }
+  header.page h1 { font-size:32px; font-weight:600; margin:6px 0 8px; }
+  header.page p { color:var(--c-ink-2); max-width:60ch; }
+
+  section { margin-bottom:44px; }
+  section > h2 {
+    font-size:13px; font-weight:600; text-transform:uppercase; letter-spacing:.08em;
+    color:var(--c-ink-2); padding-bottom:8px; border-bottom:1px solid var(--c-border);
+    margin-bottom:20px;
+  }
+
+  /* ===== 色板 ===== */
+  .swatches { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px; }
+  .sw { border:1px solid var(--c-border); border-radius:var(--radius-md); overflow:hidden; background:var(--c-surface); }
+  .sw .chip { height:64px; }
+  .sw .meta { padding:8px 10px; }
+  .sw .name { font-weight:500; font-size:13px; }
+  .sw .hex { color:var(--c-ink-2); font-size:12px; font-family:monospace; }
+  .dots { display:flex; gap:8px; flex-wrap:wrap; }
+  .dot { width:34px; height:34px; border-radius:var(--radius-pill); box-shadow:var(--shadow-sm); }
+
+  /* ===== 字体 ===== */
+  .type-row { display:flex; align-items:baseline; gap:16px; padding:10px 0; border-bottom:1px dashed var(--c-border); }
+  .type-row .tag { width:120px; flex:none; color:var(--c-ink-2); font-size:12px; }
+  .hand { font-family:var(--font-hand); }
+
+  /* ===== 圆角 / 阴影 ===== */
+  .box-grid { display:flex; gap:20px; flex-wrap:wrap; }
+  .demo-box { width:130px; height:84px; background:var(--c-surface); border:1px solid var(--c-border);
+    display:flex; align-items:center; justify-content:center; color:var(--c-ink-2); font-size:12px; }
+
+  /* ===== 按钮 ===== */
+  .btns { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+  .btn { font-family:var(--font-ui); font-size:14px; height:36px; padding:0 16px;
+    border-radius:var(--radius-md); border:1px solid transparent; cursor:pointer;
+    transition:background var(--dur-micro,150ms) var(--ease); }
+  .btn:focus-visible { outline:none; box-shadow:var(--focus-ring); }
+  .btn-primary { background:var(--c-accent); color:var(--c-on-accent); font-weight:600; }
+  .btn-primary:hover { background:var(--c-accent-strong); }
+  .btn-secondary { background:var(--c-surface); border-color:var(--c-border); color:var(--c-ink); }
+  .btn-secondary:hover { background:var(--c-surface-sunken); }
+  .btn-ghost { background:transparent; color:var(--c-ink-2); }
+  .btn-ghost:hover { background:var(--c-surface-sunken); }
+  .btn-danger { background:transparent; color:var(--c-danger); border-color:var(--c-danger); }
+  .btn-danger:hover { background:#f3e3e1; }
+
+  /* ===== 应用界面示意 ===== */
+  .app {
+    border:1px solid var(--c-border-strong); border-radius:var(--radius-lg);
+    overflow:hidden; box-shadow:var(--shadow-lg); background:var(--c-surface);
+  }
+  /* 顶栏 */
+  .topbar { display:flex; align-items:center; gap:12px; height:52px; padding:0 14px;
+    background:var(--c-surface); border-bottom:1px solid var(--c-border); }
+  .topbar .title { font-family:var(--font-hand); font-size:20px; }
+  .toolbar { display:flex; gap:4px; margin:0 auto; background:var(--c-surface);
+    border:1px solid var(--c-border); border-radius:var(--radius-md); padding:4px; box-shadow:var(--shadow-sm); }
+  .tool { width:36px; height:36px; border-radius:var(--radius-sm); border:none; background:transparent;
+    display:flex; align-items:center; justify-content:center; cursor:pointer; color:var(--c-ink); position:relative; }
+  .tool:hover { background:var(--c-surface-sunken); }
+  .tool.active { background:var(--c-accent-tint); color:var(--c-accent); }
+  .tool.active::after { content:""; position:absolute; left:8px; right:8px; bottom:3px; height:2px;
+    background:var(--c-accent); border-radius:2px; }
+  .tool svg { width:18px; height:18px; }
+  .avatars { display:flex; }
+  .avatars .av { width:28px; height:28px; border-radius:var(--radius-pill); border:2px solid var(--c-surface);
+    margin-left:-6px; display:flex; align-items:center; justify-content:center; color:#fff; font-size:12px; font-weight:600; }
+
+  /* 画布 */
+  .canvas { position:relative; height:540px; background:var(--c-paper);
+    background-image:radial-gradient(var(--c-border) 1px, transparent 1px); background-size:24px 24px; }
+
+  /* 手绘描边：::before 只画边框，套 SVG turbulence 滤镜产生手绘抖动，内容不受影响 */
+  .sketch { position:relative; }
+  .sketch::before { content:""; position:absolute; inset:0; border:2px solid var(--c-ink);
+    border-radius:var(--radius-md); filter:url(#rough); pointer-events:none; }
+  .sketch.dashed::before { border-style:dashed; border-color:var(--c-accent); }
+
+  .node { position:absolute; }
+
+  /* 区域 */
+  .region { width:330px; }
+  .region .rbody { background:var(--c-accent-tint); border-radius:var(--radius-md); padding:14px; }
+  .region .rhead { margin-bottom:10px; }
+  .region .rname { font-family:var(--font-hand); font-size:20px; line-height:1.1; }
+  .region .rdesc { font-size:12px; color:var(--c-ink-2); }
+  .region .rfiles { display:flex; gap:12px; }
+
+  /* 文件卡 */
+  .file { width:132px; background:var(--c-surface); border-radius:var(--radius-md); padding:12px; }
+  .file .ficon { font-size:22px; }
+  .file .fname { font-family:var(--font-hand); font-size:16px; margin-top:4px; }
+  .file .fmeta { font-size:11px; color:var(--c-ink-2); }
+  .badge-new { position:absolute; top:-6px; right:-6px; width:14px; height:14px;
+    background:var(--c-accent); border-radius:50%; border:2px solid var(--c-surface); }
+
+  /* 文本卡 */
+  .textcard { width:240px; background:var(--c-surface); border-radius:var(--radius-md); padding:14px; }
+  .textcard h4 { font-family:var(--font-hand); font-size:18px; margin-bottom:6px; }
+  .textcard .todo { display:flex; align-items:center; gap:8px; color:var(--c-ink-2); font-size:13px; margin:3px 0; }
+  .textcard .check { width:15px; height:15px; border:1.5px solid var(--c-border-strong); border-radius:4px; flex:none; }
+  .textcard .check.done { background:var(--c-accent); border-color:var(--c-accent);
+    display:flex; align-items:center; justify-content:center; color:#fff; font-size:10px; }
+  .textcard .lnk { color:var(--c-accent); }
+
+  /* 建议元素 */
+  .suggestion { width:210px; background:var(--c-surface); border-radius:var(--radius-md); padding:13px; }
+  .sug-badge { position:absolute; top:-11px; left:14px; background:var(--c-accent-tint); color:var(--c-accent);
+    font-size:11px; font-weight:600; padding:2px 9px; border-radius:var(--radius-pill); }
+  .sug-title { font-family:var(--font-hand); font-size:16px; margin-bottom:4px; }
+  .sug-body { font-size:12px; color:var(--c-ink-2); margin-bottom:10px; }
+  .sug-actions { display:flex; gap:6px; }
+  .sug-actions .btn { height:28px; padding:0 10px; font-size:12px; }
+  .tether { position:absolute; border-top:2px dashed var(--c-accent); }
+
+  /* draft 态 */
+  .draftcard { width:150px; background:var(--c-surface); border-radius:var(--radius-md); padding:12px; opacity:.6; }
+  .draftcard .fname { font-family:var(--font-hand); font-size:15px; }
+
+  /* Pencil 任务卡 */
+  .task { width:248px; background:var(--c-surface); border-radius:var(--radius-md); overflow:hidden;
+    box-shadow:var(--shadow-md); display:flex; }
+  .task .bar { width:4px; flex:none; background:var(--c-p2); }
+  .task .tbody { padding:12px 14px; }
+  .task .ttitle { font-weight:600; font-size:13px; }
+  .task .tstep { font-size:12px; color:var(--c-ink-2); margin-top:4px; }
+  .task .prog { height:6px; background:var(--c-surface-sunken); border-radius:var(--radius-pill); margin-top:8px; overflow:hidden; }
+  .task .prog i { display:block; height:100%; width:60%; background:var(--c-accent); border-radius:var(--radius-pill); }
+
+  /* Agent 光标 */
+  .cursor { display:flex; align-items:flex-start; }
+  .cursor svg { width:22px; height:22px; }
+  .cursor .nameplate { background:var(--c-p2); color:#fff; font-size:12px; font-weight:600;
+    padding:2px 9px; border-radius:var(--radius-pill); margin-top:-2px; display:flex; align-items:center; gap:5px; white-space:nowrap; }
+  .pulse { width:7px; height:7px; border-radius:50%; background:#fff; box-shadow:0 0 0 0 rgba(255,255,255,.7);
+    animation:pulse 1.6s infinite; }
+  @keyframes pulse { 70%{ box-shadow:0 0 0 7px rgba(255,255,255,0);} 100%{ box-shadow:0 0 0 0 rgba(255,255,255,0);} }
+
+  .caption { font-size:12px; color:var(--c-ink-3); margin-top:10px; }
+  .note { background:var(--c-surface); border:1px solid var(--c-border); border-left:3px solid var(--c-accent);
+    border-radius:var(--radius-md); padding:12px 14px; color:var(--c-ink-2); font-size:13px; }
+</style>
+</head>
+<body>
+<!-- 手绘描边滤镜 -->
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <filter id="rough">
+      <feTurbulence type="fractalNoise" baseFrequency="0.018" numOctaves="3" result="n" />
+      <feDisplacementMap in="SourceGraphic" in2="n" scale="3.5" />
+    </filter>
+  </defs>
+</svg>
+
+<div class="wrap">
+  <header class="page">
+    <div class="kicker">BOARD 设计系统</div>
+    <h1>视觉示意</h1>
+    <p>Excalidraw 式手绘风 × Claude 官网暖色调。手绘质感只用在"板上"的内容元素，应用外壳保持干净暖色。完整规格见 <code>docs/design-system.md</code>。</p>
+  </header>
+
+  <!-- 色彩 -->
+  <section>
+    <h2>色彩</h2>
+    <div class="swatches">
+      <div class="sw"><div class="chip" style="background:#faf9f5;border-bottom:1px solid #e6e3d8"></div><div class="meta"><div class="name">画布纸色</div><div class="hex">#FAF9F5</div></div></div>
+      <div class="sw"><div class="chip" style="background:#f0eee6"></div><div class="meta"><div class="name">外壳奶油</div><div class="hex">#F0EEE6</div></div></div>
+      <div class="sw"><div class="chip" style="background:#1a1915"></div><div class="meta"><div class="name">墨色 / 描边</div><div class="hex">#1A1915</div></div></div>
+      <div class="sw"><div class="chip" style="background:#6e6b62"></div><div class="meta"><div class="name">次要文字</div><div class="hex">#6E6B62</div></div></div>
+      <div class="sw"><div class="chip" style="background:#d97757"></div><div class="meta"><div class="name">陶土橙 · 强调</div><div class="hex">#D97757</div></div></div>
+      <div class="sw"><div class="chip" style="background:#be5d3e"></div><div class="meta"><div class="name">陶土橙 · 深</div><div class="hex">#BE5D3E</div></div></div>
+      <div class="sw"><div class="chip" style="background:#f6e6dd"></div><div class="meta"><div class="name">陶土橙 · 浅填充</div><div class="hex">#F6E6DD</div></div></div>
+      <div class="sw"><div class="chip" style="background:#e6e3d8"></div><div class="meta"><div class="name">边框</div><div class="hex">#E6E3D8</div></div></div>
+    </div>
+    <p class="caption" style="margin-bottom:10px">功能色与参与者 / 光标色板（全部压暖、压饱和，与主题协调）：</p>
+    <div class="dots">
+      <div class="dot" style="background:#5e7a52" title="success"></div>
+      <div class="dot" style="background:#c99a3f" title="warning"></div>
+      <div class="dot" style="background:#b5544a" title="danger"></div>
+      <div class="dot" style="background:#5b7c99" title="info"></div>
+      <div class="dot" style="background:#d97757"></div>
+      <div class="dot" style="background:#7d8b6a"></div>
+      <div class="dot" style="background:#9b6a8c"></div>
+      <div class="dot" style="background:#736f66"></div>
+      <div class="dot" style="background:#5f8a82"></div>
+    </div>
+  </section>
+
+  <!-- 字体 -->
+  <section>
+    <h2>字体</h2>
+    <div class="type-row"><div class="tag">手写体 · 画布</div><div class="hand" style="font-size:28px">路线规划 Agent 协作白板</div></div>
+    <div class="type-row"><div class="tag">UI 体 · 外壳</div><div style="font-size:20px;font-weight:500">工具栏 / 面板 / 按钮 Inter</div></div>
+    <div class="type-row"><div class="tag">正文 14px</div><div>这是应用外壳里的正文，干净、克制、可读，呼应 Claude 官网。</div></div>
+    <div class="type-row"><div class="tag">等宽 · 代码</div><div style="font-family:monospace">board add file 路线/车票.pdf --region 路线</div></div>
+  </section>
+
+  <!-- 圆角 / 阴影 -->
+  <section>
+    <h2>圆角与阴影</h2>
+    <div class="box-grid">
+      <div class="demo-box" style="border-radius:6px">6 · 控件</div>
+      <div class="demo-box" style="border-radius:10px">10 · 卡片</div>
+      <div class="demo-box" style="border-radius:16px">16 · 弹窗</div>
+      <div class="demo-box" style="border:none;border-radius:10px;box-shadow:var(--shadow-sm)">shadow-sm</div>
+      <div class="demo-box" style="border:none;border-radius:10px;box-shadow:var(--shadow-md)">shadow-md</div>
+      <div class="demo-box" style="border:none;border-radius:10px;box-shadow:var(--shadow-lg)">shadow-lg</div>
+    </div>
+  </section>
+
+  <!-- 按钮 -->
+  <section>
+    <h2>按钮</h2>
+    <div class="btns">
+      <button class="btn btn-primary">同意建议</button>
+      <button class="btn btn-secondary">描述</button>
+      <button class="btn btn-ghost">取消</button>
+      <button class="btn btn-danger">拒绝</button>
+    </div>
+  </section>
+
+  <!-- 应用界面示意 -->
+  <section>
+    <h2>应用界面示意</h2>
+    <div class="app">
+      <!-- 顶栏 + 工具栏 -->
+      <div class="topbar">
+        <span class="title">旅行计划</span>
+        <div class="toolbar">
+          <button class="tool" title="选择"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l7 17 2.5-7L21 11 5 3z"/></svg></button>
+          <button class="tool" title="手绘"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21c4-1 6-3 9-8s5-7 9-9c-1 4-3 8-7 12s-7 5-11 5z"/></svg></button>
+          <button class="tool" title="图形"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="6" width="16" height="12" rx="2"/></svg></button>
+          <button class="tool" title="连线"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20L20 4M20 4h-7M20 4v7"/></svg></button>
+          <button class="tool" title="文本"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 6h14M12 6v13"/></svg></button>
+          <button class="tool active" title="区域"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="4" width="16" height="16" rx="2" stroke-dasharray="3 3"/></svg></button>
+          <button class="tool" title="文件"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/></svg></button>
+        </div>
+        <div class="avatars">
+          <div class="av" style="background:#d97757">我</div>
+          <div class="av" style="background:#5b7c99">A</div>
+          <div class="av" style="background:#7d8b6a">友</div>
+        </div>
+      </div>
+
+      <!-- 画布 -->
+      <div class="canvas">
+        <!-- 区域（手绘） -->
+        <div class="node region sketch" style="left:36px;top:40px;transform:rotate(-.5deg)">
+          <div class="rbody">
+            <div class="rhead">
+              <div class="rname">路线</div>
+              <div class="rdesc">放所有路线相关内容 · 指派给 我的Agent</div>
+            </div>
+            <div class="rfiles">
+              <div class="file sketch" style="transform:rotate(.6deg)">
+                <div class="ficon">📄</div>
+                <div class="fname">day1-route</div>
+                <div class="fmeta">Markdown · 4 KB</div>
+              </div>
+              <div class="file sketch" style="transform:rotate(-.7deg)">
+                <span class="badge-new"></span>
+                <div class="ficon">🗜️</div>
+                <div class="fname">车票机票</div>
+                <div class="fmeta">ZIP · 200 KB</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 文本 / Markdown 卡（手绘） -->
+        <div class="node textcard sketch" style="left:412px;top:36px;transform:rotate(.6deg)">
+          <h4>行程要点</h4>
+          <div class="todo"><span class="check done">✓</span><span>订往返车票</span></div>
+          <div class="todo"><span class="check"></span><span>确认酒店位置</span></div>
+          <div class="todo"><span class="check"></span><span>查 <span class="lnk">天气预报 ↗</span></span></div>
+        </div>
+
+        <!-- 建议元素（手绘 · 虚线） -->
+        <div class="node suggestion sketch dashed" style="left:412px;top:212px">
+          <span class="sug-badge">建议</span>
+          <div class="sug-title">行程要点（修订）</div>
+          <div class="sug-body">建议补充"携带充电宝"，并把酒店项前移。</div>
+          <div class="sug-actions">
+            <button class="btn btn-primary">同意</button>
+            <button class="btn btn-secondary">描述</button>
+            <button class="btn btn-danger">拒绝</button>
+          </div>
+        </div>
+        <!-- 建议 → 原件 的连接虚线 -->
+        <div class="tether" style="left:520px;top:200px;width:0;height:12px;border-top:none;border-left:2px dashed #d97757"></div>
+
+        <!-- draft 态（Agent 进行中） -->
+        <div class="node draftcard sketch dashed" style="left:96px;top:296px;transform:rotate(.8deg)">
+          <div class="ficon">📄</div>
+          <div class="fname">车次方案 2…</div>
+        </div>
+
+        <!-- Pencil 任务卡 -->
+        <div class="node task" style="left:250px;top:300px">
+          <div class="bar"></div>
+          <div class="tbody">
+            <div class="ttitle">我的Agent 正在工作…</div>
+            <div class="tstep">查询 5/22–5/25 高铁票 · 已找到 3 个车次</div>
+            <div class="prog"><i></i></div>
+          </div>
+        </div>
+
+        <!-- Agent 在场光标 -->
+        <div class="node cursor" style="left:212px;top:262px">
+          <svg viewBox="0 0 24 24" fill="#5b7c99" stroke="#fff" stroke-width="1.5"><path d="M5 3l7 17 2.5-7L21 11 5 3z"/></svg>
+          <div class="nameplate"><span class="pulse"></span>我的Agent</div>
+        </div>
+      </div>
+    </div>
+    <p class="caption">画布元素（区域 / 文件卡 / 文本卡 / 建议）用 SVG turbulence 滤镜模拟手绘抖动描边并带轻微旋转；顶栏、工具栏、按钮保持干净暖色 UI。生产环境画布描边由 roughjs 渲染。</p>
+  </section>
+
+  <section>
+    <div class="note">说明：本页手写体用 Google Fonts 的 Patrick Hand 作占位演示；生产环境画布手写体用 Excalidraw 开源字体 <strong>Excalifont</strong>（OFL 许可），与画布图形天然一致。</div>
+  </section>
+</div>
+</body>
+</html>
