@@ -105,6 +105,14 @@ export type ElementType =
 /** `committed` 正式 / `draft` Agent 进行中（PRD §7.4） */
 export type ElementState = 'committed' | 'draft';
 
+/** 元素评论（PRD §8.4）—— 挂在任意元素上的一条批注。 */
+export interface ElementComment {
+  /** 评论者参与者 id */
+  by: ParticipantId;
+  text: string;
+  ts: ISO8601;
+}
+
 /** 所有元素共享的通用字段。 */
 export interface BaseElement {
   id: ElementId;
@@ -130,6 +138,8 @@ export interface BaseElement {
   updatedBy: ParticipantId;
   createdAt: ISO8601;
   updatedAt: ISO8601;
+  /** 元素上的评论（PRD §8.4）；无评论时省略 */
+  comments?: ElementComment[];
   /** 扩展位，未知字段保留不丢弃 */
   meta?: Record<string, unknown>;
 }

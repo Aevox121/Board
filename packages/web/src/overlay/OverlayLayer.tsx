@@ -933,6 +933,17 @@ export function OverlayLayer({
               ) : (
                 <FileCard element={el} missing={missingFileIds.has(el.id)} />
               )}
+              {/* 评论角标（PRD §8.4）—— 元素有评论时显示条数 */}
+              {(el.comments?.length ?? 0) > 0 ? (
+                <div
+                  className="ov-comment-badge"
+                  title={(el.comments ?? [])
+                    .map((c) => `${c.by}: ${c.text}`)
+                    .join('\n')}
+                >
+                  💬 {el.comments?.length}
+                </div>
+              ) : null}
             </div>
           );
         })}

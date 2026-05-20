@@ -163,9 +163,105 @@ async function regionLs(args: ParsedArgs): Promise<CmdResult> {
 }
 
 /**
+ * `board region describe <白板路径> <区域名> --desc "<描述>"`
+ *
+ * 改区域描述，并同步落地为该区域文件夹的 README.md（规格 §2.2 / R5）。
+ */
+async function regionDescribe(args: ParsedArgs): Promise<CmdResult> {
+  const boardPath = args.positionals[0];
+  const regionName = args.positionals[1];
+  if (boardPath === undefined || regionName === undefined) {
+    throw new CliError(
+      '用法: board region describe <白板路径> <区域名> --desc "<描述>"',
+      EXIT.USAGE,
+    );
+  }
+  const desc = args.options.get('desc');
+  if (desc === undefined) {
+    throw new CliError(
+      '缺少 --desc。用法: board region describe <白板路径> <区域名> --desc "<描述>"',
+      EXIT.USAGE,
+    );
+  }
+
+  const dir = resolveBoardDir(boardPath, args.options.get('board'));
+  const handle = await loadBoard(dir);
+  const region = regionsOf(handle.scene.elements).find(
+    (r) => r.label === regionName || r.path === regionName,
+  );
+  if (!region) {
+    throw new CliError(`未找到区域：${regionName}`, EXIT.NOT_FOUND);
+  }
+
+  const actor = args.options.get('actor') ?? DEFAULT_ACTOR;
+  const ts = new Date().toISOString();
+  const next = handle.scene.elements.map((e) =>
+    e.id === region.id && e.type === 'region'
+      ? { ...e, description: desc, updatedBy: actor, updatedAt: ts }
+      : e,
+  );
+  await saveBoard(dir, handle.meta, { ...handle.scene, elements: next });
+  // 区域描述同步落地为文件夹 README.md。
+  await writeFile(join(dir, 'files', region.path, 'README.md'), desc, 'utf8');
+
+  return {
+    code: EXIT.OK,
+    text: `已更新区域「${region.label}」的描述`,
+    data: { elementId: region.id, label: region.label, description: desc },
+  };
+}
+
+/**
+ * `board region assign <白板路径> <区域名> --agent <agentId>`
+ *
+ * 把区域指派给某个 Agent（PRD §7.6 区域委派）—— 设 `assignedAgentId`。
+ */
+async function regionAssign(args: ParsedArgs): Promise<CmdResult> {
+  const boardPath = args.positionals[0];
+  const regionName = args.positionals[1];
+  if (boardPath === undefined || regionName === undefined) {
+    throw new CliError(
+      '用法: board region assign <白板路径> <区域名> --agent <agentId>',
+      EXIT.USAGE,
+    );
+  }
+  const agent = args.options.get('agent');
+  if (!agent) {
+    throw new CliError(
+      '缺少 --agent。用法: board region assign <白板路径> <区域名> --agent <agentId>',
+      EXIT.USAGE,
+    );
+  }
+
+  const dir = resolveBoardDir(boardPath, args.options.get('board'));
+  const handle = await loadBoard(dir);
+  const region = regionsOf(handle.scene.elements).find(
+    (r) => r.label === regionName || r.path === regionName,
+  );
+  if (!region) {
+    throw new CliError(`未找到区域：${regionName}`, EXIT.NOT_FOUND);
+  }
+
+  const actor = args.options.get('actor') ?? DEFAULT_ACTOR;
+  const ts = new Date().toISOString();
+  const next = handle.scene.elements.map((e) =>
+    e.id === region.id && e.type === 'region'
+      ? { ...e, assignedAgentId: agent, updatedBy: actor, updatedAt: ts }
+      : e,
+  );
+  await saveBoard(dir, handle.meta, { ...handle.scene, elements: next });
+
+  return {
+    code: EXIT.OK,
+    text: `已把区域「${region.label}」指派给 ${agent}`,
+    data: { elementId: region.id, label: region.label, assignedAgentId: agent },
+  };
+}
+
+/**
  * 执行 region 命令。
  *
- * @param args 位置参数[0] = 子命令（create/ls）；其余按子命令解析
+ * @param args 位置参数[0] = 子命令（create/ls/describe/assign）；其余按子命令解析
  */
 export async function cmdRegion(args: ParsedArgs): Promise<CmdResult> {
   const sub = args.positionals[0];
@@ -188,9 +284,13 @@ export async function cmdRegion(args: ParsedArgs): Promise<CmdResult> {
       return regionCreate(subArgs);
     case 'ls':
       return regionLs(subArgs);
+    case 'describe':
+      return regionDescribe(subArgs);
+    case 'assign':
+      return regionAssign(subArgs);
     default:
       throw new CliError(
-        `未知子命令 "region ${sub}"。可用: create, ls`,
+        `未知子命令 "region ${sub}"。可用: create, ls, describe, assign`,
         EXIT.USAGE,
       );
   }

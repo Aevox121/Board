@@ -37,6 +37,25 @@
   position: absolute;
 }
 
+/* 评论角标（PRD §8.4）—— 贴在卡片右上角，显示评论条数；hover 出全文。 */
+.ov-comment-badge {
+  position: absolute;
+  top: -9px;
+  right: -9px;
+  padding: 1px var(--space-2);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-pill);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--c-ink-2);
+  box-shadow: var(--shadow-sm);
+  pointer-events: auto;
+  white-space: nowrap;
+  cursor: help;
+}
+
 /* 文件 / 文本卡槽 —— 可拖拽（M2 增量2/3）。整槽接收指针事件并显示抓取光标。 */
 .ov-slot--file,
 .ov-slot--text {

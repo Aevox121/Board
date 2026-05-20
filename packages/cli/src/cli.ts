@@ -32,6 +32,10 @@ import { cmdTask } from './commands/task.js';
 import { cmdSuggest } from './commands/suggest.js';
 import { cmdShape } from './commands/shape.js';
 import { cmdConnect } from './commands/connect.js';
+import { cmdRm } from './commands/rm.js';
+import { cmdSearch } from './commands/search.js';
+import { cmdComment } from './commands/comment.js';
+import { cmdStyle } from './commands/style.js';
 import { runMcpServer } from './commands/mcp.js';
 
 /** 命令处理函数签名。 */
@@ -51,15 +55,16 @@ const HANDLERS: Record<string, Handler> = {
   suggest: cmdSuggest,
   shape: cmdShape,
   connect: cmdConnect,
+  rm: cmdRm,
+  search: cmdSearch,
+  comment: cmdComment,
+  style: cmdStyle,
 };
 
 /** 已登记但尚未实现的命令（规格 §2，逐里程碑补全）。 */
 const PLACEHOLDER_COMMANDS = [
   'open',
   'serve',
-  'rm',
-  'search',
-  'comment',
   'agent',
   'watch',
   'snapshot',
@@ -105,6 +110,12 @@ function printHelp(): void {
   console.log('  show <路径> [--depth 0|1|2] [--region <名>]    导出白板上下文（渐进式披露）');
   console.log('  shape add <路径> <rectangle|ellipse|diamond> [--at x,y] [--label "<文字>"]   添加图形');
   console.log('  connect <路径> <源元素id> <目标元素id> [--label "<文字>"] [--arrow <样式>]    连线');
+  console.log('  rm <路径> <元素id>                            删除元素（文件移入回收站）');
+  console.log('  search <路径> "<关键词>"                      搜索元素文字 / 文件名 / 文件内容');
+  console.log('  comment <路径> <元素id> "<文本>"              给元素加一条评论');
+  console.log('  style <路径> <元素id> [--stroke <色>] [--fill <色>] [--opacity <n>]   改元素样式');
+  console.log('  region describe <路径> <区域名> --desc "<描述>"     改区域描述');
+  console.log('  region assign <路径> <区域名> --agent <id>          指派区域给 Agent');
   console.log('  suggest <路径> <元素id> --type <replace|add> --as text:"<md>"   创建建议');
   console.log('  add text <路径> "<markdown>" --draft          添加 draft 态文本卡');
   console.log('  mcp <路径> [--port <n>]                       启动 MCP Server (stdio)');

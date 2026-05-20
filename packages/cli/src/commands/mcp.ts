@@ -23,6 +23,10 @@ import { cmdTask } from './task.js';
 import { cmdSuggest } from './suggest.js';
 import { cmdShape } from './shape.js';
 import { cmdConnect } from './connect.js';
+import { cmdRm } from './rm.js';
+import { cmdSearch } from './search.js';
+import { cmdComment } from './comment.js';
+import { cmdStyle } from './style.js';
 
 /** 由位置参数 / 选项 / 开关构造一个 ParsedArgs（喂给 cmd* 函数）。 */
 function mkArgs(
@@ -362,6 +366,139 @@ export async function runMcpServer(
           label: a.label,
           arrow: a.arrow,
           routing: a.routing,
+          actor: a.agent,
+        }),
+        port,
+      ),
+  );
+
+  // ── 读：搜索 ────────────────────────────────────────────────
+  server.registerTool(
+    'board_search',
+    {
+      description:
+        '搜索白板：元素文字 / 文件名 / 文本类文件内容。结果含元素 id 与命中片段。',
+      inputSchema: {
+        keyword: z.string().describe('搜索关键词（大小写不敏感）'),
+      },
+    },
+    async (a) =>
+      runCmd('board_search', cmdSearch, mkArgs([boardPath, a.keyword])),
+  );
+
+  // ── 写：删除元素 ────────────────────────────────────────────
+  server.registerTool(
+    'board_delete_element',
+    {
+      description:
+        '删除一个元素。file 元素的真实文件移入回收站；引用该元素的连线 / 建议' +
+        '一并清理。region / folder 元素不在删除范围。',
+      inputSchema: {
+        elementId: z.string().describe('要删除的元素 id'),
+      },
+    },
+    async (a) =>
+      runCmd(
+        'board_delete_element',
+        cmdRm,
+        mkArgs([boardPath, a.elementId]),
+        port,
+      ),
+  );
+
+  // ── 写：加评论 ──────────────────────────────────────────────
+  server.registerTool(
+    'board_add_comment',
+    {
+      description: '给某个元素加一条评论（PRD §8.4）。',
+      inputSchema: {
+        elementId: z.string().describe('被评论的元素 id'),
+        text: z.string().describe('评论内容'),
+        agent: z.string().optional().describe('评论者 Agent id'),
+      },
+    },
+    async (a) =>
+      runCmd(
+        'board_add_comment',
+        cmdComment,
+        mkArgs([boardPath, a.elementId, a.text], { actor: a.agent }),
+        port,
+      ),
+  );
+
+  // ── 写：改区域描述 ──────────────────────────────────────────
+  server.registerTool(
+    'board_describe_region',
+    {
+      description: '修改区域描述（同步落地为区域文件夹的 README.md）。',
+      inputSchema: {
+        region: z.string().describe('区域名'),
+        description: z.string().describe('新的区域描述'),
+      },
+    },
+    async (a) =>
+      runCmd(
+        'board_describe_region',
+        cmdRegion,
+        mkArgs(['describe', boardPath, a.region], { desc: a.description }),
+        port,
+      ),
+  );
+
+  // ── 写：指派区域给 Agent ────────────────────────────────────
+  server.registerTool(
+    'board_assign_region',
+    {
+      description:
+        '把区域指派给某个 Agent（PRD §7.6 区域委派）—— Agent 的工作范围聚焦此区域。',
+      inputSchema: {
+        region: z.string().describe('区域名'),
+        agent: z.string().describe('被指派的 Agent id'),
+      },
+    },
+    async (a) =>
+      runCmd(
+        'board_assign_region',
+        cmdRegion,
+        mkArgs(['assign', boardPath, a.region], { agent: a.agent }),
+        port,
+      ),
+  );
+
+  // ── 写：改元素样式 ──────────────────────────────────────────
+  server.registerTool(
+    'board_style_element',
+    {
+      description:
+        '修改元素的统一样式（PRD §6.7）：描边色 / 填充色 / 描边宽度 / 线型 / 透明度。' +
+        '可用于给元素做视觉编码（如重要项标红框）。',
+      inputSchema: {
+        elementId: z.string().describe('目标元素 id'),
+        stroke: z.string().optional().describe('描边色（hex 或颜色名）'),
+        fill: z
+          .string()
+          .optional()
+          .describe('填充 / 背景色；transparent 表示无'),
+        strokeWidth: z.number().optional().describe('描边宽度 1–8'),
+        strokeStyle: z
+          .enum(['solid', 'dashed', 'dotted'])
+          .optional()
+          .describe('描边线型'),
+        opacity: z.number().optional().describe('不透明度 0–100'),
+        agent: z.string().optional().describe('执行的 Agent id'),
+      },
+    },
+    async (a) =>
+      runCmd(
+        'board_style_element',
+        cmdStyle,
+        mkArgs([boardPath, a.elementId], {
+          stroke: a.stroke,
+          fill: a.fill,
+          'stroke-width':
+            a.strokeWidth !== undefined ? String(a.strokeWidth) : undefined,
+          'stroke-style': a.strokeStyle,
+          opacity: a.opacity !== undefined ? String(a.opacity) : undefined,
           actor: a.agent,
         }),
         port,
