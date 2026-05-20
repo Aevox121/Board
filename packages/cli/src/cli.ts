@@ -30,6 +30,8 @@ import { cmdRegion } from './commands/region.js';
 import { cmdMv } from './commands/mv.js';
 import { cmdTask } from './commands/task.js';
 import { cmdSuggest } from './commands/suggest.js';
+import { cmdShape } from './commands/shape.js';
+import { cmdConnect } from './commands/connect.js';
 import { runMcpServer } from './commands/mcp.js';
 
 /** 命令处理函数签名。 */
@@ -47,14 +49,14 @@ const HANDLERS: Record<string, Handler> = {
   mv: cmdMv,
   task: cmdTask,
   suggest: cmdSuggest,
+  shape: cmdShape,
+  connect: cmdConnect,
 };
 
 /** 已登记但尚未实现的命令（规格 §2，逐里程碑补全）。 */
 const PLACEHOLDER_COMMANDS = [
   'open',
   'serve',
-  'shape',
-  'connect',
   'rm',
   'search',
   'comment',
@@ -101,6 +103,8 @@ function printHelp(): void {
   console.log('');
   console.log('已实现命令 (M3):');
   console.log('  show <路径> [--depth 0|1|2] [--region <名>]    导出白板上下文（渐进式披露）');
+  console.log('  shape add <路径> <rectangle|ellipse|diamond> [--at x,y] [--label "<文字>"]   添加图形');
+  console.log('  connect <路径> <源元素id> <目标元素id> [--label "<文字>"] [--arrow <样式>]    连线');
   console.log('  suggest <路径> <元素id> --type <replace|add> --as text:"<md>"   创建建议');
   console.log('  add text <路径> "<markdown>" --draft          添加 draft 态文本卡');
   console.log('  mcp <路径> [--port <n>]                       启动 MCP Server (stdio)');

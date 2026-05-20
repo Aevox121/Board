@@ -119,7 +119,15 @@ export function BoardCanvas(): JSX.Element {
       // text 的场景回推 Excalidraw，使其丢弃原生 text 元素，交由覆盖层接管。
       // 仍在编辑（editingElement 非空）时不回推，以免打断文本输入框。
       const editing = (appState as { editingElement?: unknown }).editingElement;
-      if (!editing && apiRef.current && elements.some((e) => e.type === 'text')) {
+      // 只为「自由文本」（用户用文本工具新建、无 containerId）回推 —— 图形 /
+      // 连线的绑定标签文本（containerId 非空）不算，否则每次 onChange 都会多余
+      // 回推一次。
+      const hasFreeText = elements.some(
+        (e) =>
+          e.type === 'text' &&
+          !(e as { containerId?: unknown }).containerId,
+      );
+      if (!editing && apiRef.current && hasFreeText) {
         suppressNextChange.current = true;
         apiRef.current.updateScene({
           elements: sceneToExcalidraw(next).elements,

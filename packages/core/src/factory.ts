@@ -19,6 +19,10 @@ import {
   type FolderElement,
   type ShapeElement,
   type ShapeKind,
+  type ConnectorElement,
+  type Endpoint,
+  type ArrowHead,
+  type ConnectorRouting,
   type FileDisplayMode,
   type SuggestionElement,
   type SuggestionType,
@@ -190,6 +194,29 @@ export function createShapeElement(
     ...baseElement('shape', init),
     type: 'shape',
     shape: init.shape,
+    label: init.label ? { text: init.label } : null,
+  };
+}
+
+/** 创建连线 / 箭头元素（连接两个元素，PRD §6.2）。 */
+export function createConnectorElement(
+  init: BaseElementInit & {
+    start: Endpoint;
+    end: Endpoint;
+    startArrow?: ArrowHead;
+    endArrow?: ArrowHead;
+    routing?: ConnectorRouting;
+    label?: string;
+  },
+): ConnectorElement {
+  return {
+    ...baseElement('connector', init),
+    type: 'connector',
+    start: init.start,
+    end: init.end,
+    startArrow: init.startArrow ?? 'none',
+    endArrow: init.endArrow ?? 'arrow',
+    routing: init.routing ?? 'straight',
     label: init.label ? { text: init.label } : null,
   };
 }

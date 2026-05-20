@@ -21,6 +21,8 @@ import { cmdAdd } from './add.js';
 import { cmdRegion } from './region.js';
 import { cmdTask } from './task.js';
 import { cmdSuggest } from './suggest.js';
+import { cmdShape } from './shape.js';
+import { cmdConnect } from './connect.js';
 
 /** 由位置参数 / 选项 / 开关构造一个 ParsedArgs（喂给 cmd* 函数）。 */
 function mkArgs(
@@ -287,6 +289,81 @@ export async function runMcpServer(
             actor: a.agent,
           },
         ),
+        port,
+      ),
+  );
+
+  // ── 写：添加几何图形（画流程图）────────────────────────────
+  server.registerTool(
+    'board_add_shape',
+    {
+      description:
+        '添加一个几何图形（rectangle / ellipse / diamond）。Agent 画流程图用 —— ' +
+        '配合 board_connect 连线即可表达方框 + 箭头的流程图。手绘不开放。',
+      inputSchema: {
+        kind: z
+          .enum(['rectangle', 'ellipse', 'diamond'])
+          .describe('图形类型'),
+        label: z.string().optional().describe('图形内文字（流程图节点名）'),
+        at: z
+          .string()
+          .optional()
+          .describe('画布坐标 "x,y"；省略则自动排版'),
+        size: z
+          .string()
+          .optional()
+          .describe('尺寸 "w,h"；省略用默认 160x72'),
+        region: z.string().optional().describe('放入的区域名'),
+        agent: z.string().optional().describe('执行的 Agent id'),
+      },
+    },
+    async (a) =>
+      runCmd(
+        'board_add_shape',
+        cmdShape,
+        mkArgs(['add', boardPath, a.kind], {
+          label: a.label,
+          at: a.at,
+          size: a.size,
+          region: a.region,
+          actor: a.agent,
+        }),
+        port,
+      ),
+  );
+
+  // ── 写：在两元素间连线 ──────────────────────────────────────
+  server.registerTool(
+    'board_connect',
+    {
+      description:
+        '在两个元素之间连一条线 / 箭头。两端若都是图形（board_add_shape 建的），' +
+        '图形移动时连线自动跟随。画流程图：先 board_add_shape 建节点，再用本工具连。',
+      inputSchema: {
+        from: z.string().describe('源元素 id'),
+        to: z.string().describe('目标元素 id'),
+        label: z.string().optional().describe('连线上的文字'),
+        arrow: z
+          .enum(['none', 'arrow', 'triangle', 'dot'])
+          .optional()
+          .describe('末端箭头样式，默认 arrow；none = 纯直线'),
+        routing: z
+          .enum(['straight', 'orthogonal', 'curved'])
+          .optional()
+          .describe('走线方式，默认 straight'),
+        agent: z.string().optional().describe('执行的 Agent id'),
+      },
+    },
+    async (a) =>
+      runCmd(
+        'board_connect',
+        cmdConnect,
+        mkArgs([boardPath, a.from, a.to], {
+          label: a.label,
+          arrow: a.arrow,
+          routing: a.routing,
+          actor: a.agent,
+        }),
         port,
       ),
   );

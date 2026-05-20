@@ -10,11 +10,18 @@
  * `scrollX/scrollY`（= 视口左上对应的画布坐标的相反量级）。M1 直接对应：
  *   scrollX = viewport.x，scrollY = viewport.y。
  */
-import { restoreElements } from '@excalidraw/excalidraw';
+import { restoreElements, convertToExcalidrawElements } from '@excalidraw/excalidraw';
+import type { ExcalidrawElementSkeleton } from '@excalidraw/excalidraw/types/data/transform';
 import type { BoardScene, Element, ParticipantId } from '@board/core';
 import { createBoardScene } from '@board/core';
-import type { ExElement } from './types';
-import { coreToExcalidraw, excalidrawToCore, rawExcalidrawOf } from './element';
+import type { ExElement, ExElementSkeleton } from './types';
+import {
+  coreToExcalidraw,
+  excalidrawToCore,
+  rawExcalidrawOf,
+  shapeToSkeleton,
+  connectorToSkeleton,
+} from './element';
 
 /** Excalidraw appState 中本桥接关心的视口字段。 */
 export interface ExViewportState {
@@ -34,28 +41,60 @@ export interface ExcalidrawSceneData {
  *
  * core 元素按 `z` 升序排列后转换（Excalidraw 用数组顺序表达层级）。
  * 非绘图类元素（file/folder/region/text 等）此阶段跳过 —— 它们归 DOM 覆盖层。
+ *
+ * 两条转换路径：
+ *  - shape / connector → `convertToExcalidrawElements`：自动展开图形内文字
+ *    （label → 绑定文本）与连线端点绑定（start/end → 随图形移动）。
+ *  - draw / 未知占位壳 → `restoreElements`：补全 seed/version 等运行时字段。
  */
 export function sceneToExcalidraw(scene: BoardScene): ExcalidrawSceneData {
   const ordered = [...scene.elements].sort((a, b) =>
     a.z < b.z ? -1 : a.z > b.z ? 1 : 0,
   );
+  const byId = new Map(scene.elements.map((e) => [e.id, e] as const));
+  const shapeIds = new Set(
+    scene.elements.filter((e) => e.type === 'shape').map((e) => e.id),
+  );
 
-  const skeletons = ordered
-    .map((el) => {
-      // 未知类型占位壳：优先用原始 Excalidraw 对象还原，保证往返一致。
-      const raw = rawExcalidrawOf(el);
-      if (raw) return raw;
-      return coreToExcalidraw(el);
-    })
-    .filter((s): s is NonNullable<typeof s> => s != null);
+  // restoreElements 路径：手绘 + 未知类型占位壳。
+  const legacy: Array<ExElementSkeleton | Partial<ExElement>> = [];
+  // convertToExcalidrawElements 路径：图形（含 label）与连线（含端点绑定）。
+  const shapeSkels: ExcalidrawElementSkeleton[] = [];
+  const connectorSkels: ExcalidrawElementSkeleton[] = [];
+
+  for (const el of ordered) {
+    // 未知类型占位壳：优先用原始 Excalidraw 对象还原，保证往返一致。
+    const raw = rawExcalidrawOf(el);
+    if (raw) {
+      legacy.push(raw);
+      continue;
+    }
+    if (el.type === 'shape') {
+      shapeSkels.push(shapeToSkeleton(el));
+      continue;
+    }
+    if (el.type === 'connector') {
+      connectorSkels.push(connectorToSkeleton(el, byId, shapeIds));
+      continue;
+    }
+    // draw → 骨架；file/folder/region/text/suggestion → null（归覆盖层）。
+    const sk = coreToExcalidraw(el);
+    if (sk) legacy.push(sk);
+  }
 
   // restoreElements 补全 seed/version/versionNonce/updated 等，并修复绑定。
-  const elements = restoreElements(skeletons as ExElement[], null, {
+  const legacyEls = restoreElements(legacy as ExElement[], null, {
     repairBindings: true,
   });
+  // 图形须排在连线之前 —— 连线端点绑定要先解析到已存在的图形。
+  const modern = [...shapeSkels, ...connectorSkels];
+  const modernEls =
+    modern.length > 0
+      ? convertToExcalidrawElements(modern, { regenerateIds: false })
+      : [];
 
   return {
-    elements,
+    elements: [...legacyEls, ...modernEls] as ExElement[],
     appState: {
       scrollX: scene.viewport.x,
       scrollY: scene.viewport.y,
@@ -95,7 +134,10 @@ export function excalidrawToScene(
     for (const el of prevScene.elements) prevById.set(el.id, el);
   }
 
-  const live = exElements.filter((e) => !e.isDeleted);
+  // 过滤掉已删除元素，以及绑定在图形/连线上的标签文本（containerId 非空）——
+  // 后者由 convertToExcalidrawElements 从 label 生成，归容器的 label，不应
+  // 单独还原为 core text 元素（否则覆盖层会多渲染一张文本卡）。
+  const live = exElements.filter((e) => !e.isDeleted && !isBoundText(e));
 
   // Excalidraw 侧的绘图元素 → core。
   const drawn: Element[] = live.map((ex, idx) => {
@@ -128,4 +170,16 @@ export function excalidrawToScene(
 function clampZoom(z: number): number {
   if (!Number.isFinite(z)) return 1;
   return Math.min(5, Math.max(0.1, z));
+}
+
+/**
+ * 是否为绑定在容器（图形 / 连线）上的标签文本。
+ * convertToExcalidrawElements 把骨架的 `label` 展开成带 `containerId` 的 text
+ * 元素 —— 它属于容器的 label，不是独立的白板文本卡，回程时应跳过。
+ */
+function isBoundText(e: ExElement): boolean {
+  return (
+    e.type === 'text' &&
+    typeof (e as { containerId?: unknown }).containerId === 'string'
+  );
 }

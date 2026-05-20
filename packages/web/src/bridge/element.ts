@@ -35,6 +35,7 @@ import type {
   ExPoint,
   ExArrowheadValue,
 } from './types';
+import type { ExcalidrawElementSkeleton } from '@excalidraw/excalidraw/types/data/transform';
 import { styleToExcalidraw, styleFromExcalidraw } from './style';
 
 const nowISO = (): string => new Date().toISOString();
@@ -333,4 +334,83 @@ export function rawExcalidrawOf(el: Element): Partial<ExElement> | null {
     return cloneJSON(raw) as Partial<ExElement>;
   }
   return null;
+}
+
+// ──────── core → Excalidraw 骨架（convertToExcalidrawElements 专用）────────
+//
+// shape / connector 走 convertToExcalidrawElements：它能把骨架上的 `label`
+// 自动展开为「绑定文本」（图形内文字），把 `start`/`end` 自动建立为端点绑定
+// （连线随图形移动跟随）—— 这些是手搓 restoreElements 骨架做不到的。
+
+/**
+ * core `shape` → convertToExcalidrawElements 容器骨架。
+ * `label` 交给 convertToExcalidrawElements 生成图形内的绑定文本。
+ */
+export function shapeToSkeleton(el: ShapeElement): ExcalidrawElementSkeleton {
+  const skeleton = {
+    type: el.shape,
+    id: el.id,
+    x: el.x,
+    y: el.y,
+    width: el.width,
+    height: el.height,
+    angle: el.angle,
+    locked: el.locked,
+    ...styleToExcalidraw(el.style),
+    ...(el.label ? { label: { text: el.label.text } } : {}),
+  };
+  return skeleton as unknown as ExcalidrawElementSkeleton;
+}
+
+/**
+ * core `connector` → convertToExcalidrawElements 线性元素骨架。
+ *
+ * 端点几何按 `byId` 里两端元素的最新中心实时计算；两端若都是图形，
+ * 额外给出 `start`/`end` 绑定，使连线随图形移动自动跟随。非图形端点
+ * （如覆盖层文本卡）则只画静态直线（按当前位置）。
+ */
+export function connectorToSkeleton(
+  el: ConnectorElement,
+  byId: ReadonlyMap<string, Element>,
+  shapeIds: ReadonlySet<string>,
+): ExcalidrawElementSkeleton {
+  const a = el.start.elementId ? byId.get(el.start.elementId) : undefined;
+  const b = el.end.elementId ? byId.get(el.end.elementId) : undefined;
+  let x = el.x;
+  let y = el.y;
+  let dx = el.width;
+  let dy = el.height;
+  if (a && b) {
+    x = a.x + a.width / 2;
+    y = a.y + a.height / 2;
+    dx = b.x + b.width / 2 - x;
+    dy = b.y + b.height / 2 - y;
+  }
+  const isLine = el.startArrow === 'none' && el.endArrow === 'none';
+  const skeleton: Record<string, unknown> = {
+    type: isLine ? 'line' : 'arrow',
+    id: el.id,
+    x,
+    y,
+    width: Math.abs(dx),
+    height: Math.abs(dy),
+    points: [
+      [0, 0],
+      [dx, dy],
+    ],
+    ...styleToExcalidraw(el.style),
+    startArrowhead: toExArrowhead(el.startArrow),
+    endArrowhead: toExArrowhead(el.endArrow),
+  };
+  // 端点是图形 → 绑定（随图形移动）；否则不绑定，按上面算出的直线渲染。
+  if (el.start.elementId && shapeIds.has(el.start.elementId)) {
+    skeleton['start'] = { id: el.start.elementId };
+  }
+  if (el.end.elementId && shapeIds.has(el.end.elementId)) {
+    skeleton['end'] = { id: el.end.elementId };
+  }
+  if (el.label) {
+    skeleton['label'] = { text: el.label.text };
+  }
+  return skeleton as unknown as ExcalidrawElementSkeleton;
 }
