@@ -7,9 +7,9 @@
  */
 import { loadBoard, saveBoard } from '@board/core/node';
 import { createTextElement, nextZ, defaultSizeFor } from '@board/core';
-import type { ParsedArgs } from '../util/args';
-import { CliError, EXIT, type CmdResult } from '../util/io';
-import { resolveBoardDir } from '../util/board';
+import type { ParsedArgs } from '../util/args.js';
+import { CliError, EXIT, type CmdResult } from '../util/io.js';
+import { resolveBoardDir } from '../util/board.js';
 
 /** 自动错开布局的步进量（避免新文本元素完全重叠）。 */
 const AUTO_PLACE_STEP = 40;

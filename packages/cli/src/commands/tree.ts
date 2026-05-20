@@ -4,9 +4,9 @@
  * 规格 §2.4：以文件树打印 files/。
  */
 import { listBoardFiles } from '@board/core/node';
-import type { ParsedArgs } from '../util/args';
-import { EXIT, type CmdResult } from '../util/io';
-import { resolveBoardDir } from '../util/board';
+import type { ParsedArgs } from '../util/args.js';
+import { EXIT, type CmdResult } from '../util/io.js';
+import { resolveBoardDir } from '../util/board.js';
 
 /** 文件树的一个节点（目录或文件）。 */
 interface TreeNode {

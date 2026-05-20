@@ -1,7 +1,7 @@
 /**
  * 统一样式默认值与工具 — 见 specs/数据模型规格.md §5。
  */
-import type { Style } from './types';
+import type { Style } from './types.js';
 
 /** 新元素的默认样式（Excalidraw 手绘风格基调）。 */
 export const DEFAULT_STYLE: Style = {

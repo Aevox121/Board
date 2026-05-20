@@ -11,20 +11,20 @@
  * 注意：本模块由 index.ts 在注册 ESM 解析钩子后动态 import，
  *       因此其（及下游 commands/）的无扩展名 import 可正常解析。
  */
-import { GLOBAL_VALUE_KEYS, parseArgs, type ParsedArgs } from './util/args';
+import { GLOBAL_VALUE_KEYS, parseArgs, type ParsedArgs } from './util/args.js';
 import {
   CliError,
   EXIT,
   emitError,
   emitSuccess,
   type CmdResult,
-} from './util/io';
-import { cmdNew } from './commands/new';
-import { cmdInfo } from './commands/info';
-import { cmdLs } from './commands/ls';
-import { cmdTree } from './commands/tree';
-import { cmdShow } from './commands/show';
-import { cmdAdd } from './commands/add';
+} from './util/io.js';
+import { cmdNew } from './commands/new.js';
+import { cmdInfo } from './commands/info.js';
+import { cmdLs } from './commands/ls.js';
+import { cmdTree } from './commands/tree.js';
+import { cmdShow } from './commands/show.js';
+import { cmdAdd } from './commands/add.js';
 
 /** 命令处理函数签名。 */
 type Handler = (args: ParsedArgs) => Promise<CmdResult>;

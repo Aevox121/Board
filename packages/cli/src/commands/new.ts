@@ -5,8 +5,8 @@
  */
 import { isAbsolute, resolve } from 'node:path';
 import { createBoardFolder, loadBoard } from '@board/core/node';
-import type { ParsedArgs } from '../util/args';
-import { CliError, EXIT, type CmdResult } from '../util/io';
+import type { ParsedArgs } from '../util/args.js';
+import { CliError, EXIT, type CmdResult } from '../util/io.js';
 
 /**
  * 执行 new 命令。

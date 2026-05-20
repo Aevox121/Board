@@ -15,8 +15,8 @@
  */
 import { resolve } from 'node:path';
 import { listBoardFiles, loadBoard } from '@board/core/node';
-import { createHttpServer, HOST, type HttpDeps } from './http';
-import { startWatcher, type BoardWatcher } from './watcher';
+import { createHttpServer, HOST, type HttpDeps } from './http.js';
+import { startWatcher, type BoardWatcher } from './watcher.js';
 
 /** 默认监听端口，可用 BOARD_PORT 覆盖。 */
 const PORT = Number(process.env.BOARD_PORT ?? 4500);

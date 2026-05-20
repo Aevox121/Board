@@ -1,7 +1,7 @@
 /**
  * 文件系统 ⇄ 画布映射规则 — 见 specs/数据模型规格.md §8（R1–R7）。
  */
-import type { Element, RegionElement } from './types';
+import type { Element, RegionElement } from './types.js';
 
 /** 规范化 files/ 内相对路径：统一用 `/`、去首尾斜杠。 */
 export function normalizePath(p: string): string {

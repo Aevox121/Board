@@ -6,9 +6,9 @@
  */
 import { loadBoard, listBoardFiles } from '@board/core/node';
 import type { ElementType } from '@board/core';
-import type { ParsedArgs } from '../util/args';
-import { EXIT, type CmdResult } from '../util/io';
-import { resolveBoardDir } from '../util/board';
+import type { ParsedArgs } from '../util/args.js';
+import { EXIT, type CmdResult } from '../util/io.js';
+import { resolveBoardDir } from '../util/board.js';
 
 /**
  * 执行 show 命令。

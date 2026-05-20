@@ -19,9 +19,9 @@ import {
   type ShapeKind,
   type FileDisplayMode,
   type ParticipantId,
-} from './types';
-import { newBoardId, newElementId } from './ids';
-import { makeDefaultStyle } from './style';
+} from './types.js';
+import { newBoardId, newElementId } from './ids.js';
+import { makeDefaultStyle } from './style.js';
 
 const nowISO = (): string => new Date().toISOString();
 

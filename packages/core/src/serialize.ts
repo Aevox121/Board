@@ -2,7 +2,7 @@
  * board.json / meta.json 的序列化与解析 — 见 specs/数据模型规格.md §2/§3。
  * 纯函数，浏览器与 Node 通用。M1 做轻量校验（schemaVersion + 基本结构）。
  */
-import { SCHEMA_VERSION, type BoardMeta, type BoardScene } from './types';
+import { SCHEMA_VERSION, type BoardMeta, type BoardScene } from './types.js';
 
 /** 解析白板文件失败时抛出。 */
 export class BoardParseError extends Error {

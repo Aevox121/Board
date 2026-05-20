@@ -6,8 +6,8 @@
 import { readdirSync, existsSync, statSync, type Dirent } from 'node:fs';
 import { join } from 'node:path';
 import { loadBoard } from '@board/core/node';
-import type { ParsedArgs } from '../util/args';
-import { EXIT, type CmdResult } from '../util/io';
+import type { ParsedArgs } from '../util/args.js';
+import { EXIT, type CmdResult } from '../util/io.js';
 
 /** 一个被发现的白板条目。 */
 interface BoardEntry {

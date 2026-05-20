@@ -6,7 +6,7 @@
  */
 import { existsSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
-import { CliError, EXIT } from './io';
+import { CliError, EXIT } from './io.js';
 
 /** 判断一个路径是否为有效的 .board 目录（含 board.json）。 */
 function isBoardDir(p: string): boolean {

@@ -4,7 +4,7 @@
  * 当文件/文件夹经「直接改文件夹」或 CLI 无 --at 出现时，
  * 服务为其元素计算坐标（autoPlaced:true）。
  */
-import type { ElementType, FileDisplayMode } from './types';
+import type { ElementType, FileDisplayMode } from './types.js';
 
 export interface Size {
   width: number;

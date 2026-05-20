@@ -3,10 +3,10 @@
  *
  * 权威定义见 specs/数据模型规格.md。
  */
-export * from './types';
-export * from './ids';
-export * from './style';
-export * from './layout';
-export * from './fs-mapping';
-export * from './factory';
-export * from './serialize';
+export * from './types.js';
+export * from './ids.js';
+export * from './style.js';
+export * from './layout.js';
+export * from './fs-mapping.js';
+export * from './factory.js';
+export * from './serialize.js';

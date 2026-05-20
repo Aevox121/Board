@@ -6,15 +6,15 @@
  */
 import { mkdir, readFile, writeFile, readdir } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
-import type { BoardMeta, BoardScene } from '../types';
-import { createBoardMeta, createBoardScene } from '../factory';
+import type { BoardMeta, BoardScene } from '../types.js';
+import { createBoardMeta, createBoardScene } from '../factory.js';
 import {
   serializeMeta,
   serializeScene,
   parseMeta,
   parseScene,
-} from '../serialize';
-import { isIgnoredPath, normalizePath } from '../fs-mapping';
+} from '../serialize.js';
+import { isIgnoredPath, normalizePath } from '../fs-mapping.js';
 
 const META_FILE = 'meta.json';
 const BOARD_FILE = 'board.json';
