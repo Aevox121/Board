@@ -74,6 +74,69 @@
   color: var(--c-ink-3);
 }
 
+/* ── 连接状态指示（M1 web ⇄ server 对接）──────────── */
+
+.topbar__status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--c-surface-sunken);
+  border: 1px solid var(--c-border);
+  /* 已连接时白板名可能较长，限制宽度并省略 */
+  max-width: 320px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 状态圆点 —— 颜色由修饰类决定 */
+.topbar__status-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--c-ink-3);
+}
+
+/* 已连接：成功色 */
+.topbar__status--connected {
+  color: var(--c-success);
+}
+.topbar__status--connected .topbar__status-dot {
+  background: var(--c-success);
+}
+
+/* 离线：三级灰 */
+.topbar__status--offline {
+  color: var(--c-ink-2);
+}
+.topbar__status--offline .topbar__status-dot {
+  background: var(--c-ink-3);
+}
+
+/* 连接中：信息色 + 呼吸动画 */
+.topbar__status--probing {
+  color: var(--c-info);
+}
+.topbar__status--probing .topbar__status-dot {
+  background: var(--c-info);
+  animation: topbar-pulse 1.2s var(--ease) infinite;
+}
+
+@keyframes topbar-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
 /* ── 按钮（设计系统 §7.2）─────────────────────────── */
 
 .btn {
@@ -92,6 +155,12 @@
 .btn:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
+}
+
+/* 禁用态（如保存进行中）—— 降低不透明度并屏蔽交互 */
+.btn:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 
 .btn--primary {

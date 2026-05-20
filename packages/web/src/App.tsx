@@ -1,24 +1,68 @@
 /**
- * 应用根组件 —— Board Web M1「可运行的单人白板」。
+ * 应用根组件 —— Board Web M1「可运行的单人白板 + server 对接」。
  *
  * 结构：顶栏（应用外壳，干净暖色）+ 画布区（Excalidraw 铺满）。
  * 状态：BoardProvider 持有一份 @board/core 的 BoardScene 作为真相源。
+ *
+ * 启动流程（web ⇄ server 对接）：
+ *  - 启动时探测 board-server（GET /api/health + GET /api/board）。
+ *  - server 可达 → 载入其持有的真实 .board，进入「已连接」模式，「保存」可用。
+ *  - server 不可达 → 「离线」模式，保留空白板 + 导入/导出兜底。
  *
  * 后续里程碑在此基础上叠加：
  *  - M2：DOM 覆盖层渲染文件/文件夹/区域元素（PRD §11 内容元素层）
  *  - M3：Agent 在场、Pencil 式过程可视化
  */
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { BoardProvider, useBoard } from './board/BoardContext';
-import { TopBar } from './components/TopBar';
+import { TopBar, type SaveState } from './components/TopBar';
 import { BoardCanvas } from './components/BoardCanvas';
 import { downloadBoardJSON, pickAndParseBoardJSON } from './board/boardFile';
 import { BoardParseError } from '@board/core';
+import { checkHealth, fetchBoard, putScene, ServerError } from './server/client';
 import './App.css';
 
 /** 外壳布局 —— 顶栏 + 画布区，纵向铺满视口。 */
 function BoardApp(): JSX.Element {
-  const { scene, meta, renameBoard, replaceScene } = useBoard();
+  const { scene, meta, connection, renameBoard, replaceScene, loadFromServer } =
+    useBoard();
+
+  // 「保存」按钮状态机：idle → saving → saved/error。
+  const [saveState, setSaveState] = useState<SaveState>('idle');
+  // 启动连接探测是否完成 —— 完成前顶栏显示「连接中…」。
+  const [probing, setProbing] = useState(true);
+  // 防止 React 18 StrictMode 下 effect 跑两遍而重复探测/重复载入。
+  const probedRef = useRef(false);
+
+  // ── 启动时探测 board-server ───────────────────────────────
+  useEffect(() => {
+    if (probedRef.current) return;
+    probedRef.current = true;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        // 先 health 探活，再取白板数据。任一步失败都降级到离线模式。
+        await checkHealth();
+        const data = await fetchBoard();
+        if (cancelled) return;
+        loadFromServer(data.meta, data.scene, data.files);
+      } catch (err) {
+        // server 宕机 / 网络错误 / 数据非法 —— 优雅降级到离线模式，不崩。
+        if (err instanceof ServerError) {
+          console.info('[board-web] 未连接到 board-server，进入离线模式：', err.message);
+        } else {
+          console.warn('[board-web] 连接 board-server 时发生意外错误：', err);
+        }
+      } finally {
+        if (!cancelled) setProbing(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loadFromServer]);
 
   const handleExport = useCallback(() => {
     // 文件名取白板名，非法字符替换为 `-`。
@@ -40,6 +84,23 @@ function BoardApp(): JSX.Element {
     }
   }, [replaceScene]);
 
+  // ── 保存到 server（已连接模式下手动触发）────────────────────
+  const handleSave = useCallback(async () => {
+    if (connection !== 'connected') return;
+    setSaveState('saving');
+    try {
+      await putScene(scene);
+      setSaveState('saved');
+      // 「已保存」提示 2 秒后回落到 idle。
+      window.setTimeout(() => setSaveState('idle'), 2000);
+    } catch (err) {
+      setSaveState('error');
+      const msg = err instanceof ServerError ? err.message : String(err);
+      window.alert(`保存失败：${msg}`);
+      window.setTimeout(() => setSaveState('idle'), 2000);
+    }
+  }, [connection, scene]);
+
   return (
     <div className="app-shell">
       <TopBar
@@ -47,7 +108,11 @@ function BoardApp(): JSX.Element {
         onRename={renameBoard}
         onImport={handleImport}
         onExport={handleExport}
+        onSave={handleSave}
         elementCount={scene.elements.length}
+        connection={connection}
+        probing={probing}
+        saveState={saveState}
       />
       <BoardCanvas />
     </div>
