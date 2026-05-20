@@ -320,33 +320,87 @@
   min-height: 0;
 }
 
-/* ── 区域缩放手柄（右下角）──────────────────────────────────────
- * 区域主体 pointer-events:none，手柄单独开启 auto。拖动改区域大小。 */
-.ov-region__resize {
+/* ── 区域缩放手柄（八向：四角 + 四边）──────────────────────────
+ * 区域主体 pointer-events:none，手柄单独开启 auto。手柄默认透明，靠
+ * 光标提示方向；右下角额外画一个可见斜抓纹作为「可缩放」的视觉入口。
+ * 手柄在 RegionCard 中渲染于头部之后 —— 顶边手柄因此叠在头部之上。 */
+.ov-region__rz {
   position: absolute;
-  right: 0;
-  bottom: 0;
-  width: 20px;
-  height: 20px;
   pointer-events: auto;
-  cursor: nwse-resize;
 }
 
-/* 右下角斜抓纹 —— 两条贴边线，hover 时更明显 */
-.ov-region__resize::after {
+/* 四条边手柄 —— 沿边细条，两端各留 16px 给角手柄 */
+.ov-region__rz--n,
+.ov-region__rz--s {
+  left: 16px;
+  right: 16px;
+  height: 10px;
+  cursor: ns-resize;
+}
+.ov-region__rz--n {
+  top: -5px;
+}
+.ov-region__rz--s {
+  bottom: -5px;
+}
+
+.ov-region__rz--e,
+.ov-region__rz--w {
+  top: 16px;
+  bottom: 16px;
+  width: 10px;
+  cursor: ew-resize;
+}
+.ov-region__rz--e {
+  right: -5px;
+}
+.ov-region__rz--w {
+  left: -5px;
+}
+
+/* 四个角手柄 */
+.ov-region__rz--nw,
+.ov-region__rz--ne,
+.ov-region__rz--se,
+.ov-region__rz--sw {
+  width: 18px;
+  height: 18px;
+}
+.ov-region__rz--nw {
+  top: -6px;
+  left: -6px;
+  cursor: nwse-resize;
+}
+.ov-region__rz--ne {
+  top: -6px;
+  right: -6px;
+  cursor: nesw-resize;
+}
+.ov-region__rz--se {
+  bottom: -6px;
+  right: -6px;
+  cursor: nwse-resize;
+}
+.ov-region__rz--sw {
+  bottom: -6px;
+  left: -6px;
+  cursor: nesw-resize;
+}
+
+/* 右下角可见斜抓纹 —— 缩放功能的视觉入口 */
+.ov-region__rz--se::after {
   content: '';
   position: absolute;
-  right: 3px;
-  bottom: 3px;
-  width: 10px;
-  height: 10px;
+  right: 6px;
+  bottom: 6px;
+  width: 9px;
+  height: 9px;
   border-right: 2px solid var(--c-accent);
   border-bottom: 2px solid var(--c-accent);
   border-bottom-right-radius: var(--radius-sm);
   opacity: 0.55;
   transition: opacity var(--dur-micro) var(--ease);
 }
-
-.ov-region__resize:hover::after {
+.ov-region__rz--se:hover::after {
   opacity: 1;
 }

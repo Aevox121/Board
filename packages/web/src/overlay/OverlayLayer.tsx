@@ -7,17 +7,14 @@
  *  覆盖层用一个变换容器复刻这条公式：
  *      transform: translate(scrollX*zoom, scrollY*zoom) scale(zoom)
  *      transform-origin: 0 0
- *  容器内每个元素按其画布坐标 (x,y,width,height) 绝对定位，
- *  叠加容器变换后即与 Excalidraw 的视口完全一致——平移/缩放实时跟随。
  *
- * 渲染范围（M2）：只渲染 `file` / `folder` / `region` 三类内容元素；
- * draw/shape/connector/text 仍归 Excalidraw。元素按 `z` 升序扁平绝对定位。
+ * 渲染范围（M2）：只渲染 `file` / `folder` / `region` 三类内容元素。
  *
  * 交互：
  *  - 文件卡可拖拽（M2 增量2）：按卡片与区域的重叠面积判定落点 —— 落入不同
  *    区域则调 server move 改文件归属，落在原区域 / 收件区内则就地重新定位。
- *  - 区域可拖拽与缩放（M2 增量3）：拖头部移动整个区域（含其内文件），拖右下角
- *    手柄改大小（不小于内容包围盒）。区域增删改属画布操作，经 PUT /api/board 落盘。
+ *  - 区域可拖拽（拖头部）与八向缩放（四角四边手柄）。缩放下限钳制为
+ *    「内容包围盒」—— 区域不会缩到压住其内文件。区域增删改经 PUT 落盘。
  */
 import { useMemo, useRef, useState } from 'react';
 import type {
@@ -26,13 +23,17 @@ import type {
   FileElement,
   RegionElement,
 } from '@board/core';
-import { regionsOf, regionForFile, regionContentSize } from '@board/core';
+import { regionsOf, regionForFile } from '@board/core';
 import { useBoard } from '../board/BoardContext';
 import { moveFile } from '../server/files';
 import { putScene } from '../server/client';
 import { FileCard } from './FileCard';
 import { FolderCard } from './FolderCard';
-import { RegionCard, type PointerHandlers } from './RegionCard';
+import {
+  RegionCard,
+  type PointerHandlers,
+  type RegionResizeApi,
+} from './RegionCard';
 import { fileBaseName, intersectionArea, type RectLike } from './util';
 import './overlay.css';
 
@@ -82,24 +83,33 @@ interface DragState {
   moved: boolean;
 }
 
-/** 区域缩放过程的瞬时状态。 */
+/** 区域八向缩放过程的瞬时状态。 */
 interface ResizeState {
   /** 被缩放的区域 id。 */
   elementId: string;
   /** 捕获的指针 id。 */
   pointerId: number;
+  /** 手柄方向分量：-1=左/上边, 0=不动, 1=右/下边。 */
+  hx: -1 | 0 | 1;
+  hy: -1 | 0 | 1;
   /** 指针按下时的屏幕坐标。 */
   startScreenX: number;
   startScreenY: number;
-  /** 缩放前尺寸。 */
-  startW: number;
-  startH: number;
-  /** 当前尺寸（已 clamp 到下限）。 */
+  /** 缩放前矩形。 */
+  x0: number;
+  y0: number;
+  w0: number;
+  h0: number;
+  /** 当前矩形（随指针实时更新，已 clamp）。 */
+  x: number;
+  y: number;
   w: number;
   h: number;
-  /** 由区域内容包围盒决定的最小尺寸（不可缩到比内容更小）。 */
-  minW: number;
-  minH: number;
+  /** 缩放边界约束（由子元素包围盒推出；无子元素时为 ±Infinity 使约束失效）。 */
+  maxRight: number;
+  minLeft: number;
+  maxBottom: number;
+  minTop: number;
 }
 
 /** 启动拖拽的位移阈值（屏幕像素）—— 小于此值视为点击，不触发移动。 */
@@ -107,6 +117,9 @@ const DRAG_THRESHOLD_PX = 4;
 /** 区域可缩放到的绝对最小尺寸（画布单位）。 */
 const REGION_MIN_W = 240;
 const REGION_MIN_H = 140;
+/** 区域边缘到内容的留白下限；头部高度 —— 缩放时区域不能压到内容上。 */
+const REGION_CONTENT_MARGIN = 16;
+const REGION_HEADER_H = 48;
 
 /**
  * 找出与拖拽中的文件卡重叠面积最大的区域；与任何区域都不重叠则返回 null
@@ -131,6 +144,45 @@ function regionForCard(
     }
   }
   return best;
+}
+
+/** 按手柄方向与指针位移算出区域缩放后的矩形（含边界 clamp）。 */
+function computeResize(
+  r: ResizeState,
+  dx: number,
+  dy: number,
+): { x: number; y: number; w: number; h: number } {
+  const left0 = r.x0;
+  const right0 = r.x0 + r.w0;
+  const top0 = r.y0;
+  const bottom0 = r.y0 + r.h0;
+
+  let x = r.x0;
+  let w = r.w0;
+  if (r.hx === 1) {
+    // 拖右边：右边界右移，不得越过内容右界、不得小于最小宽度。
+    const right = Math.max(right0 + dx, r.maxRight, left0 + REGION_MIN_W);
+    x = left0;
+    w = right - left0;
+  } else if (r.hx === -1) {
+    // 拖左边：左边界右移上限为内容左界 / 最小宽度。
+    const left = Math.min(left0 + dx, r.minLeft, right0 - REGION_MIN_W);
+    x = left;
+    w = right0 - left;
+  }
+
+  let y = r.y0;
+  let h = r.h0;
+  if (r.hy === 1) {
+    const bottom = Math.max(bottom0 + dy, r.maxBottom, top0 + REGION_MIN_H);
+    y = top0;
+    h = bottom - top0;
+  } else if (r.hy === -1) {
+    const top = Math.min(top0 + dy, r.minTop, bottom0 - REGION_MIN_H);
+    y = top;
+    h = bottom0 - top;
+  }
+  return { x, y, w, h };
 }
 
 export function OverlayLayer({
@@ -379,43 +431,63 @@ export function OverlayLayer({
     setDrag((d) => (d && d.pointerId === e.pointerId ? null : d));
   }
 
-  /** 指针按下区域缩放手柄 —— 记录起始尺寸与内容下限。 */
+  /** 指针按下区域缩放手柄 —— 记录起始矩形与由内容包围盒推出的缩放边界。 */
   function beginResize(
     e: React.PointerEvent<HTMLDivElement>,
     region: RegionElement,
+    hx: -1 | 0 | 1,
+    hy: -1 | 0 | 1,
   ): void {
     if (e.button !== 0) return;
     e.currentTarget.setPointerCapture(e.pointerId);
+    // 子元素内容包围盒 → 缩放边界（区域不能缩到压住内容）。
     const kids = sceneRef.current.elements.filter(
       (x) => x.parentId === region.id,
     );
-    // 缩放下限 = max(绝对最小, 内容包围盒) —— 不能缩到比内容还小。
-    const cs = regionContentSize(region, kids);
+    let cl = Infinity;
+    let cr = -Infinity;
+    let ct = Infinity;
+    let cb = -Infinity;
+    for (const k of kids) {
+      cl = Math.min(cl, k.x);
+      cr = Math.max(cr, k.x + k.width);
+      ct = Math.min(ct, k.y);
+      cb = Math.max(cb, k.y + k.height);
+    }
     setResize({
       elementId: region.id,
       pointerId: e.pointerId,
+      hx,
+      hy,
       startScreenX: e.clientX,
       startScreenY: e.clientY,
-      startW: region.width,
-      startH: region.height,
+      x0: region.x,
+      y0: region.y,
+      w0: region.width,
+      h0: region.height,
+      x: region.x,
+      y: region.y,
       w: region.width,
       h: region.height,
-      minW: Math.max(REGION_MIN_W, cs.width),
-      minH: Math.max(REGION_MIN_H, cs.height),
+      // 无子元素时 cl/cr/ct/cb 为 ±Infinity，对应的 clamp 自然失效。
+      maxRight: cr + REGION_CONTENT_MARGIN,
+      minLeft: cl - REGION_CONTENT_MARGIN,
+      maxBottom: cb + REGION_CONTENT_MARGIN,
+      minTop: ct - REGION_CONTENT_MARGIN - REGION_HEADER_H,
     });
   }
 
-  /** 缩放手柄移动 —— 按指针位移更新区域尺寸（clamp 到内容下限）。 */
+  /** 缩放手柄移动 —— 按指针位移更新区域矩形（clamp 到内容边界）。 */
   function handleResizeMove(e: React.PointerEvent<HTMLDivElement>): void {
     setResize((r) => {
       if (!r || r.pointerId !== e.pointerId) return r;
-      const w = Math.max(r.minW, r.startW + (e.clientX - r.startScreenX) / zoom);
-      const h = Math.max(r.minH, r.startH + (e.clientY - r.startScreenY) / zoom);
-      return { ...r, w, h };
+      const dx = (e.clientX - r.startScreenX) / zoom;
+      const dy = (e.clientY - r.startScreenY) / zoom;
+      return { ...r, ...computeResize(r, dx, dy) };
     });
   }
 
-  /** 缩放结束 —— 尺寸有变化则提交并落盘。 */
+  /** 缩放结束 —— 矩形有变化则提交并落盘。 */
   function handleResizeUp(e: React.PointerEvent<HTMLDivElement>): void {
     const r = resize;
     if (!r || r.pointerId !== e.pointerId) return;
@@ -425,8 +497,10 @@ export function OverlayLayer({
       // 已释放，忽略。
     }
     setResize(null);
-    if (r.w !== r.startW || r.h !== r.startH) {
+    if (r.x !== r.x0 || r.y !== r.y0 || r.w !== r.w0 || r.h !== r.h0) {
       const next = patchElement(sceneRef.current, r.elementId, {
+        x: r.x,
+        y: r.y,
         width: r.w,
         height: r.h,
         autoPlaced: false,
@@ -452,7 +526,6 @@ export function OverlayLayer({
       <div className="ov-transform" style={transformStyle}>
         {contentElements.map((el) => {
           const isFile = el.type === 'file';
-          const isRegion = el.type === 'region';
 
           // 拖拽偏移：被拖元素自身，或被拖区域的子元素（随区域一起动）。
           let dx = 0;
@@ -468,20 +541,22 @@ export function OverlayLayer({
           }
           const offset = dx !== 0 || dy !== 0;
 
-          // 缩放：被缩放区域自身实时变尺寸。
+          // 缩放：被缩放区域自身实时变矩形（位置 + 尺寸都可能变）。
           const resizing = resize?.elementId === el.id;
-          const w = resizing && resize ? resize.w : el.width;
-          const h = resizing && resize ? resize.h : el.height;
+          const rx = resizing && resize ? resize.x : el.x;
+          const ry = resizing && resize ? resize.y : el.y;
+          const rw = resizing && resize ? resize.w : el.width;
+          const rh = resizing && resize ? resize.h : el.height;
 
           const regionActive =
-            isRegion &&
+            el.type === 'region' &&
             ((drag?.kind === 'region' && drag.elementId === el.id) || resizing);
 
           const slotStyle: React.CSSProperties = {
-            left: `${el.x}px`,
-            top: `${el.y}px`,
-            width: `${w}px`,
-            height: `${h}px`,
+            left: `${rx}px`,
+            top: `${ry}px`,
+            width: `${rw}px`,
+            height: `${rh}px`,
           };
           if (offset) {
             slotStyle.transform = `translate(${dx}px, ${dy}px)`;
@@ -492,9 +567,9 @@ export function OverlayLayer({
             (isFile ? ' ov-slot--file' : '') +
             (offset ? ' ov-slot--dragging' : '');
 
-          // 区域的拖拽 / 缩放手柄事件
+          // 区域的拖拽手柄 / 八向缩放 API
           let headerHandlers: PointerHandlers | undefined;
-          let resizeHandlers: PointerHandlers | undefined;
+          let resizeApi: RegionResizeApi | undefined;
           if (el.type === 'region') {
             const region = el;
             headerHandlers = {
@@ -503,11 +578,11 @@ export function OverlayLayer({
               onPointerUp: handlePointerUp,
               onPointerCancel: handlePointerCancel,
             };
-            resizeHandlers = {
-              onPointerDown: (e) => beginResize(e, region),
-              onPointerMove: handleResizeMove,
-              onPointerUp: handleResizeUp,
-              onPointerCancel: handleResizeCancel,
+            resizeApi = {
+              onStart: (e, hx, hy) => beginResize(e, region, hx, hy),
+              onMove: handleResizeMove,
+              onUp: handleResizeUp,
+              onCancel: handleResizeCancel,
             };
           }
 
@@ -529,7 +604,7 @@ export function OverlayLayer({
                   highlighted={el.id === dropRegionId}
                   active={regionActive}
                   headerHandlers={headerHandlers}
-                  resizeHandlers={resizeHandlers}
+                  resize={resizeApi}
                 />
               ) : el.type === 'folder' ? (
                 <FolderCard element={el} />

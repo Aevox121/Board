@@ -117,25 +117,31 @@ export function BoardCanvas(): JSX.Element {
     [actorId, replaceScene],
   );
 
-  // 导入发生时（importTick 变化）：把内存场景推进 Excalidraw。
+  // 导入 / 刷新发生时（importTick 变化）：把内存场景推进 Excalidraw。
   useEffect(() => {
     if (importTick === 0) return; // 初始空场景无需推送
     const api = apiRef.current;
     if (!api) return;
     const { elements, appState } = sceneToExcalidraw(sceneRef.current);
     suppressNextChange.current = true;
-    api.updateScene({
-      elements,
-      appState: {
-        scrollX: appState.scrollX,
-        scrollY: appState.scrollY,
-        zoom: { value: appState.zoom.value as AppState['zoom']['value'] },
-      },
-    });
-    // 仅在用户导入 / 首次连接时把视图聚焦到全部内容；
-    // SSE 后台刷新（如拖拽移动文件触发的 reconcile）不重定位视图，避免画面跳动。
-    if (elements.length > 0 && importFit) {
-      api.scrollToContent(elements, { fitToContent: true });
+    if (importFit) {
+      // 用户导入 / 首次连接：把元素与视口都推进 Excalidraw，并聚焦到全部内容。
+      api.updateScene({
+        elements,
+        appState: {
+          scrollX: appState.scrollX,
+          scrollY: appState.scrollY,
+          zoom: { value: appState.zoom.value as AppState['zoom']['value'] },
+        },
+      });
+      if (elements.length > 0) {
+        api.scrollToContent(elements, { fitToContent: true });
+      }
+    } else {
+      // SSE 后台刷新（拖拽移动文件触发的 reconcile 等）：只更新元素，
+      // **绝不**推入视口 —— 否则会把画布跳回场景里存的旧视口，
+      // 用户当前正看的位置被打断（拖文件进区域后画面乱跳的根因）。
+      api.updateScene({ elements });
     }
     // importFit 与 importTick 在同一次 setState 中更新，读取的即为本次值。
   }, [importTick]);
