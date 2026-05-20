@@ -257,8 +257,16 @@ export interface SuggestionElement extends BaseElement {
   /** 被建议的元素 id */
   targetId: ElementId;
   suggestionType: SuggestionType;
-  /** 提议的元素对象（可为任意类型） */
+  /**
+   * 提议的元素对象（可为任意类型）——「会被替换/新增进白板的纯内容」。
+   * 同意建议时**只有 payload** 并入目标；不含「为什么这么建议」的说明。
+   */
   payload: Element;
+  /**
+   * 建议理由 —— 表明「这是一条建议」的说明性文字（为什么改 / 改了什么）。
+   * 只在建议卡上展示，**同意时不会并入目标元素**，与可并入的 payload 严格分开。
+   */
+  reason: string;
   status: SuggestionStatus;
   /** 发起建议的 Agent id */
   authorId: ParticipantId;

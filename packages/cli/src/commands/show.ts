@@ -237,6 +237,7 @@ export async function cmdShow(args: ParsedArgs): Promise<CmdResult> {
               suggestionType: s.suggestionType,
               status: s.status,
               author: s.authorId,
+              reason: s.reason ?? '',
               threadLength: s.thread.length,
             }
           : null,

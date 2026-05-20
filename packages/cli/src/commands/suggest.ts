@@ -6,8 +6,9 @@
  * 人之后在 Web 端对建议做「同意 / 拒绝 / 描述」处理（决策权在人手里）。
  *
  * 规格 §2.5：board suggest <目标元素id> --type <replace|add> --as <内容来源>
- *  - `--type` —— `replace` 替换目标内容 / `add` 新增元素；默认 `replace`。
- *  - `--as`   —— 建议内容来源；当前支持 `text:<markdown>` 形式。
+ *  - `--type`   —— `replace` 替换目标内容 / `add` 新增元素；默认 `replace`。
+ *  - `--as`     —— 提议内容（**同意后并入白板的纯内容**）；支持 `text:<markdown>`。
+ *  - `--reason` —— 建议理由（为什么这么改）；**只展示、同意时不并入目标**，可选。
  *  - `--actor` / `--agent` —— 发起建议的 Agent id（默认 `a_agent`）。
  */
 import { loadBoard, saveBoard } from '@board/core/node';
@@ -29,7 +30,7 @@ const DEFAULT_AGENT = 'a_agent';
 
 /** 命令用法提示。 */
 const USAGE =
-  'board suggest <白板路径> <目标元素id> --type <replace|add> --as text:"<markdown>"';
+  'board suggest <白板路径> <目标元素id> --type <replace|add> --as text:"<md>" [--reason "<理由>"]';
 
 /** 执行 suggest 命令。 */
 export async function cmdSuggest(args: ParsedArgs): Promise<CmdResult> {
@@ -67,6 +68,9 @@ export async function cmdSuggest(args: ParsedArgs): Promise<CmdResult> {
   if (markdown.trim() === '') {
     throw new CliError('建议内容不能为空。', EXIT.USAGE);
   }
+
+  // --reason —— 建议理由（可选），与可并入的 payload 内容严格分开。
+  const reason = args.options.get('reason') ?? '';
 
   const dir = resolveBoardDir(boardPath, args.options.get('board'));
   const handle = await loadBoard(dir);
@@ -107,6 +111,7 @@ export async function cmdSuggest(args: ParsedArgs): Promise<CmdResult> {
     targetId,
     suggestionType,
     payload,
+    reason,
     authorId: actor,
   });
 
@@ -115,12 +120,15 @@ export async function cmdSuggest(args: ParsedArgs): Promise<CmdResult> {
 
   return {
     code: EXIT.OK,
-    text: `已创建建议 ${suggestion.id}（针对 ${targetId}，类型 ${suggestionType}）`,
+    text: `已创建建议 ${suggestion.id}（针对 ${targetId}，类型 ${suggestionType}${
+      reason.trim() ? '，带理由' : ''
+    }）`,
     data: {
       suggestionId: suggestion.id,
       targetId,
       suggestionType,
       status: suggestion.status,
+      hasReason: reason.trim() !== '',
       x,
       y,
     },

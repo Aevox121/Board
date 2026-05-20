@@ -80,6 +80,7 @@ export const GLOBAL_VALUE_KEYS: ReadonlySet<string> = new Set([
   'routing',
   'type',
   'as',
+  'reason',
   'desc',
   'parent',
   'size',

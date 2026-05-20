@@ -252,10 +252,18 @@ export async function runMcpServer(
       description:
         '对某个元素创建一条建议（PRD §7.3）。Agent 要改不属于自己的内容时，' +
         '不直接改原件，而是在旁边产生一条「建议」，由人决定同意 / 拒绝 / 描述。' +
-        'replace = 提议替换目标内容，add = 提议新增一个元素。',
+        'replace = 提议替换目标内容，add = 提议新增一个元素。' +
+        '关键：`markdown` 只放「同意后会并入白板的纯内容」，把「为什么这么改」' +
+        '之类的说明放进 `reason` —— 二者分开，同意时只并入 markdown，reason 不并入。',
       inputSchema: {
         targetId: z.string().describe('被建议的目标元素 id'),
-        markdown: z.string().describe('提议的文本内容（Markdown）'),
+        markdown: z
+          .string()
+          .describe('提议内容（Markdown）—— 同意后并入目标的纯内容，不要混入理由'),
+        reason: z
+          .string()
+          .optional()
+          .describe('建议理由：为什么这么改 / 改了什么；只在建议卡展示，同意时不并入目标'),
         suggestionType: z
           .enum(['replace', 'add'])
           .optional()
@@ -275,6 +283,7 @@ export async function runMcpServer(
           {
             type: a.suggestionType ?? 'replace',
             as: `text:${a.markdown}`,
+            reason: a.reason,
             actor: a.agent,
           },
         ),

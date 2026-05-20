@@ -197,8 +197,9 @@ export function createShapeElement(
 /**
  * 创建建议元素（PRD §7.3）—— 不改原件，旁边承载 Agent 的提议。
  *
- * `payload` 是提议的元素对象（可为任意类型）；同意 `replace` 时其内容替换
- * 目标元素，同意 `add` 时它作为新元素加入场景。建议的处理逻辑见 suggestion.ts。
+ * `payload` 是提议的元素对象（可并入白板的纯内容）；同意 `replace` 时其内容
+ * 替换目标元素，同意 `add` 时它作为新元素加入场景。`reason` 是「建议理由」
+ * 说明性文字 —— 只展示、同意时不并入。建议的处理逻辑见 suggestion.ts。
  */
 export function createSuggestionElement(
   init: BaseElementInit & {
@@ -206,6 +207,7 @@ export function createSuggestionElement(
     suggestionType: SuggestionType;
     payload: Element;
     authorId: ParticipantId;
+    reason?: string;
     status?: SuggestionStatus;
   },
 ): SuggestionElement {
@@ -215,6 +217,7 @@ export function createSuggestionElement(
     targetId: init.targetId,
     suggestionType: init.suggestionType,
     payload: init.payload,
+    reason: init.reason ?? '',
     status: init.status ?? 'pending',
     authorId: init.authorId,
     thread: [],

@@ -19,8 +19,8 @@ import type {
   ThreadMsg,
 } from './types.js';
 
-/** 建议卡默认尺寸。 */
-export const SUGGESTION_CARD_SIZE = { width: 300, height: 240 } as const;
+/** 建议卡默认尺寸（含提议内容 + 建议理由两段，故略高）。 */
+export const SUGGESTION_CARD_SIZE = { width: 300, height: 280 } as const;
 
 /** 建议卡与目标元素并排时的水平间距。 */
 export const SUGGESTION_GAP = 40;
@@ -53,6 +53,9 @@ function findSuggestion(
 
 /**
  * 同意建议（PRD §7.3「同意」）。
+ *
+ * **只并入 `payload`** —— 建议的「理由」(`reason`) 与「反馈」(`thread`) 是
+ * 表明「这是一条建议」的说明，同意时一并随建议元素移除，不进入目标。
  *  - `replace`：用 payload 的内容替换目标元素，保留目标的身份与几何
  *    （id / 坐标 / 尺寸 / 层级 / 归属）；移除建议元素。
  *  - `add`：把 payload 作为新的正式元素加入场景（落在建议卡处）；移除建议元素。

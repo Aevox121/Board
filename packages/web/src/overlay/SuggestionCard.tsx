@@ -45,6 +45,8 @@ export function SuggestionCard({ element }: SuggestionCardProps): JSX.Element {
     payload.type === 'text' && payload.markdown
       ? (marked.parse(payload.markdown) as string)
       : '';
+  // 建议理由 —— 与可并入的 payload 严格分开，同意时不进入目标。
+  const reasonText = element.reason?.trim() ?? '';
 
   /** 跑一个建议操作，统一处理 busy 与错误提示。 */
   async function run(fn: () => Promise<void>, what: string): Promise<void> {
@@ -96,17 +98,33 @@ export function SuggestionCard({ element }: SuggestionCardProps): JSX.Element {
       </div>
 
       <div className="ov-suggestion__body">
-        {payload.type === 'text' && previewHtml ? (
-          <div
-            className="ov-md"
-            // marked 输出来自本地白板数据，受信。
-            dangerouslySetInnerHTML={{ __html: previewHtml }}
-          />
-        ) : (
-          <div className="ov-suggestion__empty">
-            提议{TYPE_LABEL[element.suggestionType]}为「{payload.type}」元素
+        {/* 提议内容 —— 同意后并入目标的纯内容 */}
+        <div className="ov-suggestion__section">
+          <div className="ov-suggestion__section-label">
+            提议内容 · 同意后并入目标
           </div>
-        )}
+          {payload.type === 'text' && previewHtml ? (
+            <div
+              className="ov-md"
+              // marked 输出来自本地白板数据，受信。
+              dangerouslySetInnerHTML={{ __html: previewHtml }}
+            />
+          ) : (
+            <div className="ov-suggestion__empty">
+              提议{TYPE_LABEL[element.suggestionType]}为「{payload.type}」元素
+            </div>
+          )}
+        </div>
+
+        {/* 建议理由 —— 只展示，同意时不并入目标 */}
+        {reasonText ? (
+          <div className="ov-suggestion__reason">
+            <span className="ov-suggestion__reason-label">
+              💬 建议理由 · 不并入
+            </span>
+            <span className="ov-suggestion__reason-text">{reasonText}</span>
+          </div>
+        ) : null}
 
         {element.thread.length > 0 ? (
           <ul className="ov-suggestion__thread">
@@ -157,7 +175,11 @@ export function SuggestionCard({ element }: SuggestionCardProps): JSX.Element {
             className="ov-suggestion__btn ov-suggestion__btn--accept"
             disabled={busy || !online}
             onClick={onAccept}
-            title={online ? '用建议内容替换 / 新增到白板' : '需连接 board-server'}
+            title={
+              online
+                ? '只把「提议内容」并入目标，建议理由不并入'
+                : '需连接 board-server'
+            }
           >
             同意
           </button>
