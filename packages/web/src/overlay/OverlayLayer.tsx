@@ -38,7 +38,7 @@ import { putScene } from '../server/client';
 import { FileCard } from './FileCard';
 import { FolderCard } from './FolderCard';
 import { RegionCard } from './RegionCard';
-import { fileBaseName, pointInRect } from './util';
+import { fileBaseName, intersectionArea, type RectLike } from './util';
 import './overlay.css';
 
 /** 覆盖层关心的视口状态 —— 取自 Excalidraw appState。 */
@@ -89,18 +89,25 @@ interface DragState {
 const DRAG_THRESHOLD_PX = 4;
 
 /**
- * 找出覆盖某画布坐标点的区域；多个重叠时取 z 最高（最上层）的一个。
- * 区域卡的微旋转幅度极小，按轴对齐矩形近似命中测试。
+ * 找出与拖拽中的文件卡重叠面积最大的区域；与任何区域都不重叠则返回 null
+ * （落入收件区）。
+ *
+ * 按重叠面积判定而非卡片中心点 —— 中心点可能恰好落在两个相邻区域之间的
+ * 间隙里，使卡片明明压在区域上却被误判为收件区、文件被弹到空白画布。
  */
-function regionAt(
-  px: number,
-  py: number,
+function regionForCard(
+  card: RectLike,
   regions: RegionElement[],
 ): RegionElement | null {
   let best: RegionElement | null = null;
+  let bestArea = 0;
   for (const r of regions) {
-    if (pointInRect(px, py, r) && (!best || r.z > best.z)) {
+    const area = intersectionArea(card, r);
+    if (area <= 0) continue;
+    // 面积更大者胜；面积相等时取 z 更高（最上层）的区域。
+    if (area > bestArea || (area === bestArea && best !== null && r.z > best.z)) {
       best = r;
+      bestArea = area;
     }
   }
   return best;
@@ -128,14 +135,18 @@ export function OverlayLayer({
       .sort((a, b) => (a.z < b.z ? -1 : a.z > b.z ? 1 : 0));
   }, [scene.elements]);
 
-  // 拖拽中：实时算出落点所在区域 —— 用于高亮提示目标区域。
+  // 拖拽中：实时算出落点所在区域（按卡片与区域的重叠面积）—— 用于高亮提示。
   const dropRegionId = useMemo<string | null>(() => {
     if (!drag || !drag.moved) return null;
     const el = scene.elements.find((x) => x.id === drag.elementId);
     if (!el) return null;
-    const cx = drag.startX + drag.offsetX + el.width / 2;
-    const cy = drag.startY + drag.offsetY + el.height / 2;
-    const target = regionAt(cx, cy, regionsOf(scene.elements));
+    const cardRect: RectLike = {
+      x: drag.startX + drag.offsetX,
+      y: drag.startY + drag.offsetY,
+      width: el.width,
+      height: el.height,
+    };
+    const target = regionForCard(cardRect, regionsOf(scene.elements));
     return target ? target.id : null;
   }, [drag, scene.elements]);
 
@@ -211,11 +222,15 @@ export function OverlayLayer({
 
     const finalX = d.startX + d.offsetX;
     const finalY = d.startY + d.offsetY;
-    const centerX = finalX + el.width / 2;
-    const centerY = finalY + el.height / 2;
+    const cardRect: RectLike = {
+      x: finalX,
+      y: finalY,
+      width: el.width,
+      height: el.height,
+    };
 
     const regions = regionsOf(curScene.elements);
-    const target = regionAt(centerX, centerY, regions);
+    const target = regionForCard(cardRect, regions);
     const current = regionForFile(el.path, regions);
     const sameRegion = (target?.id ?? null) === (current?.id ?? null);
 

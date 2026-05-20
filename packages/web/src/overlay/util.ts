@@ -41,8 +41,7 @@ export interface RectLike {
 }
 
 /**
- * 点 (px, py) 是否落在矩形内（含边界）。
- * 用于拖拽落点的区域命中测试 —— 区域卡的微旋转幅度极小，按轴对齐矩形近似。
+ * 点 (px, py) 是否落在矩形内（含边界）。区域卡的微旋转幅度极小，按轴对齐近似。
  */
 export function pointInRect(px: number, py: number, rect: RectLike): boolean {
   return (
@@ -51,6 +50,19 @@ export function pointInRect(px: number, py: number, rect: RectLike): boolean {
     py >= rect.y &&
     py <= rect.y + rect.height
   );
+}
+
+/**
+ * 两矩形的相交面积（无相交为 0）。
+ *
+ * 用于拖拽落点的区域命中测试 —— 看文件卡与哪个区域重叠最多即落入哪个区域。
+ * 比「仅判定卡片中心点」稳健：中心点可能恰好落在两个相邻区域之间的间隙里，
+ * 导致卡片明明压在区域上却被误判为「不在任何区域」。
+ */
+export function intersectionArea(a: RectLike, b: RectLike): number {
+  const w = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+  const h = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
+  return w > 0 && h > 0 ? w * h : 0;
 }
 
 /**
