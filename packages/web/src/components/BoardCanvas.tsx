@@ -32,6 +32,25 @@ import './BoardCanvas.css';
 /** 覆盖层初始视口 —— 与 createBoardScene 的默认 viewport 对齐。 */
 const INITIAL_VIEWPORT: OverlayViewport = { scrollX: 0, scrollY: 0, zoom: 1 };
 
+/**
+ * 精简 Excalidraw 自带 UI —— Board 只保留绘图必需项，去掉与 Board 无关的部分。
+ * 常量放模块作用域，保证引用稳定（避免 Excalidraw 反复重渲染）。
+ */
+const EXCALIDRAW_UI_OPTIONS = {
+  // 关掉图片工具 —— Board 的文件靠覆盖层 / server，不用 Excalidraw 图片。
+  tools: { image: false },
+  // 汉堡菜单里的画布动作全部关掉 —— 这些功能 Board 顶栏已自带。
+  canvasActions: {
+    loadScene: false,
+    saveToActiveFile: false,
+    export: false as const,
+    saveAsImage: false,
+    toggleTheme: false,
+    clearCanvas: false,
+    changeViewBackgroundColor: false,
+  },
+};
+
 export function BoardCanvas(): JSX.Element {
   const { scene, actorId, replaceScene, importTick } = useBoard();
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
@@ -121,7 +140,11 @@ export function BoardCanvas(): JSX.Element {
 
   return (
     <div className="board-canvas">
-      <Excalidraw excalidrawAPI={handleApi} onChange={handleChange} />
+      <Excalidraw
+        excalidrawAPI={handleApi}
+        onChange={handleChange}
+        UIOptions={EXCALIDRAW_UI_OPTIONS}
+      />
       {/* DOM 覆盖层 —— 叠在 Excalidraw 之上，渲染 file/folder/region 内容元素 */}
       <OverlayLayer scene={scene} viewport={overlayViewport} />
     </div>
