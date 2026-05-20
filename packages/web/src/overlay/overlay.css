@@ -791,3 +791,33 @@
   line-height: 1.5;
   color: var(--c-ink);
 }
+
+/* 完成态任务卡的关闭按钮（× 手动关闭）。 */
+.ov-task__close {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-md);
+  line-height: 1;
+  color: var(--c-ink-2);
+  cursor: pointer;
+}
+
+.ov-task__close:hover {
+  background: var(--c-surface-sunken);
+  color: var(--c-ink);
+}
+
+/* 任务卡淡出 —— × 关闭或完成态超时触发，淡出后由 server 移除。 */
+.ov-task--fading {
+  opacity: 0;
+  transition: opacity 600ms ease;
+  pointer-events: none;
+}

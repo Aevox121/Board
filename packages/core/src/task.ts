@@ -55,6 +55,13 @@ export interface BoardTask {
 /** 占位任务卡的默认尺寸。 */
 export const TASK_CARD_SIZE = { width: 300, height: 184 } as const;
 
+/**
+ * 完成态任务卡的存活时长（毫秒）—— 自 `task.finish`（updatedAt）起算。
+ * 超过即自动淡出移除（用户也可经卡上 × 手动关闭）。server 与 web 共用此常量：
+ * web 据此定时淡出，server 据此在启动时清理过期完成态任务。
+ */
+export const TASK_DONE_TTL_MS = 60_000;
+
 /** 新建任务的入参。 */
 export interface CreateTaskInit {
   title: string;

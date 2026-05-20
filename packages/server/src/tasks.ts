@@ -7,7 +7,7 @@
  */
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { BoardTask } from '@board/core';
+import { TASK_DONE_TTL_MS, type BoardTask } from '@board/core';
 
 /** 运行时目录与任务文件名。 */
 const RUNTIME_DIR = '.runtime';
@@ -21,6 +21,15 @@ export interface TaskStore {
   get(id: string): BoardTask | undefined;
   /** 写入 / 更新一个任务并持久化。 */
   put(task: BoardTask): Promise<void>;
+  /** 移除一个任务并持久化（× 手动关闭 / 完成态超时清理）。 */
+  remove(id: string): Promise<void>;
+}
+
+/** 完成态任务是否已超过存活时长（应清理）。 */
+function isExpiredDone(task: BoardTask): boolean {
+  if (task.status !== 'done') return false;
+  const age = Date.now() - new Date(task.updatedAt).getTime();
+  return Number.isFinite(age) && age > TASK_DONE_TTL_MS;
 }
 
 /** 从 `.board/.runtime/tasks.json` 载入并创建任务存储。 */
@@ -29,11 +38,17 @@ export async function createTaskStore(dir: string): Promise<TaskStore> {
   const tasks = new Map<string, BoardTask>();
 
   // 载入已有运行时任务（文件缺失 / 损坏均按空处理，不中断启动）。
+  // 启动时顺带清理已超时的完成态任务 —— 跨重启不残留过期任务卡。
   try {
     const raw: unknown = JSON.parse(await readFile(filePath, 'utf8'));
     if (Array.isArray(raw)) {
       for (const t of raw) {
-        if (t && typeof t === 'object' && typeof (t as BoardTask).id === 'string') {
+        if (
+          t &&
+          typeof t === 'object' &&
+          typeof (t as BoardTask).id === 'string' &&
+          !isExpiredDone(t as BoardTask)
+        ) {
           tasks.set((t as BoardTask).id, t as BoardTask);
         }
       }
@@ -62,6 +77,9 @@ export async function createTaskStore(dir: string): Promise<TaskStore> {
     async put(task) {
       tasks.set(task.id, task);
       await persist();
+    },
+    async remove(id) {
+      if (tasks.delete(id)) await persist();
     },
   };
 }

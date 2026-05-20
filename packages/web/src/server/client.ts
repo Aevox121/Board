@@ -182,3 +182,16 @@ export async function putScene(scene: BoardScene): Promise<void> {
   });
   await readEnvelope<{ saved: boolean }>(res, 'PUT /api/board');
 }
+
+/**
+ * 移除一个任务（DELETE /api/tasks/<id>）—— 完成态任务卡的「× 关闭」与
+ * 「超时自动淡出」清理。server 移除后经 SSE 广播，各端据此刷新。
+ *
+ * @throws ServerError —— 服务不可达 / HTTP 错误（调用方可据需要忽略）。
+ */
+export async function dismissTask(taskId: string): Promise<void> {
+  const res = await fetchWithTimeout(`/tasks/${encodeURIComponent(taskId)}`, {
+    method: 'DELETE',
+  });
+  await readEnvelope<{ removed: string }>(res, `DELETE /api/tasks/${taskId}`);
+}

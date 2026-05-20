@@ -12,6 +12,7 @@
  *  - POST /api/tasks            → 新建 Agent 任务（M3：Pencil 式过程可视化）
  *  - POST /api/tasks/progress   → 上报任务进度
  *  - POST /api/tasks/finish     → 完成任务，draft 元素转 committed
+ *  - DELETE /api/tasks/<id>     → 移除任务（× 关闭 / 完成态超时清理）
  *  - GET  /api/events           → SSE，board 变化时推送 board-changed（M2）
  */
 import { createReadStream } from 'node:fs';
@@ -562,6 +563,28 @@ async function handleTaskFinish(
   ok(res, { task: next });
 }
 
+/**
+ * DELETE /api/tasks/<id> —— 移除一个任务。
+ * 用于完成态任务卡的「× 手动关闭」与「超时自动淡出」清理。
+ */
+async function handleDeleteTask(
+  deps: HttpDeps,
+  res: ServerResponse,
+  id: string,
+): Promise<void> {
+  if (!id) {
+    fail(res, 400, '缺少任务 id');
+    return;
+  }
+  if (!deps.tasks.get(id)) {
+    fail(res, 404, `未找到任务：${id}`);
+    return;
+  }
+  await deps.tasks.remove(id);
+  deps.sse.broadcast({ type: 'board-changed' });
+  ok(res, { removed: id });
+}
+
 /** GET /api/events —— SSE 长连接，board 变化时推送 board-changed。 */
 function handleEvents(deps: HttpDeps, req: IncomingMessage, res: ServerResponse): void {
   deps.sse.handle(req, res);
@@ -649,6 +672,11 @@ async function route(
   }
   if (path === '/api/tasks/finish' && method === 'POST') {
     await handleTaskFinish(deps, req, res);
+    return;
+  }
+  // DELETE /api/tasks/<id> —— 移除任务（× 关闭 / 超时清理）
+  if (path.startsWith('/api/tasks/') && method === 'DELETE') {
+    await handleDeleteTask(deps, res, path.slice('/api/tasks/'.length));
     return;
   }
   // GET /api/files/<相对路径> —— 注意用未折叠斜杠的原始 pathname 取子路径
