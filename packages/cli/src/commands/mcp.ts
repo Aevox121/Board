@@ -191,6 +191,10 @@ export async function runMcpServer(
         phase: z.enum(['start', 'progress', 'finish']).describe('任务阶段'),
         title: z.string().optional().describe('start：任务标题（在做什么）'),
         region: z.string().optional().describe('start：任务卡所在区域名'),
+        at: z
+          .string()
+          .optional()
+          .describe('start：任务卡画布坐标 "x,y"（与 region 二选一）'),
         taskId: z.string().optional().describe('progress / finish：任务 id'),
         step: z.string().optional().describe('progress：步骤描述'),
         percent: z.number().optional().describe('progress：进度百分比 0–100'),
@@ -207,6 +211,7 @@ export async function runMcpServer(
           mkArgs(['start'], {
             title: a.title,
             region: a.region,
+            at: a.at,
             agent: a.agent,
             port,
           }),
