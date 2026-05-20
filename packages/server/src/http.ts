@@ -9,6 +9,9 @@
  *  - PUT  /api/board            → 请求体 { scene } → saveBoard 落盘（M1）
  *  - GET  /api/files/<相对路径>  → files/ 下文件原始内容（M2，含防目录穿越）
  *  - POST /api/files/move       → 移动 files/ 内文件（M2 增量2：画布→文件系统）
+ *  - POST /api/tasks            → 新建 Agent 任务（M3：Pencil 式过程可视化）
+ *  - POST /api/tasks/progress   → 上报任务进度
+ *  - POST /api/tasks/finish     → 完成任务，draft 元素转 committed
  *  - GET  /api/events           → SSE，board 变化时推送 board-changed（M2）
  */
 import { createReadStream } from 'node:fs';
@@ -16,6 +19,9 @@ import { mkdir, rename, stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { dirname, resolve, sep } from 'node:path';
 import {
+  clampPercent,
+  commitDraftElements,
+  createTask,
   growRegions,
   guessMime,
   normalizePath,
@@ -23,9 +29,11 @@ import {
   regionsOf,
   SCHEMA_VERSION,
   type BoardScene,
+  type BoardTask,
 } from '@board/core';
 import { loadBoard, saveBoard } from '@board/core/node';
 import type { SseHub } from './sse.js';
+import type { TaskStore } from './tasks.js';
 
 /** 统一响应信封。 */
 interface Envelope<T> {
@@ -42,6 +50,8 @@ export interface HttpDeps {
   getFiles(): string[];
   /** SSE 广播器，用于 GET /api/events 长连接 */
   sse: SseHub;
+  /** Agent 任务运行时存储（Pencil 式过程可视化，PRD §7.4） */
+  tasks: TaskStore;
   /**
    * 立即执行一次 reconcile（文件系统 → 画布）。
    * 文件移动等服务端写操作后调用，使 board.json 即时同步并广播 board-changed，
@@ -122,6 +132,7 @@ async function handleGetBoard(deps: HttpDeps, res: ServerResponse): Promise<void
     meta: handle.meta,
     scene: handle.scene,
     files: deps.getFiles(),
+    tasks: deps.tasks.list(),
   });
 }
 
@@ -388,6 +399,169 @@ async function handleMoveFile(
   ok(res, { from, to });
 }
 
+/**
+ * POST /api/tasks —— 新建 Agent 任务（Pencil 占位卡，PRD §7.4 / §7.5）。
+ *
+ * 请求体 `{ title, agentId?, region?, at? }`：
+ *  - `region` —— 区域名（label），任务卡置于该区域内部上方；
+ *  - `at` —— `[x,y]` 显式画布坐标；
+ *  - 二者皆无 —— 落在收件区左上。
+ */
+async function handleCreateTask(
+  deps: HttpDeps,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch (err) {
+    fail(res, 400, errMsg(err));
+    return;
+  }
+  if (typeof body !== 'object' || body === null) {
+    fail(res, 400, '请求体必须为 JSON 对象');
+    return;
+  }
+  const rec = body as Record<string, unknown>;
+  const title = typeof rec['title'] === 'string' ? rec['title'].trim() : '';
+  if (!title) {
+    fail(res, 400, '缺少任务标题 title');
+    return;
+  }
+  const agentId =
+    typeof rec['agentId'] === 'string' && rec['agentId'] ? rec['agentId'] : 'a_agent';
+
+  // 解析任务卡位置：region 名 → 区域内部上方；at → 显式坐标；否则收件区。
+  let regionId: string | null = null;
+  let x = 40;
+  let y = 40;
+  const regionName = typeof rec['region'] === 'string' ? rec['region'].trim() : '';
+  const at = Array.isArray(rec['at']) ? (rec['at'] as unknown[]) : null;
+  if (regionName) {
+    try {
+      const handle = await loadBoard(deps.dir);
+      const region = regionsOf(handle.scene.elements).find(
+        (r) => r.label === regionName,
+      );
+      if (!region) {
+        fail(res, 404, `未找到区域：${regionName}`);
+        return;
+      }
+      regionId = region.id;
+      x = region.x + 20;
+      y = region.y + 56;
+    } catch (err) {
+      fail(res, 500, `读取白板失败: ${errMsg(err)}`);
+      return;
+    }
+  } else if (at && typeof at[0] === 'number' && typeof at[1] === 'number') {
+    x = at[0];
+    y = at[1];
+  }
+
+  const task = createTask({ title, agentId, regionId, x, y });
+  await deps.tasks.put(task);
+  deps.sse.broadcast({ type: 'board-changed' });
+  ok(res, { taskId: task.id, task });
+}
+
+/**
+ * POST /api/tasks/progress —— 上报任务进度。
+ * 请求体 `{ taskId, step?, percent? }`：追加步骤 / 更新进度百分比。
+ */
+async function handleTaskProgress(
+  deps: HttpDeps,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch (err) {
+    fail(res, 400, errMsg(err));
+    return;
+  }
+  if (typeof body !== 'object' || body === null) {
+    fail(res, 400, '请求体必须为 JSON 对象');
+    return;
+  }
+  const rec = body as Record<string, unknown>;
+  const taskId = typeof rec['taskId'] === 'string' ? rec['taskId'] : '';
+  const task = deps.tasks.get(taskId);
+  if (!task) {
+    fail(res, 404, `未找到任务：${taskId}`);
+    return;
+  }
+  const ts = new Date().toISOString();
+  const next: BoardTask = { ...task, steps: [...task.steps], updatedAt: ts };
+  if (typeof rec['step'] === 'string' && rec['step'].trim()) {
+    next.steps.push({ text: rec['step'].trim(), ts });
+  }
+  if (typeof rec['percent'] === 'number') {
+    next.percent = clampPercent(rec['percent']);
+  }
+  await deps.tasks.put(next);
+  deps.sse.broadcast({ type: 'board-changed' });
+  ok(res, { task: next });
+}
+
+/**
+ * POST /api/tasks/finish —— 完成任务。
+ * 请求体 `{ taskId, summary? }`：任务转结果说明态，并把场景中所有 draft 态
+ * 元素提交为 committed（PRD §7.4 第 6 点）。
+ */
+async function handleTaskFinish(
+  deps: HttpDeps,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch (err) {
+    fail(res, 400, errMsg(err));
+    return;
+  }
+  if (typeof body !== 'object' || body === null) {
+    fail(res, 400, '请求体必须为 JSON 对象');
+    return;
+  }
+  const rec = body as Record<string, unknown>;
+  const taskId = typeof rec['taskId'] === 'string' ? rec['taskId'] : '';
+  const task = deps.tasks.get(taskId);
+  if (!task) {
+    fail(res, 404, `未找到任务：${taskId}`);
+    return;
+  }
+  const ts = new Date().toISOString();
+  const summary =
+    typeof rec['summary'] === 'string' && rec['summary'].trim()
+      ? rec['summary'].trim()
+      : task.summary;
+  const next: BoardTask = {
+    ...task,
+    status: 'done',
+    percent: 100,
+    summary,
+    updatedAt: ts,
+  };
+  await deps.tasks.put(next);
+
+  // 提交本流程产出的 draft 态元素 → committed。失败不影响任务完成本身。
+  try {
+    const handle = await loadBoard(deps.dir);
+    const committed = commitDraftElements(handle.scene, task.agentId);
+    if (committed.changed) {
+      await saveBoard(deps.dir, handle.meta, committed.scene);
+    }
+  } catch (err) {
+    console.error('[board-server] task.finish 提交 draft 元素失败:', err);
+  }
+  deps.sse.broadcast({ type: 'board-changed' });
+  ok(res, { task: next });
+}
+
 /** GET /api/events —— SSE 长连接，board 变化时推送 board-changed。 */
 function handleEvents(deps: HttpDeps, req: IncomingMessage, res: ServerResponse): void {
   deps.sse.handle(req, res);
@@ -462,6 +636,19 @@ async function route(
   // POST /api/files/move —— 文件移动；须先于 /api/files/ 文件读取分支判断
   if (path === '/api/files/move' && method === 'POST') {
     await handleMoveFile(deps, req, res);
+    return;
+  }
+  // POST /api/tasks* —— Agent 任务（Pencil 式过程可视化，PRD §7.4）
+  if (path === '/api/tasks' && method === 'POST') {
+    await handleCreateTask(deps, req, res);
+    return;
+  }
+  if (path === '/api/tasks/progress' && method === 'POST') {
+    await handleTaskProgress(deps, req, res);
+    return;
+  }
+  if (path === '/api/tasks/finish' && method === 'POST') {
+    await handleTaskFinish(deps, req, res);
     return;
   }
   // GET /api/files/<相对路径> —— 注意用未折叠斜杠的原始 pathname 取子路径

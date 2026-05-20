@@ -15,6 +15,7 @@
 import {
   type BoardScene,
   type BoardMeta,
+  type BoardTask,
   parseScene,
   parseMeta,
   serializeScene,
@@ -60,6 +61,8 @@ export interface BoardData {
   meta: BoardMeta;
   scene: BoardScene;
   files: string[];
+  /** Agent 任务（Pencil 式过程可视化，M3） */
+  tasks: BoardTask[];
 }
 
 /**
@@ -136,6 +139,7 @@ export async function fetchBoard(): Promise<BoardData> {
     meta: unknown;
     scene: unknown;
     files: unknown;
+    tasks: unknown;
   }>(res, 'GET /api/board');
 
   // server 已是结构化对象；复用 core 的解析器做严格校验（schemaVersion 等）。
@@ -152,7 +156,17 @@ export async function fetchBoard(): Promise<BoardData> {
     ? data.files.filter((f): f is string => typeof f === 'string')
     : [];
 
-  return { meta, scene, files };
+  // 任务为运行时态，无严格 schema —— 轻量过滤为带 id 的对象即可。
+  const tasks: BoardTask[] = Array.isArray(data.tasks)
+    ? (data.tasks.filter(
+        (t): t is BoardTask =>
+          typeof t === 'object' &&
+          t !== null &&
+          typeof (t as BoardTask).id === 'string',
+      ) as BoardTask[])
+    : [];
+
+  return { meta, scene, files, tasks };
 }
 
 /**

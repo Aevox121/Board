@@ -19,6 +19,7 @@ import { listBoardFiles, loadBoard } from '@board/core/node';
 import { createHttpServer, HOST, type HttpDeps } from './http.js';
 import { runReconcile } from './reconcile.js';
 import { createSseHub } from './sse.js';
+import { createTaskStore } from './tasks.js';
 import { startWatcher, type BoardWatcher } from './watcher.js';
 
 /** 默认监听端口，可用 BOARD_PORT 覆盖。 */
@@ -80,6 +81,9 @@ async function main(): Promise<void> {
   // SSE 广播器：board 变化时向所有连接推送
   const sse = createSseHub();
 
+  // Agent 任务运行时存储（Pencil 式过程可视化）—— 从 .runtime/tasks.json 恢复
+  const tasks = await createTaskStore(dir);
+
   /**
    * 执行一次 reconcile：files/ → 画布。
    * changed 时广播 board-changed 事件。失败仅打印，不让进程崩溃。
@@ -132,6 +136,7 @@ async function main(): Promise<void> {
     dir,
     getFiles: () => watcher.getFiles(),
     sse,
+    tasks,
     reconcileNow: reconcileOnce,
   };
   const server = createHttpServer(deps);

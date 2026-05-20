@@ -25,6 +25,7 @@ import {
 import {
   type BoardScene,
   type BoardMeta,
+  type BoardTask,
   type ParticipantId,
   createBoardScene,
   createBoardMeta,
@@ -47,6 +48,8 @@ export interface BoardContextValue {
   connection: ConnectionMode;
   /** server 持有的文件列表（相对 files/ 的路径）；离线模式下为空。 */
   serverFiles: string[];
+  /** Agent 任务（Pencil 式过程可视化，M3）；离线模式下为空。 */
+  tasks: BoardTask[];
   /**
    * 用新场景替换内存场景。
    * @param source 变更来源：`canvas` 来自 Excalidraw 同步，`import` 来自导入文件。
@@ -64,6 +67,7 @@ export interface BoardContextValue {
     meta: BoardMeta,
     scene: BoardScene,
     files: string[],
+    tasks: BoardTask[],
     mode: 'initial' | 'refresh',
   ) => void;
   /**
@@ -114,6 +118,7 @@ export function BoardProvider({
   );
   const [connection, setConnection] = useState<ConnectionMode>('offline');
   const [serverFiles, setServerFiles] = useState<string[]>([]);
+  const [tasks, setTasks] = useState<BoardTask[]>([]);
 
   // 用 ref 持有最新场景，供 replaceScene 的闭包同步读取（避免闭包陈旧）。
   const sceneRef = useRef(scene);
@@ -139,11 +144,13 @@ export function BoardProvider({
       nextMeta: BoardMeta,
       nextScene: BoardScene,
       files: string[],
+      nextTasks: BoardTask[],
       mode: 'initial' | 'refresh',
     ) => {
       setMeta(nextMeta);
       setScene(nextScene);
       setServerFiles(files);
+      setTasks(nextTasks);
       setConnection('connected');
       // 复用 importTick 机制把 server 场景推进 Excalidraw；
       // 仅首次连接缩放到全部内容，SSE 刷新保持当前视野。
@@ -159,6 +166,7 @@ export function BoardProvider({
       actorId: LOCAL_USER_ID,
       connection,
       serverFiles,
+      tasks,
       replaceScene,
       renameBoard,
       loadFromServer,
@@ -170,6 +178,7 @@ export function BoardProvider({
       meta,
       connection,
       serverFiles,
+      tasks,
       replaceScene,
       renameBoard,
       loadFromServer,

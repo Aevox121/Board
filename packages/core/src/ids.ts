@@ -6,6 +6,7 @@
  * | 白板 | wb_   | wb_ + 8 hex |
  * | 元素 | el_   | el_ + 12 hex |
  * | 快照 | snap_ | snap_ + 4 hex |
+ * | 任务 | task_ | task_ + 8 hex |
  */
 
 /** 生成 len 位随机十六进制串（用平台 crypto，Node 19+/现代浏览器均支持）。 */
@@ -20,6 +21,8 @@ function randomHex(len: number): string {
 export const newBoardId = (): string => `wb_${randomHex(8)}`;
 export const newElementId = (): string => `el_${randomHex(12)}`;
 export const newSnapshotId = (): string => `snap_${randomHex(4)}`;
+/** Agent 任务 id（Pencil 式过程可视化，PRD §7.4）—— 独立于元素的命名空间。 */
+export const newTaskId = (): string => `task_${randomHex(8)}`;
 
 /** 把名称转为可用于 id 的 slug（保留中文/字母/数字，其余转 `-`）。 */
 export function slug(name: string): string {

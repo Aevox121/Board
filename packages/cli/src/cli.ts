@@ -28,6 +28,7 @@ import { cmdShow } from './commands/show.js';
 import { cmdAdd } from './commands/add.js';
 import { cmdRegion } from './commands/region.js';
 import { cmdMv } from './commands/mv.js';
+import { cmdTask } from './commands/task.js';
 
 /** 命令处理函数签名。 */
 type Handler = (args: ParsedArgs) => Promise<CmdResult>;
@@ -42,6 +43,7 @@ const HANDLERS: Record<string, Handler> = {
   add: cmdAdd,
   region: cmdRegion,
   mv: cmdMv,
+  task: cmdTask,
 };
 
 /** 已登记但尚未实现的命令（规格 §2，逐里程碑补全）。 */
@@ -53,7 +55,6 @@ const PLACEHOLDER_COMMANDS = [
   'rm',
   'search',
   'suggest',
-  'task',
   'comment',
   'agent',
   'watch',
@@ -96,6 +97,12 @@ function printHelp(): void {
   console.log('  add file <路径> <本地文件> [--region <区域名>]     复制文件入板');
   console.log('  add folder <路径> <本地目录> [--region <区域名>]   复制目录入板');
   console.log('  mv <路径> <源相对路径> <目标相对路径>             移动 files/ 内的文件');
+  console.log('');
+  console.log('已实现命令 (M3，需 board-server 在运行):');
+  console.log('  task start --title "<做什么>" [--region <名>] [--agent <id>]   新建 Agent 任务');
+  console.log('  task progress <taskId> --step "<步骤>" [--percent <n>]         上报任务进度');
+  console.log('  task finish <taskId> [--summary "<结果说明>"]                  完成任务');
+  console.log('  add text <路径> "<markdown>" --draft                          添加 draft 态文本卡');
   console.log('');
   console.log('占位命令 (尚未实现):');
   console.log('  ' + PLACEHOLDER_COMMANDS.join(', '));

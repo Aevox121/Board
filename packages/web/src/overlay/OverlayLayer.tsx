@@ -35,6 +35,7 @@ import { putScene } from '../server/client';
 import { FileCard } from './FileCard';
 import { FolderCard } from './FolderCard';
 import { TextCard } from './TextCard';
+import { TaskCard } from './TaskCard';
 import {
   RegionCard,
   type PointerHandlers,
@@ -244,7 +245,7 @@ export function OverlayLayer({
   viewport,
 }: OverlayLayerProps): JSX.Element {
   const { scrollX, scrollY, zoom } = viewport;
-  const { actorId, connection, serverFiles, replaceScene } = useBoard();
+  const { actorId, connection, serverFiles, tasks, replaceScene } = useBoard();
 
   // 拖拽 / 缩放瞬时状态；null = 未在进行。
   const [drag, setDrag] = useState<DragState | null>(null);
@@ -781,7 +782,7 @@ export function OverlayLayer({
     <div
       className="ov-root"
       ref={rootRef}
-      aria-hidden={contentElements.length === 0}
+      aria-hidden={contentElements.length === 0 && tasks.length === 0}
     >
       <div className="ov-transform" style={transformStyle}>
         {contentElements.map((el) => {
@@ -829,6 +830,7 @@ export function OverlayLayer({
             'ov-slot' +
             (isFile ? ' ov-slot--file' : '') +
             (isText ? ' ov-slot--text' : '') +
+            (el.state === 'draft' ? ' ov-slot--draft' : '') +
             (offset ? ' ov-slot--dragging' : '');
 
           // 区域的拖拽手柄 / 八向缩放 API
@@ -882,6 +884,22 @@ export function OverlayLayer({
             </div>
           );
         })}
+
+        {/* Pencil 式过程可视化：Agent 任务占位卡（运行时态，不可拖拽） */}
+        {tasks.map((task) => (
+          <div
+            key={task.id}
+            className="ov-slot ov-slot--task"
+            style={{
+              left: `${task.x}px`,
+              top: `${task.y}px`,
+              width: `${task.width}px`,
+              height: `${task.height}px`,
+            }}
+          >
+            <TaskCard task={task} />
+          </div>
+        ))}
 
         {/* 右键框选的虚线框 */}
         {marquee ? (

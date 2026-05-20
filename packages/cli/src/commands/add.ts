@@ -32,6 +32,24 @@ const AUTO_PLACE_STEP = 40;
 /** M1/M2 默认参与者 id —— 无 `--actor` 时归属于此。 */
 const DEFAULT_ACTOR = 'u_local';
 
+/** 解析 `--at "x,y"` → `[x,y]`；缺省 / 非法返回 null。 */
+function parseAtOption(raw: string | undefined): [number, number] | null {
+  if (!raw) return null;
+  const parts = raw.split(',').map((s) => Number(s.trim()));
+  const a = parts[0];
+  const b = parts[1];
+  if (
+    parts.length === 2 &&
+    a !== undefined &&
+    b !== undefined &&
+    Number.isFinite(a) &&
+    Number.isFinite(b)
+  ) {
+    return [a, b];
+  }
+  return null;
+}
+
 /**
  * `board add text <白板路径> "<markdown内容>"`
  *
@@ -61,20 +79,29 @@ async function addText(args: ParsedArgs): Promise<CmdResult> {
 
   const size = defaultSizeFor('text');
   const z = nextZ(scene.elements);
-  // 简单错开：按现有元素数量阶梯式偏移
-  const offset = scene.elements.length * AUTO_PLACE_STEP;
   const actor = args.options.get('actor') ?? DEFAULT_ACTOR;
 
+  // --at "x,y" 显式定位；否则按现有元素数量阶梯式错开（autoPlaced）。
+  const at = parseAtOption(args.options.get('at'));
+  const offset = scene.elements.length * AUTO_PLACE_STEP;
+  const x = at ? at[0] : offset;
+  const y = at ? at[1] : offset;
+
   const element = createTextElement({
-    x: offset,
-    y: offset,
+    x,
+    y,
     width: size.width,
     height: size.height,
     createdBy: actor,
     z,
-    autoPlaced: true,
+    autoPlaced: at === null,
     markdown,
   });
+  // --draft：标记为 draft 态 —— Pencil 式过程可视化中 Agent 进行中的产出
+  // （半透明虚线渲染），task.finish 时统一转 committed（PRD §7.4）。
+  if (args.flags.has('draft')) {
+    element.state = 'draft';
+  }
 
   scene.elements.push(element);
   await saveBoard(dir, handle.meta, scene);
