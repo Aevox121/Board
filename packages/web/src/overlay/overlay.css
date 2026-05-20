@@ -457,11 +457,12 @@
 
 /* ── 右键框选虚线框 ────────────────────────────────────────────
  * 画布坐标定位（在 .ov-transform 内），随画布缩放 / 平移。框选期间与
- * 菜单打开期间显示，菜单关闭后消失。pointer-events:none —— 不挡元素。 */
+ * 菜单打开期间显示，菜单关闭后消失。pointer-events:none —— 不挡元素。
+ * 背景透明 —— 只用虚线边界圈出范围，不遮挡框内文件卡。 */
 .ov-marquee {
   position: absolute;
   border: 1.5px dashed var(--c-accent);
   border-radius: var(--radius-sm);
-  background: var(--c-accent-tint);
+  background: transparent;
   pointer-events: none;
 }
