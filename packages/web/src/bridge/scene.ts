@@ -64,6 +64,14 @@ export function sceneToExcalidraw(scene: BoardScene): ExcalidrawSceneData {
   };
 }
 
+/** 归 Excalidraw 画布管理的元素类型；其余（file/folder/region…）归 DOM 覆盖层。 */
+const DRAWING_TYPES: ReadonlySet<Element['type']> = new Set([
+  'draw',
+  'shape',
+  'connector',
+  'text',
+]);
+
 /**
  * Excalidraw 元素 + 视口 → core 场景。
  *
@@ -85,12 +93,20 @@ export function excalidrawToScene(
 
   const live = exElements.filter((e) => !e.isDeleted);
 
-  const elements: Element[] = live.map((ex, idx) => {
+  // Excalidraw 侧的绘图元素 → core。
+  const drawn: Element[] = live.map((ex, idx) => {
     const prev = prevById.get(ex.id);
     const core = excalidrawToCore(ex, actor, prev);
     // z 用数组下标派生：定宽 base36 递增串，字典序即层级序（与 factory.nextZ 同构）。
     return { ...core, z: idx.toString(36).padStart(8, '0') };
   });
+
+  // 关键：保留上一份场景里的「内容元素」(file/folder/region 等)。
+  // 它们由 DOM 覆盖层渲染、不在 Excalidraw 的 onChange 里 —— 若不显式
+  // 保留，每次画布同步都会把它们丢掉，覆盖层随即变空。
+  const preserved: Element[] = prevScene
+    ? prevScene.elements.filter((el) => !DRAWING_TYPES.has(el.type))
+    : [];
 
   const base = createBoardScene();
   return {
@@ -100,7 +116,7 @@ export function excalidrawToScene(
       y: viewport.scrollY,
       zoom: clampZoom(viewport.zoom.value),
     },
-    elements,
+    elements: [...preserved, ...drawn],
   };
 }
 
