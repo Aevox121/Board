@@ -6,15 +6,14 @@
  *      screen = (x + scrollX) * zoom
  *  覆盖层用一个变换容器复刻这条公式：
  *      transform: translate(scrollX*zoom, scrollY*zoom) scale(zoom)
- *      transform-origin: 0 0
  *
  * 渲染范围（M2）：只渲染 `file` / `folder` / `region` 三类内容元素。
  *
  * 交互：
- *  - 文件卡可拖拽（M2 增量2）：按卡片与区域的重叠面积判定落点 —— 落入不同
- *    区域则调 server move 改文件归属，落在原区域 / 收件区内则就地重新定位。
- *  - 区域可拖拽（拖头部）与八向缩放（四角四边手柄）。缩放下限钳制为
- *    「内容包围盒」—— 区域不会缩到压住其内文件。区域增删改经 PUT 落盘。
+ *  - 文件卡可拖拽：按卡片与区域的重叠面积判定落点，保留落点（类访达）。
+ *  - 区域可拖拽（拖头部）与八向缩放（四角四边手柄）。
+ *  - 右键：在区域 / 白板背景上弹出菜单，可「整理」该区域 / 收件区的文件；
+ *    右键拖拽框出虚线框 → 菜单可整理框内选中的文件。整理 = 网格自动对齐。
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
@@ -34,7 +33,12 @@ import {
   type PointerHandlers,
   type RegionResizeApi,
 } from './RegionCard';
-import { fileBaseName, intersectionArea, type RectLike } from './util';
+import {
+  fileBaseName,
+  intersectionArea,
+  pointInRect,
+  type RectLike,
+} from './util';
 import './overlay.css';
 
 /** 覆盖层关心的视口状态 —— 取自 Excalidraw appState。 */
@@ -112,7 +116,25 @@ interface ResizeState {
   minTop: number;
 }
 
-/** 启动拖拽的位移阈值（屏幕像素）—— 小于此值视为点击，不触发移动。 */
+/** 右键上下文菜单的作用域 —— 决定「整理」整理哪些文件。 */
+type MenuScope =
+  | { kind: 'region'; regionId: string; label: string }
+  | { kind: 'inbox' }
+  | { kind: 'selection'; fileIds: string[] };
+
+/** 右键框选的瞬时状态（plain ref，不进 React state）。 */
+interface RightPress {
+  /** 按下时的屏幕坐标。 */
+  startX: number;
+  startY: number;
+  /** 按下时的画布坐标。 */
+  startCX: number;
+  startCY: number;
+  /** 是否已越过阈值（成为框选）。 */
+  moved: boolean;
+}
+
+/** 启动拖拽 / 框选的位移阈值（屏幕像素）。 */
 const DRAG_THRESHOLD_PX = 4;
 /** 区域可缩放到的绝对最小尺寸（画布单位）。 */
 const REGION_MIN_W = 240;
@@ -120,6 +142,16 @@ const REGION_MIN_H = 140;
 /** 区域边缘到内容的留白下限；头部高度 —— 缩放时区域不能压到内容上。 */
 const REGION_CONTENT_MARGIN = 16;
 const REGION_HEADER_H = 48;
+
+/** 由两个对角点构造规范化矩形（画布坐标）。 */
+function normRect(x0: number, y0: number, x1: number, y1: number): RectLike {
+  return {
+    x: Math.min(x0, x1),
+    y: Math.min(y0, y1),
+    width: Math.abs(x1 - x0),
+    height: Math.abs(y1 - y0),
+  };
+}
 
 /**
  * 找出与拖拽中的文件卡重叠面积最大的区域；与任何区域都不重叠则返回 null
@@ -185,6 +217,13 @@ function computeResize(
   return { x, y, w, h };
 }
 
+/** 菜单项「整理」的文案，随作用域而变。 */
+function menuLabel(scope: MenuScope): string {
+  if (scope.kind === 'region') return `整理「${scope.label}」`;
+  if (scope.kind === 'inbox') return '整理白板背景文件';
+  return `整理选中的 ${scope.fileIds.length} 个文件`;
+}
+
 export function OverlayLayer({
   scene,
   viewport,
@@ -195,12 +234,22 @@ export function OverlayLayer({
   // 拖拽 / 缩放瞬时状态；null = 未在进行。
   const [drag, setDrag] = useState<DragState | null>(null);
   const [resize, setResize] = useState<ResizeState | null>(null);
-  // 右键上下文菜单位置（屏幕坐标）；null = 未显示。
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  // 右键上下文菜单（屏幕坐标 + 作用域）；null = 未显示。
+  const [menu, setMenu] = useState<{ x: number; y: number; scope: MenuScope } | null>(
+    null,
+  );
+  // 右键框选的虚线框（画布坐标矩形）；null = 无。
+  const [marquee, setMarquee] = useState<RectLike | null>(null);
 
-  // 持有最新场景，供拖拽结束（可能在异步之后）的落点计算读取，避免闭包陈旧。
+  // 持有最新场景 / 视口，供事件回调（含挂在 window 上的）读取，避免闭包陈旧。
   const sceneRef = useRef(scene);
   sceneRef.current = scene;
+  const viewportRef = useRef(viewport);
+  viewportRef.current = viewport;
+  // 覆盖层根节点 —— 用于换算屏幕↔画布坐标、定位 .board-canvas。
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  // 右键框选的瞬时跟踪（不触发渲染）。
+  const rightPressRef = useRef<RightPress | null>(null);
 
   // 筛出内容元素并按 z 升序排序 —— 字典序即层级序（与 factory.nextZ 同构）。
   const contentElements = useMemo<ContentElement[]>(() => {
@@ -224,15 +273,130 @@ export function OverlayLayer({
     return target ? target.id : null;
   }, [drag, scene.elements]);
 
-  // 上下文菜单打开时，Esc 关闭。
+  // 菜单打开时，Esc 关闭（连同虚线框）。
   useEffect(() => {
     if (!menu) return;
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setMenu(null);
+      if (e.key === 'Escape') {
+        setMenu(null);
+        setMarquee(null);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [menu]);
+
+  // 右键交互（菜单 + 框选）。在 .board-canvas 上以捕获阶段拦截右键，
+  // 既能盖到空白画布（Excalidraw 区域），又能抢在 Excalidraw 之前阻止其原生菜单。
+  useEffect(() => {
+    const host = rootRef.current?.parentElement; // .board-canvas
+    if (!host) return;
+
+    /** 屏幕坐标 → 画布坐标。 */
+    const toCanvas = (cx: number, cy: number): { x: number; y: number } => {
+      const root = rootRef.current;
+      const vp = viewportRef.current;
+      if (!root) return { x: 0, y: 0 };
+      const rect = root.getBoundingClientRect();
+      return {
+        x: (cx - rect.left) / vp.zoom - vp.scrollX,
+        y: (cy - rect.top) / vp.zoom - vp.scrollY,
+      };
+    };
+
+    /** 画布坐标点落在哪个作用域：命中区域 → 该区域；否则 → 收件区。 */
+    const scopeAt = (cx: number, cy: number): MenuScope => {
+      let hit: RegionElement | null = null;
+      for (const r of regionsOf(sceneRef.current.elements)) {
+        if (pointInRect(cx, cy, r) && (!hit || r.z > hit.z)) hit = r;
+      }
+      return hit
+        ? { kind: 'region', regionId: hit.id, label: hit.label || '未命名区域' }
+        : { kind: 'inbox' };
+    };
+
+    const onMove = (e: PointerEvent): void => {
+      const p = rightPressRef.current;
+      if (!p) return;
+      if (
+        !p.moved &&
+        Math.hypot(e.clientX - p.startX, e.clientY - p.startY) <=
+          DRAG_THRESHOLD_PX
+      ) {
+        return;
+      }
+      p.moved = true;
+      const c = toCanvas(e.clientX, e.clientY);
+      setMarquee(normRect(p.startCX, p.startCY, c.x, c.y));
+    };
+
+    const onUp = (e: PointerEvent): void => {
+      const p = rightPressRef.current;
+      rightPressRef.current = null;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      if (!p) return;
+      if (p.moved) {
+        // 框选 —— 选中与虚线框相交的 file 元素
+        const c = toCanvas(e.clientX, e.clientY);
+        const box = normRect(p.startCX, p.startCY, c.x, c.y);
+        const ids = sceneRef.current.elements
+          .filter((el) => el.type === 'file' && intersectionArea(box, el) > 0)
+          .map((el) => el.id);
+        if (ids.length === 0) {
+          setMarquee(null);
+          return;
+        }
+        setMarquee(box);
+        setMenu({
+          x: e.clientX,
+          y: e.clientY,
+          scope: { kind: 'selection', fileIds: ids },
+        });
+      } else {
+        // 单击 —— 按落点决定作用域（区域 / 收件区）
+        setMarquee(null);
+        setMenu({
+          x: e.clientX,
+          y: e.clientY,
+          scope: scopeAt(p.startCX, p.startCY),
+        });
+      }
+    };
+
+    const onDown = (e: PointerEvent): void => {
+      if (e.button !== 2) return; // 仅右键
+      e.preventDefault();
+      e.stopPropagation();
+      setMenu(null);
+      setMarquee(null);
+      const c = toCanvas(e.clientX, e.clientY);
+      rightPressRef.current = {
+        startX: e.clientX,
+        startY: e.clientY,
+        startCX: c.x,
+        startCY: c.y,
+        moved: false,
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    };
+
+    const onContextMenu = (e: MouseEvent): void => {
+      // 抑制浏览器 / Excalidraw 的原生右键菜单 —— Board 用自己的菜单。
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    host.addEventListener('pointerdown', onDown, true);
+    host.addEventListener('contextmenu', onContextMenu, true);
+    return () => {
+      host.removeEventListener('pointerdown', onDown, true);
+      host.removeEventListener('contextmenu', onContextMenu, true);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+  }, []);
 
   /** 把场景中某元素的若干 envelope 字段打补丁，返回新场景。 */
   function patchElement(
@@ -277,7 +441,7 @@ export function OverlayLayer({
     };
   }
 
-  /** 把场景落盘到 server（已连接时）—— 区域移动 / 缩放等画布操作的持久化。 */
+  /** 把场景落盘到 server（已连接时）—— 区域移动 / 缩放 / 整理等画布操作的持久化。 */
   function persist(next: BoardScene, what: string): void {
     if (connection !== 'connected') return;
     void putScene(next).catch((err: unknown) => {
@@ -528,21 +692,23 @@ export function OverlayLayer({
     setResize((r) => (r && r.pointerId === e.pointerId ? null : r));
   }
 
-  /** 右键内容元素 —— 打开 Board 上下文菜单（阻止浏览器默认菜单）。 */
-  function handleContextMenu(e: React.MouseEvent<HTMLDivElement>): void {
-    e.preventDefault();
-    e.stopPropagation();
-    setMenu({ x: e.clientX, y: e.clientY });
-  }
-
-  /** 关闭上下文菜单。 */
+  /** 关闭上下文菜单（连同虚线框）。 */
   function closeMenu(): void {
     setMenu(null);
+    setMarquee(null);
   }
 
-  /** 菜单项「自动对齐」—— 把所有文件在其区域 / 收件区内重新网格排布。 */
-  function handleAutoArrange(): void {
-    const next = arrangeScene(sceneRef.current);
+  /** 菜单项「整理」—— 按作用域把文件网格自动对齐。 */
+  function handleArrange(scope: MenuScope): void {
+    const cur = sceneRef.current;
+    let next: BoardScene;
+    if (scope.kind === 'region') {
+      next = arrangeScene(cur, { containers: [scope.regionId] });
+    } else if (scope.kind === 'inbox') {
+      next = arrangeScene(cur, { containers: [null] });
+    } else {
+      next = arrangeScene(cur, { fileIds: new Set(scope.fileIds) });
+    }
     replaceScene(next, 'canvas');
     persist(next, '自动对齐');
     closeMenu();
@@ -555,12 +721,12 @@ export function OverlayLayer({
   };
 
   return (
-    <div className="ov-root" aria-hidden={contentElements.length === 0}>
-      <div
-        className="ov-transform"
-        style={transformStyle}
-        onContextMenu={handleContextMenu}
-      >
+    <div
+      className="ov-root"
+      ref={rootRef}
+      aria-hidden={contentElements.length === 0}
+    >
+      <div className="ov-transform" style={transformStyle}>
         {contentElements.map((el) => {
           const isFile = el.type === 'file';
 
@@ -651,35 +817,44 @@ export function OverlayLayer({
             </div>
           );
         })}
+
+        {/* 右键框选的虚线框 */}
+        {marquee ? (
+          <div
+            className="ov-marquee"
+            style={{
+              left: `${marquee.x}px`,
+              top: `${marquee.y}px`,
+              width: `${marquee.width}px`,
+              height: `${marquee.height}px`,
+            }}
+          />
+        ) : null}
       </div>
 
-      {/* 右键上下文菜单 —— 唯一项「自动对齐」（平时拖拽不自动对齐，类访达） */}
+      {/* 右键上下文菜单 —— 唯一项「整理」，作用域由右键位置 / 框选决定 */}
       {menu ? (
         <>
           <div
             className="ov-menu-backdrop"
             onPointerDown={closeMenu}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              closeMenu();
-            }}
           />
           <div
             className="ov-menu"
             style={{
-              left: `${Math.min(menu.x, window.innerWidth - 196)}px`,
+              left: `${Math.min(menu.x, window.innerWidth - 220)}px`,
               top: `${Math.min(menu.y, window.innerHeight - 56)}px`,
             }}
           >
             <button
               type="button"
               className="ov-menu__item"
-              onClick={handleAutoArrange}
+              onClick={() => handleArrange(menu.scope)}
             >
               <span className="ov-menu__icon" aria-hidden="true">
                 ▦
               </span>
-              自动对齐文件
+              {menuLabel(menu.scope)}
             </button>
           </div>
         </>

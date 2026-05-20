@@ -147,35 +147,68 @@ export function growRegions(elements: Element[]): {
   return { elements: next, changed };
 }
 
+/** `arrangeScene` 的作用域选项 —— 不给则整理全部容器的全部文件。 */
+export interface ArrangeOptions {
+  /**
+   * 限定只整理这些容器：传 region id，或 `null` 表示收件区。
+   * 不给 = 所有容器（收件区 + 全部区域）。
+   */
+  containers?: ReadonlyArray<string | null>;
+  /**
+   * 限定只重排这些 file 元素 id；其余文件保持原位但计入碰撞占位。
+   * 不给 = 容器内全部文件参与重排。
+   */
+  fileIds?: ReadonlySet<string>;
+}
+
 /**
- * 手动「自动对齐」：把场景内所有 file 元素在其所属区域 / 收件区内重新网格排布。
+ * 手动「自动对齐」：把 file 元素在其所属区域 / 收件区内重新网格排布。
  *
- * 与 reconcile 的新文件排布同构，但作用于全部文件 —— 供右键菜单「自动对齐」调用。
- * 平时拖拽文件**不**自动对齐（保留落点，类访达），仅用户显式触发本函数时才整理。
+ * 平时拖拽文件**不**自动对齐（保留落点，类访达），仅用户经右键菜单显式触发
+ * 本函数时才整理。文件按当前位置（上→下、左→右）排序后逐个落入网格槽位，
+ * 保留大致顺序。
  *
- * 文件按当前位置（上→下、左→右）排序后逐个落入网格槽位，保留大致顺序。
+ * 作用域（`opts`）：
+ *  - 不给 —— 整理所有容器的所有文件。
+ *  - `containers` —— 只整理指定区域 / 收件区（右键区域 / 白板背景）。
+ *  - `fileIds` —— 只重排指定文件（右键框选）；同容器内未选中的文件视为占位。
  */
-export function arrangeScene(scene: BoardScene): BoardScene {
+export function arrangeScene(
+  scene: BoardScene,
+  opts?: ArrangeOptions,
+): BoardScene {
   const regions = regionsOf(scene.elements);
-  // 容器列表：收件区 + 各区域
-  const containers: Array<{ id: string | null; rect: Rect }> = [
+  // 全部容器：收件区(null) + 各区域
+  const allContainers: Array<{ id: string | null; rect: Rect }> = [
     { id: null, rect: INBOX_RECT },
     ...regions.map((r) => ({
       id: r.id,
       rect: { x: r.x, y: r.y, width: r.width, height: r.height },
     })),
   ];
+  const containerFilter = opts?.containers ? new Set(opts.containers) : null;
+  const containers = containerFilter
+    ? allContainers.filter((c) => containerFilter.has(c.id))
+    : allContainers;
+  const fileIds = opts?.fileIds ?? null;
 
   const placed = new Map<string, { x: number; y: number }>();
   for (const container of containers) {
-    const files = scene.elements
-      .filter(
-        (e): e is FileElement =>
-          e.type === 'file' && (e.parentId ?? null) === container.id,
-      )
-      .sort((a, b) => a.y - b.y || a.x - b.x);
-    const occupied: Rect[] = [];
-    for (const f of files) {
+    const files = scene.elements.filter(
+      (e): e is FileElement =>
+        e.type === 'file' && (e.parentId ?? null) === container.id,
+    );
+    // 本次要重排的文件；不给 fileIds 则容器内全部参与。
+    const toMove = fileIds ? files.filter((f) => fileIds.has(f.id)) : files;
+    if (toMove.length === 0) continue;
+    // 占位：本容器内不重排的文件保持原位、计入碰撞规避。
+    const moveSet = new Set(toMove.map((f) => f.id));
+    const occupied: Rect[] = files
+      .filter((f) => !moveSet.has(f.id))
+      .map((f) => ({ x: f.x, y: f.y, width: f.width, height: f.height }));
+    // 待重排文件按当前位置排序，保留大致顺序。
+    const sorted = [...toMove].sort((a, b) => a.y - b.y || a.x - b.x);
+    for (const f of sorted) {
       const size = { width: f.width, height: f.height };
       const pos = nextSlot(container.rect, occupied, size);
       placed.set(f.id, pos);
