@@ -43,18 +43,19 @@ function BoardApp(): JSX.Element {
   const loadFromServerRef = useRef(loadFromServer);
   loadFromServerRef.current = loadFromServer;
 
-  // ── 启动时探测 board-server ───────────────────────────────
+  // ── 启动时探测 board-server（整个生命周期仅一次）──────────────
+  // probedRef 保证只探测一次（含 StrictMode 二次挂载）。
+  // 不要用 effect cleanup 的 cancelled 标志中断探测 —— StrictMode 会在
+  // 首次 effect 后立刻 cleanup，会把唯一一次探测掐死，导致永远停在「连接中…」。
   useEffect(() => {
     if (probedRef.current) return;
     probedRef.current = true;
 
-    let cancelled = false;
     void (async () => {
       try {
         // 先 health 探活，再取白板数据。任一步失败都降级到离线模式。
         await checkHealth();
         const data = await fetchBoard();
-        if (cancelled) return;
         loadFromServer(data.meta, data.scene, data.files);
       } catch (err) {
         // server 宕机 / 网络错误 / 数据非法 —— 优雅降级到离线模式，不崩。
@@ -64,13 +65,9 @@ function BoardApp(): JSX.Element {
           console.warn('[board-web] 连接 board-server 时发生意外错误：', err);
         }
       } finally {
-        if (!cancelled) setProbing(false);
+        setProbing(false);
       }
     })();
-
-    return () => {
-      cancelled = true;
-    };
   }, [loadFromServer]);
 
   // ── 已连接模式下订阅 SSE，server 变化时刷新白板 ───────────────

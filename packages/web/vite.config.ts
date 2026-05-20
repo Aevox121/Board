@@ -1,8 +1,14 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [react()],
+  // Excalidraw 的入口 main.js 在运行时读 process.env.*，而浏览器没有 process。
+  // 用 define 在构建期把它们替换为字面量，避免 "process is not defined" 崩溃。
+  define: {
+    'process.env.IS_PREACT': JSON.stringify('false'),
+    'process.env.NODE_ENV': JSON.stringify(mode),
+  },
   server: {
     host: '127.0.0.1',
     port: 4510,
@@ -15,4 +21,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

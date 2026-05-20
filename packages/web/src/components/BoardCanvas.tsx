@@ -48,6 +48,15 @@ export function BoardCanvas(): JSX.Element {
   const [overlayViewport, setOverlayViewport] =
     useState<OverlayViewport>(INITIAL_VIEWPORT);
 
+  /**
+   * 稳定的 Excalidraw API 回调。必须 useCallback：
+   * 内联函数每次渲染都是新引用，会让 Excalidraw 反复重新初始化，
+   * 与 onChange → 场景写回 → 重渲染 形成无限渲染循环。
+   */
+  const handleApi = useCallback((api: ExcalidrawImperativeAPI) => {
+    apiRef.current = api;
+  }, []);
+
   /** Excalidraw 元素 / 视口变化 → 写回 core 场景 + 同步覆盖层视口。 */
   const handleChange = useCallback(
     (elements: readonly ExcalidrawElement[], appState: AppState) => {
@@ -112,12 +121,7 @@ export function BoardCanvas(): JSX.Element {
 
   return (
     <div className="board-canvas">
-      <Excalidraw
-        excalidrawAPI={(api) => {
-          apiRef.current = api;
-        }}
-        onChange={handleChange}
-      />
+      <Excalidraw excalidrawAPI={handleApi} onChange={handleChange} />
       {/* DOM 覆盖层 —— 叠在 Excalidraw 之上，渲染 file/folder/region 内容元素 */}
       <OverlayLayer scene={scene} viewport={overlayViewport} />
     </div>

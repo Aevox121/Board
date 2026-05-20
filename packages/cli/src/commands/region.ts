@@ -19,13 +19,14 @@ import {
   nextZ,
   defaultSizeFor,
   regionsOf,
+  INBOX_RECT,
 } from '@board/core';
 import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
 
-/** 自动错开布局的步进量（避免新区域元素完全重叠）。 */
-const AUTO_PLACE_STEP = 80;
+/** 区域横向平铺时的间隙。 */
+const REGION_GAP = 56;
 
 /** M2 默认参与者 id —— 无 `--actor` 时归属于此。 */
 const DEFAULT_ACTOR = 'u_local';
@@ -95,13 +96,14 @@ async function regionCreate(args: ParsedArgs): Promise<CmdResult> {
   // 2. 建 region 元素并推入场景
   const size = defaultSizeFor('region');
   const z = nextZ(scene.elements);
-  // 简单错开：按现有元素数量阶梯式偏移
-  const offset = scene.elements.length * AUTO_PLACE_STEP;
+  // 区域横向平铺、互不重叠；整体置于收件区下方，避开游离文件。
+  const x = existing.length * (size.width + REGION_GAP);
+  const y = INBOX_RECT.y + INBOX_RECT.height + REGION_GAP;
   const actor = args.options.get('actor') ?? DEFAULT_ACTOR;
 
   const element = createRegionElement({
-    x: offset,
-    y: offset,
+    x,
+    y,
     width: size.width,
     height: size.height,
     createdBy: actor,
