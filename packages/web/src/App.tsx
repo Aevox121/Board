@@ -1,5 +1,5 @@
 import { Excalidraw } from '@excalidraw/excalidraw';
-import '@excalidraw/excalidraw/index.css';
+// 注：@excalidraw/excalidraw 0.17.x 的样式已打包进 JS，无需单独引入 CSS。
 
 /**
  * M0 烟雾测试 — 验证 Excalidraw 能在本工程内挂载渲染。
