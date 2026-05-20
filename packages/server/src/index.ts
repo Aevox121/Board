@@ -125,11 +125,13 @@ async function main(): Promise<void> {
     scheduleReconcile();
   });
 
-  // 装配 HTTP server
+  // 装配 HTTP server。reconcileNow 复用上面的 reconcileOnce ——
+  // POST /api/files/move 等写操作后即时同步画布，不必等 watcher 防抖窗口。
   const deps: HttpDeps = {
     dir,
     getFiles: () => watcher.getFiles(),
     sse,
+    reconcileNow: reconcileOnce,
   };
   const server = createHttpServer(deps);
 

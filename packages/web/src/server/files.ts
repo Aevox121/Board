@@ -58,3 +58,50 @@ export async function fetchFileText(relPath: string): Promise<string | null> {
     clearTimeout(timer);
   }
 }
+
+/** POST /api/files/move 的响应信封形状 —— 与 server Envelope 对应。 */
+interface MoveEnvelope {
+  ok?: boolean;
+  error?: string | null;
+}
+
+/**
+ * 请求 server 把 `files/` 下的一个文件移动到新的相对路径（画布 → 文件系统）。
+ *
+ * 用于 Web 端拖动文件卡跨区域：server 重命名真实文件后会 reconcile 并经 SSE
+ * 广播 `board-changed`，Web 据此刷新画布。
+ *
+ * @param from 源相对路径（相对 `files/`）
+ * @param to   目标相对路径（相对 `files/`）
+ * @throws Error 网络不可达、超时、或 server 拒绝移动（错误信息可读，供 UI 提示）。
+ */
+export async function moveFile(from: string, to: string): Promise<void> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FILE_REQUEST_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/files/move`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from, to }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    clearTimeout(timer);
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error('移动文件请求超时');
+    }
+    throw new Error('无法连接 board-server');
+  }
+  clearTimeout(timer);
+
+  let body: MoveEnvelope;
+  try {
+    body = (await res.json()) as MoveEnvelope;
+  } catch {
+    body = {};
+  }
+  if (!res.ok || !body.ok) {
+    throw new Error(body.error ?? `移动文件失败（HTTP ${res.status}）`);
+  }
+}

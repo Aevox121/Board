@@ -52,7 +52,7 @@ const EXCALIDRAW_UI_OPTIONS = {
 };
 
 export function BoardCanvas(): JSX.Element {
-  const { scene, actorId, replaceScene, importTick } = useBoard();
+  const { scene, actorId, replaceScene, importTick, importFit } = useBoard();
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
 
   // 始终持有最新场景，供 onChange 闭包做 id 对齐（保留 z/parentId 等）。
@@ -132,10 +132,12 @@ export function BoardCanvas(): JSX.Element {
         zoom: { value: appState.zoom.value as AppState['zoom']['value'] },
       },
     });
-    // 导入后视图聚焦到全部内容，方便用户立即看到导入结果。
-    if (elements.length > 0) {
+    // 仅在用户导入 / 首次连接时把视图聚焦到全部内容；
+    // SSE 后台刷新（如拖拽移动文件触发的 reconcile）不重定位视图，避免画面跳动。
+    if (elements.length > 0 && importFit) {
       api.scrollToContent(elements, { fitToContent: true });
     }
+    // importFit 与 importTick 在同一次 setState 中更新，读取的即为本次值。
   }, [importTick]);
 
   return (

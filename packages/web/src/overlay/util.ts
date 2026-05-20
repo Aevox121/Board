@@ -32,6 +32,27 @@ export function fileBaseName(path: string): string {
   return slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
 }
 
+/** 一个轴对齐矩形（画布坐标）。 */
+export interface RectLike {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * 点 (px, py) 是否落在矩形内（含边界）。
+ * 用于拖拽落点的区域命中测试 —— 区域卡的微旋转幅度极小，按轴对齐矩形近似。
+ */
+export function pointInRect(px: number, py: number, rect: RectLike): boolean {
+  return (
+    px >= rect.x &&
+    px <= rect.x + rect.width &&
+    py >= rect.y &&
+    py <= rect.y + rect.height
+  );
+}
+
 /**
  * 把字节数格式化为可读字符串（B / KB / MB / GB）。
  *

@@ -14,8 +14,13 @@
   inset: 0;
   pointer-events: none;
   overflow: hidden;
-  /* 压在 Excalidraw 画布之上，但低于 Excalidraw 自身的浮层 UI */
-  z-index: 1;
+  /*
+   * z-index 必须高于 Excalidraw 的「交互画布」(z-index:2)，否则那张透明画布
+   * 会盖在卡片之上、截走指针事件 —— 卡片看得见却点不动。取 3：在交互画布
+   * (2) 之上、Excalidraw UI 浮层 (.layer-ui__wrapper z-index:4) 之下。
+   * 本层 pointer-events:none，空白处指针仍下穿到交互画布（不影响画布绘图）。
+   */
+  z-index: 3;
 }
 
 /* 变换容器 —— 复刻 Excalidraw 视口变换（translate+scale，见 OverlayLayer.tsx）。 */
@@ -32,6 +37,24 @@
   position: absolute;
 }
 
+/* 文件卡槽 —— 可拖拽改归属（M2 增量2）。整槽接收指针事件并显示抓取光标。 */
+.ov-slot--file {
+  pointer-events: auto;
+  cursor: grab;
+}
+
+/* 正在拖拽的文件卡 —— 抬到最上层，光标转为抓取中。 */
+.ov-slot--dragging {
+  z-index: 1000;
+  cursor: grabbing;
+}
+
+/* 拖拽中的卡片「拎起」质感 —— 更重的投影 + 轻微抬升感。 */
+.ov-slot--dragging .ov-card {
+  box-shadow: var(--shadow-lg, 0 10px 28px rgba(60, 40, 30, 0.28));
+  cursor: grabbing;
+}
+
 /* ── 内容卡片通用 ───────────────────────────────────────────
  * pointer-events:auto → 卡片本身可交互（空白处仍穿透）。 */
 .ov-card {
@@ -43,6 +66,9 @@
   transform-origin: 50% 50%;
   font-family: var(--font-ui);
   color: var(--c-ink);
+  /* 拖拽时不选中卡内文字 */
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 /* ── 文件卡片（手绘质感）────────────────────────────────────── */
@@ -238,6 +264,14 @@
   border-radius: var(--radius-md);
   /* 区域是「圈地」容器，事件应穿透到画布（仅头部需要可交互时再开） */
   pointer-events: none;
+  /* 拖拽落点高亮的平滑过渡 */
+  transition: box-shadow 120ms ease, border-color 120ms ease;
+}
+
+/* 拖拽文件卡悬停到本区域上方 —— 陶土橙高亮环，提示「松手即落入此区」。 */
+.ov-region.ov-region--drop {
+  border-color: var(--c-accent);
+  box-shadow: 0 0 0 3px var(--c-accent);
 }
 
 .ov-region__head {

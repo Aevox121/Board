@@ -56,7 +56,7 @@ function BoardApp(): JSX.Element {
         // 先 health 探活，再取白板数据。任一步失败都降级到离线模式。
         await checkHealth();
         const data = await fetchBoard();
-        loadFromServer(data.meta, data.scene, data.files);
+        loadFromServer(data.meta, data.scene, data.files, 'initial');
       } catch (err) {
         // server 宕机 / 网络错误 / 数据非法 —— 优雅降级到离线模式，不崩。
         if (err instanceof ServerError) {
@@ -80,7 +80,7 @@ function BoardApp(): JSX.Element {
       void (async () => {
         try {
           const data = await fetchBoard();
-          loadFromServerRef.current(data.meta, data.scene, data.files);
+          loadFromServerRef.current(data.meta, data.scene, data.files, 'refresh');
         } catch (err) {
           console.info('[board-web] 收到变更事件但刷新白板失败，保留当前场景：', err);
         }

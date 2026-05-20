@@ -8,12 +8,13 @@
  *  - GET  /api/board            → { meta, scene, files }（M1）
  *  - PUT  /api/board            → 请求体 { scene } → saveBoard 落盘（M1）
  *  - GET  /api/files/<相对路径>  → files/ 下文件原始内容（M2，含防目录穿越）
+ *  - POST /api/files/move       → 移动 files/ 内文件（M2 增量2：画布→文件系统）
  *  - GET  /api/events           → SSE，board 变化时推送 board-changed（M2）
  */
 import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { mkdir, rename, stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { resolve, sep } from 'node:path';
+import { dirname, resolve, sep } from 'node:path';
 import { guessMime, normalizePath, SCHEMA_VERSION, type BoardScene } from '@board/core';
 import { loadBoard, saveBoard } from '@board/core/node';
 import type { SseHub } from './sse.js';
@@ -33,6 +34,12 @@ export interface HttpDeps {
   getFiles(): string[];
   /** SSE 广播器，用于 GET /api/events 长连接 */
   sse: SseHub;
+  /**
+   * 立即执行一次 reconcile（文件系统 → 画布）。
+   * 文件移动等服务端写操作后调用，使 board.json 即时同步并广播 board-changed，
+   * 不必等 chokidar 监听的防抖窗口。
+   */
+  reconcileNow(reason: string): Promise<void>;
 }
 
 const HOST = '127.0.0.1';
@@ -225,6 +232,102 @@ async function handleGetFile(
   stream.pipe(res);
 }
 
+/**
+ * POST /api/files/move —— 把 files/ 下的一个文件移动到新的相对路径。
+ *
+ * 请求体 `{ from, to }`，两者均为相对 files/ 的路径。这是「画布 → 文件系统」
+ * 方向的同步入口：Web 端拖动文件卡跨区域时调用，server 据此重命名真实文件，
+ * 再 reconcile 把变更同步回画布。
+ *
+ * 约束：
+ *  - from / to 解析后必须仍落在 files/ 内（防目录穿越）。
+ *  - from 必须是已存在的文件；to 不得已存在（避免静默覆盖）。
+ *  - 重命名成功后立即 reconcile 并广播，Web 端据 SSE 刷新。
+ */
+async function handleMoveFile(
+  deps: HttpDeps,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  // 解析并校验请求体
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch (err) {
+    fail(res, 400, errMsg(err));
+    return;
+  }
+  if (typeof body !== 'object' || body === null) {
+    fail(res, 400, '请求体必须为 { from, to }');
+    return;
+  }
+  const rawFrom = (body as Record<string, unknown>)['from'];
+  const rawTo = (body as Record<string, unknown>)['to'];
+  if (typeof rawFrom !== 'string' || typeof rawTo !== 'string') {
+    fail(res, 400, 'from / to 必须为字符串');
+    return;
+  }
+
+  const from = normalizePath(rawFrom);
+  const to = normalizePath(rawTo);
+  if (!from || !to) {
+    fail(res, 400, 'from / to 不能为空');
+    return;
+  }
+  if (from === to) {
+    fail(res, 400, '源路径与目标路径相同');
+    return;
+  }
+
+  // 防目录穿越：from / to 解析后都必须落在 files/ 内
+  const filesRoot = resolve(deps.dir, 'files');
+  const fromAbs = resolve(filesRoot, from);
+  const toAbs = resolve(filesRoot, to);
+  const rootPrefix = filesRoot.endsWith(sep) ? filesRoot : filesRoot + sep;
+  if (!fromAbs.startsWith(rootPrefix) || !toAbs.startsWith(rootPrefix)) {
+    fail(res, 403, '禁止访问 files/ 之外的路径');
+    return;
+  }
+
+  // from 必须是已存在文件
+  let fromStat;
+  try {
+    fromStat = await stat(fromAbs);
+  } catch {
+    fail(res, 404, `源文件不存在: ${from}`);
+    return;
+  }
+  if (!fromStat.isFile()) {
+    fail(res, 400, `源路径不是文件: ${from}`);
+    return;
+  }
+
+  // to 不得已存在 —— stat 成功即冲突
+  let toExists = true;
+  try {
+    await stat(toAbs);
+  } catch {
+    toExists = false;
+  }
+  if (toExists) {
+    fail(res, 409, `目标已存在: ${to}`);
+    return;
+  }
+
+  // 建目标父目录并重命名
+  try {
+    await mkdir(dirname(toAbs), { recursive: true });
+    await rename(fromAbs, toAbs);
+  } catch (err) {
+    fail(res, 500, `移动文件失败: ${errMsg(err)}`);
+    return;
+  }
+
+  // 立即 reconcile：旧路径 file 元素移除、新路径元素按区域归位，并广播 board-changed
+  await deps.reconcileNow('move');
+  ok(res, { from, to });
+}
+
 /** GET /api/events —— SSE 长连接，board 变化时推送 board-changed。 */
 function handleEvents(deps: HttpDeps, req: IncomingMessage, res: ServerResponse): void {
   deps.sse.handle(req, res);
@@ -294,6 +397,11 @@ async function route(
   }
   if (path === '/api/events' && method === 'GET') {
     handleEvents(deps, req, res);
+    return;
+  }
+  // POST /api/files/move —— 文件移动；须先于 /api/files/ 文件读取分支判断
+  if (path === '/api/files/move' && method === 'POST') {
+    await handleMoveFile(deps, req, res);
     return;
   }
   // GET /api/files/<相对路径> —— 注意用未折叠斜杠的原始 pathname 取子路径

@@ -3,7 +3,7 @@
  *
  * 命令清单与参数见 specs/CLI与MCP规格.md §2。
  * M1 已实现：new / info / ls / tree / show / add text。
- * M2 已实现：region create / region ls / add file / add folder。
+ * M2 已实现：region create / region ls / add file / add folder / mv。
  * 其余命令保留为「尚未实现」占位，逐里程碑补全。
  *
  * 退出码（规格 §1.4）：0 成功 / 1 一般错误 / 2 参数错误
@@ -27,6 +27,7 @@ import { cmdTree } from './commands/tree.js';
 import { cmdShow } from './commands/show.js';
 import { cmdAdd } from './commands/add.js';
 import { cmdRegion } from './commands/region.js';
+import { cmdMv } from './commands/mv.js';
 
 /** 命令处理函数签名。 */
 type Handler = (args: ParsedArgs) => Promise<CmdResult>;
@@ -40,6 +41,7 @@ const HANDLERS: Record<string, Handler> = {
   show: cmdShow,
   add: cmdAdd,
   region: cmdRegion,
+  mv: cmdMv,
 };
 
 /** 已登记但尚未实现的命令（规格 §2，逐里程碑补全）。 */
@@ -49,7 +51,6 @@ const PLACEHOLDER_COMMANDS = [
   'shape',
   'connect',
   'rm',
-  'mv',
   'search',
   'suggest',
   'task',
@@ -94,6 +95,7 @@ function printHelp(): void {
   console.log('  region ls <路径>                                 列出所有区域');
   console.log('  add file <路径> <本地文件> [--region <区域名>]     复制文件入板');
   console.log('  add folder <路径> <本地目录> [--region <区域名>]   复制目录入板');
+  console.log('  mv <路径> <源相对路径> <目标相对路径>             移动 files/ 内的文件');
   console.log('');
   console.log('占位命令 (尚未实现):');
   console.log('  ' + PLACEHOLDER_COMMANDS.join(', '));

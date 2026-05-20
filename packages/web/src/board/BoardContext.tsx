@@ -57,17 +57,25 @@ export interface BoardContextValue {
   /**
    * 载入 server 持有的白板，进入「已连接」模式。
    * 替换内存的 scene/meta，并触发一次 Excalidraw 重渲染（同 import）。
+   * @param mode `initial` 首次连接（视图缩放到全部内容）；
+   *             `refresh` SSE 后台刷新（保持当前视野不跳动）。
    */
   loadFromServer: (
     meta: BoardMeta,
     scene: BoardScene,
     files: string[],
+    mode: 'initial' | 'refresh',
   ) => void;
   /**
    * 「导入版本号」——每次导入 board.json 或载入 server 数据自增。
    * App 层据此把场景推送进 Excalidraw（区别于画布自身的变更）。
    */
   importTick: number;
+  /**
+   * 当前 importTick 对应的变更是否应把视图缩放到全部内容。
+   * 用户导入 / 首次连接 → true；SSE 后台刷新 → false（不打扰当前视野）。
+   */
+  importFit: boolean;
 }
 
 const BoardContext = createContext<BoardContextValue | null>(null);
@@ -99,7 +107,11 @@ export function BoardProvider({
       ],
     }),
   );
-  const [importTick, setImportTick] = useState(0);
+  // importState.tick 自增即触发把场景推进 Excalidraw；
+  // fit 表示该次是否应缩放到全部内容（区分用户导入与 SSE 后台刷新）。
+  const [importState, setImportState] = useState<{ tick: number; fit: boolean }>(
+    { tick: 0, fit: false },
+  );
   const [connection, setConnection] = useState<ConnectionMode>('offline');
   const [serverFiles, setServerFiles] = useState<string[]>([]);
 
@@ -112,7 +124,7 @@ export function BoardProvider({
       setScene(next);
       setMeta((m) => ({ ...m, updatedAt: new Date().toISOString() }));
       if (source === 'import') {
-        setImportTick((t) => t + 1);
+        setImportState((s) => ({ tick: s.tick + 1, fit: true }));
       }
     },
     [],
@@ -123,13 +135,19 @@ export function BoardProvider({
   }, []);
 
   const loadFromServer = useCallback(
-    (nextMeta: BoardMeta, nextScene: BoardScene, files: string[]) => {
+    (
+      nextMeta: BoardMeta,
+      nextScene: BoardScene,
+      files: string[],
+      mode: 'initial' | 'refresh',
+    ) => {
       setMeta(nextMeta);
       setScene(nextScene);
       setServerFiles(files);
       setConnection('connected');
-      // 复用 importTick 机制把 server 场景推进 Excalidraw。
-      setImportTick((t) => t + 1);
+      // 复用 importTick 机制把 server 场景推进 Excalidraw；
+      // 仅首次连接缩放到全部内容，SSE 刷新保持当前视野。
+      setImportState((s) => ({ tick: s.tick + 1, fit: mode === 'initial' }));
     },
     [],
   );
@@ -144,7 +162,8 @@ export function BoardProvider({
       replaceScene,
       renameBoard,
       loadFromServer,
-      importTick,
+      importTick: importState.tick,
+      importFit: importState.fit,
     }),
     [
       scene,
@@ -154,7 +173,7 @@ export function BoardProvider({
       replaceScene,
       renameBoard,
       loadFromServer,
-      importTick,
+      importState,
     ],
   );
 
