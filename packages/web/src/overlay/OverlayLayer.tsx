@@ -21,6 +21,7 @@ import type {
   Element,
   FileElement,
   RegionElement,
+  SuggestionElement,
   TextElement,
 } from '@board/core';
 import {
@@ -36,6 +37,7 @@ import { FileCard } from './FileCard';
 import { FolderCard } from './FolderCard';
 import { TextCard } from './TextCard';
 import { TaskCard } from './TaskCard';
+import { SuggestionCard } from './SuggestionCard';
 import {
   RegionCard,
   type PointerHandlers,
@@ -273,6 +275,35 @@ export function OverlayLayer({
       .filter(isContentElement)
       .sort((a, b) => (a.z < b.z ? -1 : a.z > b.z ? 1 : 0));
   }, [scene.elements]);
+
+  // 建议元素 —— 单独渲染（非可拖拽），并与各自目标元素连线（PRD §7.3）。
+  const suggestions = useMemo<SuggestionElement[]>(
+    () =>
+      scene.elements.filter(
+        (e): e is SuggestionElement => e.type === 'suggestion',
+      ),
+    [scene.elements],
+  );
+
+  // 建议 → 目标的连线（画布坐标，中心到中心；目标已删除则不连）。
+  const suggestionLinks = useMemo<
+    { id: string; x1: number; y1: number; x2: number; y2: number }[]
+  >(() => {
+    const links: { id: string; x1: number; y1: number; x2: number; y2: number }[] =
+      [];
+    for (const s of suggestions) {
+      const target = scene.elements.find((e) => e.id === s.targetId);
+      if (!target) continue;
+      links.push({
+        id: s.id,
+        x1: target.x + target.width / 2,
+        y1: target.y + target.height / 2,
+        x2: s.x + s.width / 2,
+        y2: s.y + s.height / 2,
+      });
+    }
+    return links;
+  }, [suggestions, scene.elements]);
 
   // R6 缺失态：path 不在 server 文件列表里的 file 元素 id 集合。
   // 仅「已连接」时判定 —— 离线模式 serverFiles 为空，不应误判全部缺失。
@@ -782,9 +813,29 @@ export function OverlayLayer({
     <div
       className="ov-root"
       ref={rootRef}
-      aria-hidden={contentElements.length === 0 && tasks.length === 0}
+      aria-hidden={
+        contentElements.length === 0 &&
+        tasks.length === 0 &&
+        suggestions.length === 0
+      }
     >
       <div className="ov-transform" style={transformStyle}>
+        {/* 建议 → 目标的连线 —— 置于卡片之下，只露出卡片之间的连接段 */}
+        {suggestionLinks.length > 0 ? (
+          <svg className="ov-links" width="0" height="0" aria-hidden="true">
+            {suggestionLinks.map((l) => (
+              <line
+                key={l.id}
+                className="ov-link-line"
+                x1={l.x1}
+                y1={l.y1}
+                x2={l.x2}
+                y2={l.y2}
+              />
+            ))}
+          </svg>
+        ) : null}
+
         {contentElements.map((el) => {
           const isFile = el.type === 'file';
           const isText = el.type === 'text';
@@ -857,6 +908,7 @@ export function OverlayLayer({
               key={el.id}
               className={className}
               style={slotStyle}
+              data-element-id={el.id}
               onPointerDown={
                 draggable
                   ? (e) => beginDrag(e, el, isFile ? 'file' : 'text')
@@ -884,6 +936,23 @@ export function OverlayLayer({
             </div>
           );
         })}
+
+        {/* 建议卡片（PRD §7.3）—— 承载 Agent 提议，含同意/拒绝/描述操作 */}
+        {suggestions.map((s) => (
+          <div
+            key={s.id}
+            className="ov-slot ov-slot--suggestion"
+            data-suggestion-id={s.id}
+            style={{
+              left: `${s.x}px`,
+              top: `${s.y}px`,
+              width: `${s.width}px`,
+              height: `${s.height}px`,
+            }}
+          >
+            <SuggestionCard element={s} />
+          </div>
+        ))}
 
         {/* Pencil 式过程可视化：Agent 任务占位卡（运行时态，不可拖拽） */}
         {tasks.map((task) => (

@@ -20,6 +20,7 @@ import { cmdTree } from './tree.js';
 import { cmdAdd } from './add.js';
 import { cmdRegion } from './region.js';
 import { cmdTask } from './task.js';
+import { cmdSuggest } from './suggest.js';
 
 /** 由位置参数 / 选项 / 开关构造一个 ParsedArgs（喂给 cmd* 函数）。 */
 function mkArgs(
@@ -98,7 +99,8 @@ export async function runMcpServer(
     'board_read_context',
     {
       description:
-        '读取白板上下文：区域、元素、连接的概览，供 Agent 理解白板当前状态。',
+        '读取白板上下文（Board Context）：区域、元素、连线、建议的概览，供 Agent ' +
+        '理解白板当前状态。渐进式披露 —— 先 depth 0 看概览，再按需取更深层级。',
       inputSchema: {
         depth: z
           .number()
@@ -106,17 +108,21 @@ export async function runMcpServer(
           .min(0)
           .max(2)
           .optional()
-          .describe('渐进式披露层级：0 概览 / 1 含元素列表 / 2 含正文'),
+          .describe('渐进式披露层级：0 概览 / 1 含元素列表 / 2 含元素正文'),
+        region: z
+          .string()
+          .optional()
+          .describe('只看某个区域时传其名称；省略 = 全板'),
       },
     },
     async (a) =>
       runCmd(
         'board_read_context',
         cmdShow,
-        mkArgs(
-          [boardPath],
-          { depth: a.depth !== undefined ? String(a.depth) : undefined },
-        ),
+        mkArgs([boardPath], {
+          depth: a.depth !== undefined ? String(a.depth) : undefined,
+          region: a.region,
+        }),
       ),
   );
 
@@ -237,6 +243,43 @@ export async function runMcpServer(
         mkArgs(['finish', a.taskId], { summary: a.summary, port }),
       );
     },
+  );
+
+  // ── 写：创建建议（建议机制，PRD §7.3）────────────────────────
+  server.registerTool(
+    'board_create_suggestion',
+    {
+      description:
+        '对某个元素创建一条建议（PRD §7.3）。Agent 要改不属于自己的内容时，' +
+        '不直接改原件，而是在旁边产生一条「建议」，由人决定同意 / 拒绝 / 描述。' +
+        'replace = 提议替换目标内容，add = 提议新增一个元素。',
+      inputSchema: {
+        targetId: z.string().describe('被建议的目标元素 id'),
+        markdown: z.string().describe('提议的文本内容（Markdown）'),
+        suggestionType: z
+          .enum(['replace', 'add'])
+          .optional()
+          .describe('replace 替换目标 / add 新增元素，默认 replace'),
+        agent: z
+          .string()
+          .optional()
+          .describe('发起建议的 Agent id（写入 authorId）'),
+      },
+    },
+    async (a) =>
+      runCmd(
+        'board_create_suggestion',
+        cmdSuggest,
+        mkArgs(
+          [boardPath, a.targetId],
+          {
+            type: a.suggestionType ?? 'replace',
+            as: `text:${a.markdown}`,
+            actor: a.agent,
+          },
+        ),
+        port,
+      ),
   );
 
   const transport = new StdioServerTransport();

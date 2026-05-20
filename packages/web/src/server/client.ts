@@ -195,3 +195,42 @@ export async function dismissTask(taskId: string): Promise<void> {
   });
   await readEnvelope<{ removed: string }>(res, `DELETE /api/tasks/${taskId}`);
 }
+
+/**
+ * 处理一条建议（建议机制，PRD §7.3）—— POST /api/suggestions/<op>。
+ * server 落盘后经 SSE 广播 board-changed，各端据此刷新。
+ *
+ * @throws ServerError —— 服务不可达 / HTTP 错误。
+ */
+async function postSuggestionOp(
+  op: 'accept' | 'reject' | 'describe',
+  body: Record<string, unknown>,
+): Promise<void> {
+  const res = await fetchWithTimeout(`/suggestions/${op}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  await readEnvelope<{ suggestionId: string }>(
+    res,
+    `POST /api/suggestions/${op}`,
+  );
+}
+
+/** 同意建议 —— 用建议内容替换 / 新增到白板，移除建议元素。 */
+export async function acceptSuggestion(suggestionId: string): Promise<void> {
+  await postSuggestionOp('accept', { suggestionId });
+}
+
+/** 拒绝建议 —— 删除建议元素，原件不变。 */
+export async function rejectSuggestion(suggestionId: string): Promise<void> {
+  await postSuggestionOp('reject', { suggestionId });
+}
+
+/** 描述建议 —— 向建议追加一条反馈，建议元素保留。 */
+export async function describeSuggestion(
+  suggestionId: string,
+  text: string,
+): Promise<void> {
+  await postSuggestionOp('describe', { suggestionId, text });
+}

@@ -29,6 +29,7 @@ import { cmdAdd } from './commands/add.js';
 import { cmdRegion } from './commands/region.js';
 import { cmdMv } from './commands/mv.js';
 import { cmdTask } from './commands/task.js';
+import { cmdSuggest } from './commands/suggest.js';
 import { runMcpServer } from './commands/mcp.js';
 
 /** 命令处理函数签名。 */
@@ -45,6 +46,7 @@ const HANDLERS: Record<string, Handler> = {
   region: cmdRegion,
   mv: cmdMv,
   task: cmdTask,
+  suggest: cmdSuggest,
 };
 
 /** 已登记但尚未实现的命令（规格 §2，逐里程碑补全）。 */
@@ -55,7 +57,6 @@ const PLACEHOLDER_COMMANDS = [
   'connect',
   'rm',
   'search',
-  'suggest',
   'comment',
   'agent',
   'watch',
@@ -89,7 +90,6 @@ function printHelp(): void {
   console.log('  info <路径>                       查看白板元信息与统计');
   console.log('  ls                                列出当前目录及一层子目录的白板');
   console.log('  tree <路径>                       打印 files/ 文件树');
-  console.log('  show <路径> [--json]              输出基础白板上下文');
   console.log('  add text <路径> "<markdown>"      添加文本卡片元素');
   console.log('');
   console.log('已实现命令 (M2):');
@@ -99,12 +99,16 @@ function printHelp(): void {
   console.log('  add folder <路径> <本地目录> [--region <区域名>]   复制目录入板');
   console.log('  mv <路径> <源相对路径> <目标相对路径>             移动 files/ 内的文件');
   console.log('');
+  console.log('已实现命令 (M3):');
+  console.log('  show <路径> [--depth 0|1|2] [--region <名>]    导出白板上下文（渐进式披露）');
+  console.log('  suggest <路径> <元素id> --type <replace|add> --as text:"<md>"   创建建议');
+  console.log('  add text <路径> "<markdown>" --draft          添加 draft 态文本卡');
+  console.log('  mcp <路径> [--port <n>]                       启动 MCP Server (stdio)');
+  console.log('');
   console.log('已实现命令 (M3，需 board-server 在运行):');
   console.log('  task start --title "<做什么>" [--region <名>] [--agent <id>]   新建 Agent 任务');
   console.log('  task progress <taskId> --step "<步骤>" [--percent <n>]         上报任务进度');
   console.log('  task finish <taskId> [--summary "<结果说明>"]                  完成任务');
-  console.log('  add text <路径> "<markdown>" --draft                          添加 draft 态文本卡');
-  console.log('  mcp <路径> [--port <n>]                                       启动 MCP Server (stdio)');
   console.log('');
   console.log('占位命令 (尚未实现):');
   console.log('  ' + PLACEHOLDER_COMMANDS.join(', '));

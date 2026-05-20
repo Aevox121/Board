@@ -821,3 +821,194 @@
   transition: opacity 600ms ease;
   pointer-events: none;
 }
+
+/* ── 建议机制（PRD §7.3）────────────────────────────────────────
+ * 建议卡承载 Agent 的提议（不改原件）；虚线陶土橙边框 + 浅底，读作
+ * 「一条提议」，与正式内容卡（实线）区分。带同意/拒绝/描述三操作。 */
+.ov-slot--suggestion {
+  /* 非可拖拽 —— 卡片自身（.ov-card）已开 pointer-events:auto */
+  z-index: 5;
+}
+
+.ov-suggestion {
+  display: flex;
+  flex-direction: column;
+  background: var(--c-accent-tint);
+  border: 1.5px dashed var(--c-accent);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md, 0 6px 18px rgba(60, 40, 30, 0.2));
+  overflow: hidden;
+}
+
+.ov-suggestion__bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  background: var(--c-surface);
+  border-bottom: 1px solid var(--c-accent);
+}
+
+.ov-suggestion__tag {
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--c-accent);
+}
+
+.ov-suggestion__type {
+  padding: 1px var(--space-2);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  color: var(--c-on-accent);
+  background: var(--c-accent);
+  border-radius: var(--radius-pill);
+}
+
+.ov-suggestion__author {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--c-ink-2);
+}
+
+.ov-suggestion__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-2) var(--space-3);
+  background: var(--c-surface);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--c-ink);
+}
+
+.ov-suggestion__empty {
+  font-style: italic;
+  color: var(--c-ink-2);
+}
+
+/* 「建议 ↔ 反馈」对话条目。 */
+.ov-suggestion__thread {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) 0 0;
+  border-top: 1px dashed var(--c-border);
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.ov-suggestion__msg {
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  color: var(--c-ink-2);
+}
+
+.ov-suggestion__msg-by {
+  margin-right: var(--space-1);
+  font-family: var(--font-mono);
+  color: var(--c-accent);
+}
+
+/* 操作区 —— 同意 / 拒绝 / 描述。 */
+.ov-suggestion__actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--c-surface);
+  border-top: 1px solid var(--c-border);
+}
+
+.ov-suggestion__btn {
+  flex: 1 1 auto;
+  padding: var(--space-1) var(--space-2);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  color: var(--c-ink);
+  cursor: pointer;
+}
+
+.ov-suggestion__btn:hover:not(:disabled) {
+  background: var(--c-surface-sunken);
+}
+
+.ov-suggestion__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 同意 —— 主操作，陶土橙实心。 */
+.ov-suggestion__btn--accept,
+.ov-suggestion__btn--primary {
+  background: var(--c-accent);
+  border-color: var(--c-accent);
+  color: var(--c-on-accent);
+  font-weight: 600;
+}
+
+.ov-suggestion__btn--accept:hover:not(:disabled),
+.ov-suggestion__btn--primary:hover:not(:disabled) {
+  background: var(--c-accent-strong, var(--c-accent));
+}
+
+/* 拒绝 —— 警示色描边。 */
+.ov-suggestion__btn--reject {
+  border-color: var(--c-warning);
+  color: var(--c-warning);
+}
+
+/* 描述输入区。 */
+.ov-suggestion__describe {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--c-surface);
+  border-top: 1px solid var(--c-border);
+}
+
+.ov-suggestion__input {
+  width: 100%;
+  min-height: 48px;
+  box-sizing: border-box;
+  padding: var(--space-1) var(--space-2);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  color: var(--c-ink);
+  resize: none;
+}
+
+.ov-suggestion__input:focus {
+  outline: none;
+  border-color: var(--c-accent);
+}
+
+/* ── 建议 → 目标的连线 ──────────────────────────────────────────
+ * SVG 嵌在 .ov-transform 内，随画布缩放/平移。0×0 + overflow:visible
+ * 让线在 viewBox 外仍绘制。置于卡片之下，只露出卡片之间的连接段。 */
+.ov-links {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.ov-link-line {
+  stroke: var(--c-accent);
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+  opacity: 0.7;
+}

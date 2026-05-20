@@ -14,6 +14,9 @@
  *  - POST /api/tasks/finish     → 完成任务，draft 元素转 committed
  *  - DELETE /api/tasks/<id>     → 移除任务（× 关闭 / 完成态超时清理）
  *  - POST /api/refresh          → 外部写入后主动触发 board-changed 广播（M3）
+ *  - POST /api/suggestions/accept  → 同意建议（M3：建议机制，PRD §7.3）
+ *  - POST /api/suggestions/reject  → 拒绝建议
+ *  - POST /api/suggestions/describe → 向建议追加反馈
  *  - GET  /api/events           → SSE，board 变化时推送 board-changed（M2）
  */
 import { createReadStream } from 'node:fs';
@@ -21,17 +24,21 @@ import { mkdir, rename, stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { dirname, resolve, sep } from 'node:path';
 import {
+  acceptSuggestion,
   clampPercent,
   commitDraftElements,
   createTask,
+  describeSuggestion,
   growRegions,
   guessMime,
   normalizePath,
   regionForFile,
   regionsOf,
+  rejectSuggestion,
   SCHEMA_VERSION,
   type BoardScene,
   type BoardTask,
+  type SuggestionResult,
 } from '@board/core';
 import { loadBoard, saveBoard } from '@board/core/node';
 import type { SseHub } from './sse.js';
@@ -111,7 +118,7 @@ function handleHealth(deps: HttpDeps, res: ServerResponse): void {
   ok(res, {
     service: 'board-server',
     status: 'ok',
-    milestone: 'M2',
+    milestone: 'M3',
     schemaVersion: SCHEMA_VERSION,
     dir: deps.dir,
     files: deps.getFiles().length,
@@ -597,6 +604,83 @@ function handleRefresh(deps: HttpDeps, res: ServerResponse): void {
   ok(res, { refreshed: true });
 }
 
+/**
+ * POST /api/suggestions/<op> —— 处理一条建议（M3：建议机制，PRD §7.3）。
+ *
+ * `op` ∈ {accept, reject, describe}，请求体 `{ suggestionId, actor?, text? }`：
+ *  - accept   —— 同意：replace 替换目标内容 / add 新增元素，移除建议元素。
+ *  - reject   —— 拒绝：删除建议元素，原件不变。
+ *  - describe —— 描述：向建议追加一条反馈（需 `text`），建议元素保留。
+ *
+ * 三种操作都是「人对建议的决策」，default actor 取本地人类用户 `u_local`。
+ * 操作后落盘 board.json 并广播 board-changed，Web 端据 SSE 刷新。
+ */
+async function handleSuggestionOp(
+  deps: HttpDeps,
+  req: IncomingMessage,
+  res: ServerResponse,
+  op: 'accept' | 'reject' | 'describe',
+): Promise<void> {
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch (err) {
+    fail(res, 400, errMsg(err));
+    return;
+  }
+  if (typeof body !== 'object' || body === null) {
+    fail(res, 400, '请求体必须为 JSON 对象');
+    return;
+  }
+  const rec = body as Record<string, unknown>;
+  const suggestionId =
+    typeof rec['suggestionId'] === 'string' ? rec['suggestionId'] : '';
+  if (!suggestionId) {
+    fail(res, 400, '缺少 suggestionId');
+    return;
+  }
+  const actor =
+    typeof rec['actor'] === 'string' && rec['actor'] ? rec['actor'] : 'u_local';
+
+  let handle;
+  try {
+    handle = await loadBoard(deps.dir);
+  } catch (err) {
+    fail(res, 404, `读取白板失败: ${errMsg(err)}`);
+    return;
+  }
+
+  let result: SuggestionResult;
+  if (op === 'accept') {
+    result = acceptSuggestion(handle.scene, suggestionId, actor);
+  } else if (op === 'reject') {
+    result = rejectSuggestion(handle.scene, suggestionId);
+  } else {
+    const text = typeof rec['text'] === 'string' ? rec['text'].trim() : '';
+    if (!text) {
+      fail(res, 400, '描述内容 text 不能为空');
+      return;
+    }
+    result = describeSuggestion(handle.scene, suggestionId, text, actor, 'human');
+  }
+
+  if (result.error) {
+    // 目标元素已不存在视为冲突（409），建议本身找不到视为未找到（404）。
+    fail(res, result.error.includes('目标元素已不存在') ? 409 : 404, result.error);
+    return;
+  }
+  if (result.changed) {
+    try {
+      await saveBoard(deps.dir, handle.meta, result.scene);
+    } catch (err) {
+      fail(res, 500, `保存白板失败: ${errMsg(err)}`);
+      return;
+    }
+  }
+  deps.sse.broadcast({ type: 'board-changed' });
+  ok(res, { suggestionId, op });
+}
+
 /** GET /api/events —— SSE 长连接，board 变化时推送 board-changed。 */
 function handleEvents(deps: HttpDeps, req: IncomingMessage, res: ServerResponse): void {
   deps.sse.handle(req, res);
@@ -694,6 +778,19 @@ async function route(
   // POST /api/refresh —— 外部写入后主动触发 board-changed 广播
   if (path === '/api/refresh' && method === 'POST') {
     handleRefresh(deps, res);
+    return;
+  }
+  // POST /api/suggestions/<op> —— 建议机制三操作（M3，PRD §7.3）
+  if (path === '/api/suggestions/accept' && method === 'POST') {
+    await handleSuggestionOp(deps, req, res, 'accept');
+    return;
+  }
+  if (path === '/api/suggestions/reject' && method === 'POST') {
+    await handleSuggestionOp(deps, req, res, 'reject');
+    return;
+  }
+  if (path === '/api/suggestions/describe' && method === 'POST') {
+    await handleSuggestionOp(deps, req, res, 'describe');
     return;
   }
   // GET /api/files/<相对路径> —— 注意用未折叠斜杠的原始 pathname 取子路径

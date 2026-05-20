@@ -9,6 +9,7 @@ import {
   type BoardSettings,
   type Participant,
   type Element,
+  type ElementId,
   type BaseElement,
   type ElementType,
   type ElementState,
@@ -19,6 +20,9 @@ import {
   type ShapeElement,
   type ShapeKind,
   type FileDisplayMode,
+  type SuggestionElement,
+  type SuggestionType,
+  type SuggestionStatus,
   type ParticipantId,
 } from './types.js';
 import { newBoardId, newElementId } from './ids.js';
@@ -187,5 +191,32 @@ export function createShapeElement(
     type: 'shape',
     shape: init.shape,
     label: init.label ? { text: init.label } : null,
+  };
+}
+
+/**
+ * 创建建议元素（PRD §7.3）—— 不改原件，旁边承载 Agent 的提议。
+ *
+ * `payload` 是提议的元素对象（可为任意类型）；同意 `replace` 时其内容替换
+ * 目标元素，同意 `add` 时它作为新元素加入场景。建议的处理逻辑见 suggestion.ts。
+ */
+export function createSuggestionElement(
+  init: BaseElementInit & {
+    targetId: ElementId;
+    suggestionType: SuggestionType;
+    payload: Element;
+    authorId: ParticipantId;
+    status?: SuggestionStatus;
+  },
+): SuggestionElement {
+  return {
+    ...baseElement('suggestion', init),
+    type: 'suggestion',
+    targetId: init.targetId,
+    suggestionType: init.suggestionType,
+    payload: init.payload,
+    status: init.status ?? 'pending',
+    authorId: init.authorId,
+    thread: [],
   };
 }
