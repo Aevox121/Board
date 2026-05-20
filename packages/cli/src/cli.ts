@@ -29,6 +29,7 @@ import { cmdAdd } from './commands/add.js';
 import { cmdRegion } from './commands/region.js';
 import { cmdMv } from './commands/mv.js';
 import { cmdTask } from './commands/task.js';
+import { runMcpServer } from './commands/mcp.js';
 
 /** 命令处理函数签名。 */
 type Handler = (args: ParsedArgs) => Promise<CmdResult>;
@@ -103,6 +104,7 @@ function printHelp(): void {
   console.log('  task progress <taskId> --step "<步骤>" [--percent <n>]         上报任务进度');
   console.log('  task finish <taskId> [--summary "<结果说明>"]                  完成任务');
   console.log('  add text <路径> "<markdown>" --draft                          添加 draft 态文本卡');
+  console.log('  mcp <路径> [--port <n>]                                       启动 MCP Server (stdio)');
   console.log('');
   console.log('占位命令 (尚未实现):');
   console.log('  ' + PLACEHOLDER_COMMANDS.join(', '));
@@ -123,6 +125,19 @@ async function main(argv: string[]): Promise<number> {
 
   if (args.flags.has('help')) {
     printHelp();
+    return EXIT.OK;
+  }
+
+  // mcp —— 长驻 stdio MCP Server，不走「命令返回 CmdResult」的常规分发。
+  if (cmd === 'mcp') {
+    const boardPath = args.positionals[0];
+    if (boardPath === undefined) {
+      emitError('用法: board mcp <白板路径> [--port <n>]', json);
+      return EXIT.USAGE;
+    }
+    const port =
+      args.options.get('port') ?? process.env['BOARD_PORT'] ?? '4500';
+    await runMcpServer(boardPath, port);
     return EXIT.OK;
   }
 

@@ -12,7 +12,9 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@board/core": "workspace:*"
+    "@board/core": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

@@ -13,6 +13,7 @@
  *  - POST /api/tasks/progress   → 上报任务进度
  *  - POST /api/tasks/finish     → 完成任务，draft 元素转 committed
  *  - DELETE /api/tasks/<id>     → 移除任务（× 关闭 / 完成态超时清理）
+ *  - POST /api/refresh          → 外部写入后主动触发 board-changed 广播（M3）
  *  - GET  /api/events           → SSE，board 变化时推送 board-changed（M2）
  */
 import { createReadStream } from 'node:fs';
@@ -585,6 +586,17 @@ async function handleDeleteTask(
   ok(res, { removed: id });
 }
 
+/**
+ * POST /api/refresh —— 主动触发一次 board-changed 广播。
+ *
+ * 供「绕过 server 直接改 .board 的外部写入方」（如 CLI / MCP Server 的内容操作）
+ * 在写入 board.json 后调用，使 Web 端经 SSE 实时刷新。
+ */
+function handleRefresh(deps: HttpDeps, res: ServerResponse): void {
+  deps.sse.broadcast({ type: 'board-changed' });
+  ok(res, { refreshed: true });
+}
+
 /** GET /api/events —— SSE 长连接，board 变化时推送 board-changed。 */
 function handleEvents(deps: HttpDeps, req: IncomingMessage, res: ServerResponse): void {
   deps.sse.handle(req, res);
@@ -677,6 +689,11 @@ async function route(
   // DELETE /api/tasks/<id> —— 移除任务（× 关闭 / 超时清理）
   if (path.startsWith('/api/tasks/') && method === 'DELETE') {
     await handleDeleteTask(deps, res, path.slice('/api/tasks/'.length));
+    return;
+  }
+  // POST /api/refresh —— 外部写入后主动触发 board-changed 广播
+  if (path === '/api/refresh' && method === 'POST') {
+    handleRefresh(deps, res);
     return;
   }
   // GET /api/files/<相对路径> —— 注意用未折叠斜杠的原始 pathname 取子路径
