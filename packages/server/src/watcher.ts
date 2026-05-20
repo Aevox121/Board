@@ -1,15 +1,15 @@
 /**
  * 文件监听 — chokidar 监听 `<dir>/files/` 下的真实文件变化。
  *
- * M1 范围：仅监听 + 维护内存中的文件列表，并在变化时打印日志。
- * 完整的文件系统 ⇄ 画布双向同步（自动排版、元素增删、缺失态）属于 M2。
+ * M2 范围：监听 + 维护内存中的文件列表，文件 add/change/unlink 时回调上层，
+ * 上层据此触发 reconcile（文件系统 ⇄ 画布同步）。
  */
 import { join, relative, sep } from 'node:path';
 import chokidar, { type FSWatcher } from 'chokidar';
 import { isIgnoredPath, normalizePath } from '@board/core';
 
-/** 文件变更类型。 */
-export type FileChangeType = 'add' | 'unlink';
+/** 文件变更类型——新增 / 内容变更 / 删除。 */
+export type FileChangeType = 'add' | 'change' | 'unlink';
 
 /** 一条文件变更事件。 */
 export interface FileChangeEvent {
@@ -48,22 +48,34 @@ export function startWatcher(
     return normalizePath(relative(filesRoot, absPath).split(sep).join('/'));
   }
 
-  /** 处理一次文件增删，更新内存列表并打印 + 回调。 */
+  /** 各变更类型的中文标签，用于日志。 */
+  const LABEL: Record<FileChangeType, string> = {
+    add: '新增',
+    change: '变更',
+    unlink: '删除',
+  };
+
+  /** 处理一次文件增删改，更新内存列表并打印 + 回调。 */
   function handle(type: FileChangeType, absPath: string): void {
     const rel = toRelPath(absPath);
     // 剔除规格 R7 的忽略项（.runtime/、隐藏文件、README.md 等）
     if (!rel || isIgnoredPath(rel)) return;
 
     if (type === 'add') {
-      if (files.has(rel)) return; // 已存在则忽略，避免重复日志
+      // 新增：已存在则视为无效重复，直接忽略
+      if (files.has(rel)) return;
       files.add(rel);
-    } else {
+    } else if (type === 'unlink') {
+      // 删除：不在列表里则忽略
       if (!files.has(rel)) return;
       files.delete(rel);
+    } else {
+      // change：内容变更不改变文件列表，但仍需回调让上层 reconcile
+      files.add(rel); // 兜底——理论上 change 前必有 add
     }
 
     const snapshot = [...files].sort();
-    console.log(`[board-server] 文件${type === 'add' ? '新增' : '删除'}: ${rel}`);
+    console.log(`[board-server] 文件${LABEL[type]}: ${rel}`);
     onChange?.({ type, path: rel }, snapshot);
   }
 
@@ -74,6 +86,7 @@ export function startWatcher(
   });
 
   watcher.on('add', (p) => handle('add', p));
+  watcher.on('change', (p) => handle('change', p));
   watcher.on('unlink', (p) => handle('unlink', p));
   watcher.on('error', (err) => {
     // 监听层出错不应让进程崩溃，打印即可

@@ -10,3 +10,5 @@ export * from './layout.js';
 export * from './fs-mapping.js';
 export * from './factory.js';
 export * from './serialize.js';
+export * from './mime.js';
+export * from './reconcile.js';

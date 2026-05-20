@@ -1,0 +1,281 @@
+/**
+ * DOM 覆盖层样式 —— 内容元素卡片（设计系统 §5「手绘质感」/ §7.4-7.5）。
+ *
+ * 卡片是「画在白板上的内容」→ 手绘质感（暖色表面、轻微旋转、柔和阴影）。
+ * 注：本期边框用规整 CSS border（roughjs 路径描边留待后续接入画布渲染层）；
+ * 配色一律取自 tokens.css 变量，不写死色值。
+ */
+
+/* ── 覆盖层骨架 ──────────────────────────────────────────────
+ * 外层铺满画布容器，pointer-events:none → 空白处事件穿透到 Excalidraw。
+ * overflow:hidden 裁掉视口外的卡片。 */
+.ov-root {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  /* 压在 Excalidraw 画布之上，但低于 Excalidraw 自身的浮层 UI */
+  z-index: 1;
+}
+
+/* 变换容器 —— 复刻 Excalidraw 视口变换（translate+scale，见 OverlayLayer.tsx）。 */
+.ov-transform {
+  position: absolute;
+  top: 0;
+  left: 0;
+  /* transform / transform-origin 由组件内联设置 */
+  will-change: transform;
+}
+
+/* 单个元素的定位槽 —— 按画布坐标绝对定位。 */
+.ov-slot {
+  position: absolute;
+}
+
+/* ── 内容卡片通用 ───────────────────────────────────────────
+ * pointer-events:auto → 卡片本身可交互（空白处仍穿透）。 */
+.ov-card {
+  pointer-events: auto;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  /* 微旋转的旋转中心取卡片中心，旋转量由组件内联 transform 给出 */
+  transform-origin: 50% 50%;
+  font-family: var(--font-ui);
+  color: var(--c-ink);
+}
+
+/* ── 文件卡片（手绘质感）────────────────────────────────────── */
+.ov-file {
+  display: flex;
+  flex-direction: column;
+  background: var(--c-surface);
+  border: 1.5px solid var(--c-ink);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.ov-file__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  min-height: 0;
+}
+
+.ov-file__glyph {
+  flex: 0 0 auto;
+  font-size: var(--text-md);
+  line-height: 1;
+}
+
+.ov-file__glyph--lg {
+  font-size: var(--text-xl);
+}
+
+/* 文件名 —— 手写体（设计系统 §7.4：文件名用 --font-hand）。 */
+.ov-file__name {
+  flex: 1 1 auto;
+  font-family: var(--font-hand);
+  font-size: var(--text-md);
+  line-height: 1.25;
+  color: var(--c-ink);
+  /* 单行省略，避免长文件名撑破卡片 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 元信息行 —— UI 字体、次要灰（设计系统 §7.4）。 */
+.ov-file__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-3) var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--c-ink-2);
+}
+
+/* 大文件「索引卡片」角标 —— 暗金提醒色。 */
+.ov-file__badge {
+  margin-left: auto;
+  padding: 1px var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--c-on-accent);
+  background: var(--c-warning);
+  border-radius: var(--radius-pill);
+}
+
+/* 大文件索引卡片：内容少，让头部 + 元信息上下留白居中。 */
+.ov-file--index {
+  justify-content: center;
+}
+
+/* 卡片态：图标 + 文件名 + 元信息，纵向居中。 */
+.ov-file--card {
+  justify-content: center;
+}
+
+/* ── 文件卡片 · 图片预览态 ──────────────────────────────────── */
+.ov-file--image .ov-file__image-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--c-surface-sunken);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.ov-file__image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.ov-file__caption {
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-3);
+  border-top: 1px solid var(--c-border);
+}
+
+/* ── 文件卡片 · Markdown 预览态 ─────────────────────────────── */
+.ov-file--md .ov-file__head {
+  border-bottom: 1px solid var(--c-border);
+}
+
+.ov-file__md-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--c-ink);
+}
+
+/* Markdown 渲染内容的基础排版 —— 克制，贴合卡片尺度。 */
+.ov-file__md-body h1,
+.ov-file__md-body h2,
+.ov-file__md-body h3 {
+  margin: var(--space-2) 0 var(--space-1);
+  font-size: var(--text-base);
+  line-height: 1.25;
+}
+
+.ov-file__md-body p,
+.ov-file__md-body ul,
+.ov-file__md-body ol {
+  margin: var(--space-1) 0;
+}
+
+.ov-file__md-body a {
+  color: var(--c-accent);
+}
+
+.ov-file__md-body code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  background: var(--c-surface-sunken);
+  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+}
+
+.ov-file__md-body pre {
+  background: var(--c-surface-sunken);
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  overflow: auto;
+}
+
+.ov-file__md-body pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.ov-file__md-body img {
+  max-width: 100%;
+}
+
+/* ── 文件夹卡片（收起态，手绘质感）──────────────────────────── */
+.ov-folder {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--c-surface);
+  border: 1.5px solid var(--c-ink);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+}
+
+.ov-folder__glyph {
+  flex: 0 0 auto;
+  font-size: var(--text-xl);
+  line-height: 1;
+}
+
+.ov-folder__name {
+  flex: 1 1 auto;
+  font-family: var(--font-hand);
+  font-size: var(--text-md);
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── 区域卡片（手绘质感，陶土橙浅底）──────────────────────────
+ * 设计系统 §7.5：roughjs 边框 + --c-accent-tint 浅底 + 头部条。 */
+.ov-region {
+  display: flex;
+  flex-direction: column;
+  /* 浅底 + 半透明，让叠在其上的文件卡仍可读 */
+  background: var(--c-accent-tint);
+  border: 1.5px solid var(--c-accent);
+  border-radius: var(--radius-md);
+  /* 区域是「圈地」容器，事件应穿透到画布（仅头部需要可交互时再开） */
+  pointer-events: none;
+}
+
+.ov-region__head {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-2) var(--space-3);
+  background: var(--c-surface);
+  border-bottom: 1.5px solid var(--c-accent);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  /* 头部需可交互（hover/标题），单独开启 */
+  pointer-events: auto;
+}
+
+/* 区域名 —— 手写体（设计系统 §7.5：区域名 --font-hand 20px）。 */
+.ov-region__label {
+  font-family: var(--font-hand);
+  font-size: var(--text-lg);
+  line-height: 1.25;
+  color: var(--c-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 区域描述 —— 次要灰。 */
+.ov-region__desc {
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--c-ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ov-region__body {
+  flex: 1 1 auto;
+  min-height: 0;
+}

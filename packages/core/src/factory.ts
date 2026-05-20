@@ -15,6 +15,7 @@ import {
   type TextElement,
   type RegionElement,
   type FileElement,
+  type FolderElement,
   type ShapeElement,
   type ShapeKind,
   type FileDisplayMode,
@@ -161,6 +162,19 @@ export function createFileElement(
     displayMode: init.displayMode ?? 'card',
     previewable: true,
     version: 1,
+  };
+}
+
+/** 创建文件夹元素。 */
+export function createFolderElement(
+  init: BaseElementInit & { path: string; expanded?: boolean },
+): FolderElement {
+  return {
+    ...baseElement('folder', init),
+    type: 'folder',
+    path: init.path,
+    expanded: init.expanded ?? false,
+    viewMode: 'list',
   };
 }
 

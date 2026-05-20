@@ -3,6 +3,7 @@
  *
  * 命令清单与参数见 specs/CLI与MCP规格.md §2。
  * M1 已实现：new / info / ls / tree / show / add text。
+ * M2 已实现：region create / region ls / add file / add folder。
  * 其余命令保留为「尚未实现」占位，逐里程碑补全。
  *
  * 退出码（规格 §1.4）：0 成功 / 1 一般错误 / 2 参数错误
@@ -25,6 +26,7 @@ import { cmdLs } from './commands/ls.js';
 import { cmdTree } from './commands/tree.js';
 import { cmdShow } from './commands/show.js';
 import { cmdAdd } from './commands/add.js';
+import { cmdRegion } from './commands/region.js';
 
 /** 命令处理函数签名。 */
 type Handler = (args: ParsedArgs) => Promise<CmdResult>;
@@ -37,13 +39,13 @@ const HANDLERS: Record<string, Handler> = {
   tree: cmdTree,
   show: cmdShow,
   add: cmdAdd,
+  region: cmdRegion,
 };
 
 /** 已登记但尚未实现的命令（规格 §2，逐里程碑补全）。 */
 const PLACEHOLDER_COMMANDS = [
   'open',
   'serve',
-  'region',
   'shape',
   'connect',
   'rm',
@@ -86,6 +88,12 @@ function printHelp(): void {
   console.log('  tree <路径>                       打印 files/ 文件树');
   console.log('  show <路径> [--json]              输出基础白板上下文');
   console.log('  add text <路径> "<markdown>"      添加文本卡片元素');
+  console.log('');
+  console.log('已实现命令 (M2):');
+  console.log('  region create <路径> <区域名> [--desc "<描述>"]   创建区域（建文件夹）');
+  console.log('  region ls <路径>                                 列出所有区域');
+  console.log('  add file <路径> <本地文件> [--region <区域名>]     复制文件入板');
+  console.log('  add folder <路径> <本地目录> [--region <区域名>]   复制目录入板');
   console.log('');
   console.log('占位命令 (尚未实现):');
   console.log('  ' + PLACEHOLDER_COMMANDS.join(', '));

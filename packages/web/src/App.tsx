@@ -1,7 +1,7 @@
 /**
- * 应用根组件 —— Board Web M1「可运行的单人白板 + server 对接」。
+ * 应用根组件 —— Board Web「可运行的单人白板 + server 对接」。
  *
- * 结构：顶栏（应用外壳，干净暖色）+ 画布区（Excalidraw 铺满）。
+ * 结构：顶栏（应用外壳，干净暖色）+ 画布区（Excalidraw + DOM 覆盖层）。
  * 状态：BoardProvider 持有一份 @board/core 的 BoardScene 作为真相源。
  *
  * 启动流程（web ⇄ server 对接）：
@@ -9,8 +9,12 @@
  *  - server 可达 → 载入其持有的真实 .board，进入「已连接」模式，「保存」可用。
  *  - server 不可达 → 「离线」模式，保留空白板 + 导入/导出兜底。
  *
+ * M2 实时刷新：
+ *  - 进入「已连接」模式后，用 EventSource 订阅 server 的 `/api/events` SSE。
+ *  - 收到 `{"type":"board-changed"}` → 重新 fetchBoard() 刷新场景（含覆盖层）。
+ *  - server 不可达 / 端点未实现时 SSE 静默失败，不影响离线模式。
+ *
  * 后续里程碑在此基础上叠加：
- *  - M2：DOM 覆盖层渲染文件/文件夹/区域元素（PRD §11 内容元素层）
  *  - M3：Agent 在场、Pencil 式过程可视化
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -20,6 +24,7 @@ import { BoardCanvas } from './components/BoardCanvas';
 import { downloadBoardJSON, pickAndParseBoardJSON } from './board/boardFile';
 import { BoardParseError } from '@board/core';
 import { checkHealth, fetchBoard, putScene, ServerError } from './server/client';
+import { subscribeBoardEvents } from './server/events';
 import './App.css';
 
 /** 外壳布局 —— 顶栏 + 画布区，纵向铺满视口。 */
@@ -33,6 +38,10 @@ function BoardApp(): JSX.Element {
   const [probing, setProbing] = useState(true);
   // 防止 React 18 StrictMode 下 effect 跑两遍而重复探测/重复载入。
   const probedRef = useRef(false);
+
+  // 用 ref 持有最新的 loadFromServer，供 SSE 回调闭包稳定引用。
+  const loadFromServerRef = useRef(loadFromServer);
+  loadFromServerRef.current = loadFromServer;
 
   // ── 启动时探测 board-server ───────────────────────────────
   useEffect(() => {
@@ -63,6 +72,27 @@ function BoardApp(): JSX.Element {
       cancelled = true;
     };
   }, [loadFromServer]);
+
+  // ── 已连接模式下订阅 SSE，server 变化时刷新白板 ───────────────
+  useEffect(() => {
+    if (connection !== 'connected') return;
+
+    // 收到 board-changed → 重新拉取白板并替换内存场景。
+    // 重新拉取失败（server 临时不可达）不报错 —— 保留当前场景，等下次事件。
+    const handleBoardChanged = (): void => {
+      void (async () => {
+        try {
+          const data = await fetchBoard();
+          loadFromServerRef.current(data.meta, data.scene, data.files);
+        } catch (err) {
+          console.info('[board-web] 收到变更事件但刷新白板失败，保留当前场景：', err);
+        }
+      })();
+    };
+
+    const unsubscribe = subscribeBoardEvents(handleBoardChanged);
+    return unsubscribe;
+  }, [connection]);
 
   const handleExport = useCallback(() => {
     // 文件名取白板名，非法字符替换为 `-`。

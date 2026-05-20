@@ -1,25 +1,34 @@
 /**
- * Board 本地服务 — M1 装配入口
+ * Board 本地服务 — M2 装配入口
  *
- * 职责（见 PRD §4 / specs/CLI与MCP规格.md §3）：
- *  - 拥有 .board 文件夹，chokidar 监听 files/ 变化（M1：监听 + 暴露文件列表）
+ * 职责（见 PRD §4 / specs/数据模型规格.md §5.7 / §9）：
+ *  - 拥有 .board 文件夹，chokidar 监听 files/ 变化
+ *  - 文件 add/change/unlink 时执行 reconcile：files/ → 画布 file 元素
  *  - HTTP API（统一信封 { ok, data, error }）：
  *      GET  /api/health  · GET /api/board  · PUT /api/board
+ *      GET  /api/files/<相对路径>  · GET /api/events (SSE)
  *
  * 安全：仅监听 127.0.0.1（PRD §12）。
  *
  * 后续里程碑：
- *  - M2：文件系统 ⇄ 画布双向同步（自动排版、元素增删、缺失态）
  *  - M3：内嵌 MCP Server（与 CLI 等价的工具集）
  *  - M4：Yjs 协同文档 + 中继服务器对接
  */
 import { resolve } from 'node:path';
 import { listBoardFiles, loadBoard } from '@board/core/node';
 import { createHttpServer, HOST, type HttpDeps } from './http.js';
+import { runReconcile } from './reconcile.js';
+import { createSseHub } from './sse.js';
 import { startWatcher, type BoardWatcher } from './watcher.js';
 
 /** 默认监听端口，可用 BOARD_PORT 覆盖。 */
 const PORT = Number(process.env.BOARD_PORT ?? 4500);
+
+/** 文件系统变更触发 reconcile 的固定操作者身份（系统）。 */
+const SYSTEM_ACTOR = 'u_system';
+
+/** reconcile 防抖窗口（毫秒）——批量文件变更只触发一次 reconcile。 */
+const RECONCILE_DEBOUNCE_MS = 200;
 
 /** 打印用法并以非零码退出。 */
 function printUsageAndExit(): never {
@@ -68,6 +77,41 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // SSE 广播器：board 变化时向所有连接推送
+  const sse = createSseHub();
+
+  /**
+   * 执行一次 reconcile：files/ → 画布。
+   * changed 时广播 board-changed 事件。失败仅打印，不让进程崩溃。
+   */
+  async function reconcileOnce(reason: string): Promise<void> {
+    try {
+      const result = await runReconcile(dir, SYSTEM_ACTOR);
+      if (result.changed) {
+        console.log(
+          `[board-server] reconcile(${reason}): 新增 ${result.added.length}` +
+            ` / 移除 ${result.removed.length} 个 file 元素`,
+        );
+        sse.broadcast({ type: 'board-changed' });
+      }
+    } catch (err) {
+      console.error(`[board-server] reconcile(${reason}) 失败:`, err);
+    }
+  }
+
+  // 服务启动时先做一次初始 reconcile，让 files/ 里已有文件生成 file 元素
+  await reconcileOnce('startup');
+
+  // reconcile 防抖：批量文件变更（如解压、批量拷贝）合并为一次 reconcile
+  let debounceTimer: NodeJS.Timeout | null = null;
+  function scheduleReconcile(): void {
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      debounceTimer = null;
+      void reconcileOnce('watch');
+    }, RECONCILE_DEBOUNCE_MS);
+  }
+
   // 取初始文件列表，失败时降级为空列表（files/ 可能不存在）
   let initialFiles: string[] = [];
   try {
@@ -76,34 +120,40 @@ async function main(): Promise<void> {
     console.error('[board-server] 扫描 files/ 失败，按空列表处理:', err);
   }
 
-  // 启动文件监听（M1：仅维护内存文件列表 + 打印变更）
-  const watcher: BoardWatcher = startWatcher(dir, initialFiles);
+  // 启动文件监听：文件 add/change/unlink → 防抖后触发 reconcile
+  const watcher: BoardWatcher = startWatcher(dir, initialFiles, () => {
+    scheduleReconcile();
+  });
 
   // 装配 HTTP server
   const deps: HttpDeps = {
     dir,
     getFiles: () => watcher.getFiles(),
+    sse,
   };
   const server = createHttpServer(deps);
 
   // 端口被占用等监听错误：打印后退出，避免无声失败
   server.on('error', (err) => {
     console.error(`[board-server] HTTP 服务启动失败 (端口 ${PORT}):`, err);
+    sse.closeAll();
     void watcher.close().finally(() => process.exit(1));
   });
 
   server.listen(PORT, HOST, () => {
-    console.log(`[board-server] M1 已启动 http://${HOST}:${PORT}`);
+    console.log(`[board-server] M2 已启动 http://${HOST}:${PORT}`);
     console.log(`[board-server] 白板目录: ${dir}`);
     console.log(`[board-server] 初始文件数: ${initialFiles.length}`);
   });
 
-  // 优雅退出：关闭监听与 HTTP server
+  // 优雅退出：关闭监听、SSE 连接与 HTTP server
   let shuttingDown = false;
   const shutdown = (signal: string): void => {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`\n[board-server] 收到 ${signal}，正在关闭...`);
+    if (debounceTimer) clearTimeout(debounceTimer);
+    sse.closeAll();
     server.close();
     void watcher.close().finally(() => process.exit(0));
   };
