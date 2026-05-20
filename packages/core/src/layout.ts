@@ -111,3 +111,25 @@ export function requiredHeight(container: Rect, children: Rect[]): number {
     bottom - container.y + LAYOUT.regionPadding,
   );
 }
+
+/**
+ * 区域容纳其全部子元素所需的最小尺寸（含四周 padding）。
+ *
+ * 只由「子元素包围盒」算出，不带「不小于当前尺寸」语义 —— 调用方按需取
+ * `max(当前尺寸, 本结果)`（reconcile 自动增长区域），或作为手动缩放的下限。
+ *
+ * @param region   区域矩形，取其 x/y 作为内容包围盒的左上基准
+ * @param children 区域内子元素的矩形
+ */
+export function regionContentSize(region: Rect, children: Rect[]): Size {
+  let right = region.x;
+  let bottom = region.y;
+  for (const c of children) {
+    right = Math.max(right, c.x + c.width);
+    bottom = Math.max(bottom, c.y + c.height);
+  }
+  return {
+    width: Math.max(0, right - region.x) + LAYOUT.regionPadding,
+    height: Math.max(0, bottom - region.y) + LAYOUT.regionPadding,
+  };
+}

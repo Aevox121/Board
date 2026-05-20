@@ -1,0 +1,156 @@
+/**
+ * 文件结构面板样式 —— 应用外壳的左侧停靠面板。
+ * 与顶栏一致的「干净暖色 UI」：白色表面、规整边框，不用手绘质感。
+ */
+
+.fp {
+  flex: 0 0 268px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--c-surface);
+  border-right: 1px solid var(--c-border);
+  font-family: var(--font-ui);
+}
+
+/* ── 头部 ─────────────────────────────────────────────── */
+.fp-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-3) var(--space-2);
+  border-bottom: 1px solid var(--c-border);
+}
+
+.fp-title {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--c-ink);
+}
+
+.fp-sub {
+  font-size: var(--text-xs);
+  color: var(--c-ink-3);
+}
+
+/* ── 树区域（可滚动）──────────────────────────────────── */
+.fp-tree {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-2) 0;
+}
+
+/* 根节点 —— .board / files */
+.fp-root {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  margin-bottom: 2px;
+}
+
+.fp-root .fp-name {
+  font-weight: 600;
+  color: var(--c-ink);
+}
+
+.fp-root-tag {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--c-ink-3);
+}
+
+/* ── 树行 ─────────────────────────────────────────────── */
+.fp-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding-top: 3px;
+  padding-bottom: 3px;
+  padding-right: var(--space-2);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  color: var(--c-ink);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.fp-row--dir {
+  cursor: pointer;
+  user-select: none;
+}
+
+.fp-row--dir:hover,
+.fp-row--file:hover {
+  background: var(--c-surface-sunken);
+}
+
+/* 展开/收起箭头 */
+.fp-caret {
+  flex: 0 0 auto;
+  width: 12px;
+  font-size: var(--text-xs);
+  color: var(--c-ink-3);
+  text-align: center;
+}
+
+.fp-glyph {
+  flex: 0 0 auto;
+  font-size: var(--text-sm);
+  line-height: 1;
+}
+
+/* 文件行无箭头，留出与文件夹对齐的缩进 */
+.fp-row--file .fp-glyph {
+  margin-left: 12px;
+}
+
+.fp-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fp-row--file .fp-name {
+  color: var(--c-ink-2);
+}
+
+/* 文件夹右侧的文件计数徽标 */
+.fp-count {
+  flex: 0 0 auto;
+  min-width: 18px;
+  padding: 0 var(--space-1);
+  font-size: var(--text-xs);
+  text-align: center;
+  color: var(--c-ink-3);
+  background: var(--c-surface-sunken);
+  border-radius: var(--radius-pill);
+}
+
+/* 收件区分隔标题 */
+.fp-section {
+  margin: var(--space-2) 0 2px;
+  padding: 0 var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--c-ink-3);
+  text-transform: none;
+}
+
+.fp-empty {
+  padding: var(--space-4) var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--c-ink-3);
+  text-align: center;
+}
+
+/* ── 脚注 ─────────────────────────────────────────────── */
+.fp-foot {
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--c-border);
+  font-size: var(--text-xs);
+  color: var(--c-ink-3);
+  line-height: 1.4;
+}

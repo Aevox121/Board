@@ -184,3 +184,14 @@
 .btn--secondary:hover {
   background: var(--c-surface-sunken);
 }
+
+/* 次级按钮的「激活」态 —— 用于文件结构等可切换面板的开关 */
+.btn--secondary.is-active {
+  background: var(--c-accent-tint);
+  border-color: var(--c-accent);
+  color: var(--c-accent-strong);
+}
+
+.btn--secondary.is-active:hover {
+  background: var(--c-accent-tint);
+}

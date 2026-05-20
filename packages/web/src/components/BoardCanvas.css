@@ -6,6 +6,8 @@
   flex: 1 1 auto;
   position: relative;
   min-height: 0;
+  /* 横向 flex 子项 —— 需可收缩，否则面板展开时画布会把容器撑宽 */
+  min-width: 0;
 }
 
 /* Excalidraw 自身需占满容器 */

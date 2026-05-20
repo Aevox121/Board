@@ -10,7 +10,12 @@
 import type { BoardScene, FileElement, ParticipantId } from './types.js';
 import { regionsOf, regionForFile } from './fs-mapping.js';
 import { createFileElement, nextZ } from './factory.js';
-import { defaultSizeFor, nextSlot, type Rect } from './layout.js';
+import {
+  defaultSizeFor,
+  nextSlot,
+  regionContentSize,
+  type Rect,
+} from './layout.js';
 import { guessMime } from './mime.js';
 
 /** 收件区矩形 —— files/ 根下、不属于任何区域的游离文件的容器（§9.3）。 */
@@ -105,10 +110,27 @@ export function reconcileFiles(input: ReconcileInput): ReconcileResult {
     added.push(path);
   }
 
+  // 3. 各区域增长到能容纳其全部子元素（grow-only）——「区域必须包含所有内容」。
+  //    只增不减：手动放大的区域不会被缩回；用户手动缩小有内容下限（见 web 缩放）。
+  let regionsGrew = false;
+  for (let i = 0; i < next.length; i += 1) {
+    const r = next[i];
+    if (!r || r.type !== 'region') continue;
+    const kids = next.filter((e) => e.parentId === r.id);
+    if (kids.length === 0) continue;
+    const cs = regionContentSize(r, kids);
+    const width = Math.max(r.width, cs.width);
+    const height = Math.max(r.height, cs.height);
+    if (width !== r.width || height !== r.height) {
+      next[i] = { ...r, width, height };
+      regionsGrew = true;
+    }
+  }
+
   return {
     scene: { ...input.scene, elements: next },
     added,
     removed,
-    changed: added.length > 0 || removed.length > 0,
+    changed: added.length > 0 || removed.length > 0 || regionsGrew,
   };
 }

@@ -9,3 +9,12 @@
   flex-direction: column;
   background: var(--c-cream);
 }
+
+/* 顶栏下方的主体区 —— 横向排列：文件结构面板（可选）+ 画布区。 */
+.app-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+  min-width: 0;
+}

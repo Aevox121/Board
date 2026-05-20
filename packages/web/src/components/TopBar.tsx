@@ -31,6 +31,10 @@ export interface TopBarProps {
   probing: boolean;
   /** 「保存」按钮状态。 */
   saveState: SaveState;
+  /** 文件结构面板是否展开。 */
+  folderViewOpen: boolean;
+  /** 切换文件结构面板。 */
+  onToggleFolderView: () => void;
 }
 
 /** 「保存」按钮在各状态下的文案。 */
@@ -51,6 +55,8 @@ export function TopBar({
   connection,
   probing,
   saveState,
+  folderViewOpen,
+  onToggleFolderView,
 }: TopBarProps): JSX.Element {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(boardName);
@@ -114,6 +120,17 @@ export function TopBar({
           </button>
         )}
         <span className="topbar__meta">{elementCount} 个元素</span>
+
+        {/* 文件结构面板开关 */}
+        <button
+          type="button"
+          className={`btn btn--secondary${folderViewOpen ? ' is-active' : ''}`}
+          onClick={onToggleFolderView}
+          title="切换文件结构面板（查看白板背后的文件目录）"
+          aria-pressed={folderViewOpen}
+        >
+          📁 文件结构
+        </button>
       </div>
 
       <div className="topbar__right">

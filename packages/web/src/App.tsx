@@ -21,6 +21,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { BoardProvider, useBoard } from './board/BoardContext';
 import { TopBar, type SaveState } from './components/TopBar';
 import { BoardCanvas } from './components/BoardCanvas';
+import { FolderPanel } from './components/FolderPanel';
 import { downloadBoardJSON, pickAndParseBoardJSON } from './board/boardFile';
 import { BoardParseError } from '@board/core';
 import { checkHealth, fetchBoard, putScene, ServerError } from './server/client';
@@ -36,6 +37,8 @@ function BoardApp(): JSX.Element {
   const [saveState, setSaveState] = useState<SaveState>('idle');
   // 启动连接探测是否完成 —— 完成前顶栏显示「连接中…」。
   const [probing, setProbing] = useState(true);
+  // 文件结构面板是否展开（调试用，查看白板背后的文件目录）。
+  const [folderViewOpen, setFolderViewOpen] = useState(false);
   // 防止 React 18 StrictMode 下 effect 跑两遍而重复探测/重复载入。
   const probedRef = useRef(false);
 
@@ -140,8 +143,13 @@ function BoardApp(): JSX.Element {
         connection={connection}
         probing={probing}
         saveState={saveState}
+        folderViewOpen={folderViewOpen}
+        onToggleFolderView={() => setFolderViewOpen((v) => !v)}
       />
-      <BoardCanvas />
+      <div className="app-body">
+        {folderViewOpen && <FolderPanel />}
+        <BoardCanvas />
+      </div>
     </div>
   );
 }

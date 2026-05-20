@@ -283,8 +283,14 @@
   background: var(--c-surface);
   border-bottom: 1.5px solid var(--c-accent);
   border-radius: var(--radius-md) var(--radius-md) 0 0;
-  /* 头部需可交互（hover/标题），单独开启 */
+  /* 头部需可交互（兼作拖拽手柄），单独开启 */
   pointer-events: auto;
+  cursor: grab;
+}
+
+/* 区域正被拖拽 / 缩放时的光标态 */
+.ov-region--active .ov-region__head {
+  cursor: grabbing;
 }
 
 /* 区域名 —— 手写体（设计系统 §7.5：区域名 --font-hand 20px）。 */
@@ -312,4 +318,35 @@
 .ov-region__body {
   flex: 1 1 auto;
   min-height: 0;
+}
+
+/* ── 区域缩放手柄（右下角）──────────────────────────────────────
+ * 区域主体 pointer-events:none，手柄单独开启 auto。拖动改区域大小。 */
+.ov-region__resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 20px;
+  height: 20px;
+  pointer-events: auto;
+  cursor: nwse-resize;
+}
+
+/* 右下角斜抓纹 —— 两条贴边线，hover 时更明显 */
+.ov-region__resize::after {
+  content: '';
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid var(--c-accent);
+  border-bottom: 2px solid var(--c-accent);
+  border-bottom-right-radius: var(--radius-sm);
+  opacity: 0.55;
+  transition: opacity var(--dur-micro) var(--ease);
+}
+
+.ov-region__resize:hover::after {
+  opacity: 1;
 }
