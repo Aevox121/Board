@@ -8,3 +8,5 @@ export * from './ids';
 export * from './style';
 export * from './layout';
 export * from './fs-mapping';
+export * from './factory';
+export * from './serialize';

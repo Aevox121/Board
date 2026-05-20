@@ -25,7 +25,11 @@ importers:
         specifier: ^4.16.0
         version: 4.22.3
 
-  packages/core: {}
+  packages/core:
+    devDependencies:
+      '@types/node':
+        specifier: ^20.14.0
+        version: 20.19.41
 
   packages/server:
     dependencies:

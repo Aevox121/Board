@@ -1,53 +1,19 @@
 #!/usr/bin/env node
 /**
- * board CLI（骨架）
+ * board CLI — 启动引导（bootstrap）
  *
- * 命令清单与参数见 specs/CLI与MCP规格.md §2。
- * 当前阶段仅做命令路由与占位，逐里程碑补全各命令实现。
+ * 职责：在加载任何业务模块前，先注册 ESM 解析钩子（见 loader.ts），
+ * 让无扩展名的编译产物（含 `@board/core` 的 dist）能被 Node 原生 ESM 运行。
+ * 之后再动态 import 真正的入口 `cli`。
  *
- * 退出码（规格 §1.4）：0 成功 / 1 一般错误 / 2 参数错误
- *                     / 3 未找到 / 4 冲突 / 5 权限不足
+ * 命令实现与路由见 `cli.ts` 及 `commands/`。
  */
+import { register } from 'node:module';
 
-/** 已登记的顶层命令。 */
-const COMMANDS = [
-  'new', 'open', 'serve', 'ls', 'info',
-  'add', 'region', 'shape', 'connect', 'rm', 'mv',
-  'show', 'tree', 'search',
-  'suggest', 'task', 'comment', 'agent', 'watch',
-  'snapshot', 'restore', 'export', 'import', 'share', 'sync',
-] as const;
+// 注册解析钩子（指向同目录编译产物 loader.js）。
+// 第二参数为 parentURL，用本文件 URL，使 './loader.js' 能被定位。
+register('./loader.js', import.meta.url);
 
-type Command = (typeof COMMANDS)[number];
-
-function isCommand(s: string): s is Command {
-  return (COMMANDS as readonly string[]).includes(s);
-}
-
-function printHelp(): void {
-  console.log('board <命令> [参数]');
-  console.log('全局选项: --board <path>  --json  --quiet  --actor <id>');
-  console.log('命令: ' + COMMANDS.join(', '));
-}
-
-function main(argv: string[]): number {
-  const [cmd, ...rest] = argv;
-
-  if (!cmd || cmd === '--help' || cmd === '-h') {
-    printHelp();
-    return 0;
-  }
-  if (!isCommand(cmd)) {
-    console.error(`未知命令: ${cmd}（board --help 查看可用命令）`);
-    return 2;
-  }
-
-  // TODO(M2): 实现 new/open/serve/ls/info/add/region/rm/mv/show/tree/search
-  // TODO(M2): 绘图命令 shape/connect
-  // TODO(M3): suggest/task/comment/agent/watch
-  // TODO(M4): snapshot/restore/share/sync
-  console.error(`命令 "${cmd}" 尚未实现（骨架阶段）。参数: ${JSON.stringify(rest)}`);
-  return 1;
-}
-
-process.exit(main(process.argv.slice(2)));
+// 钩子已就位，动态 import 业务入口（其内部的无扩展名 import 由钩子兜底）。
+const { run } = await import('./cli.js');
+await run();

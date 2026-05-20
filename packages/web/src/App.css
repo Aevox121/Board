@@ -1,0 +1,11 @@
+/**
+ * 应用外壳布局 —— 顶栏 + 画布区，纵向铺满视口。
+ */
+
+.app-shell {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--c-cream);
+}

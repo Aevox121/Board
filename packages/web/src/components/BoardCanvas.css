@@ -1,0 +1,15 @@
+/**
+ * 画布区样式 —— Excalidraw 挂载容器，铺满顶栏下方的剩余空间。
+ */
+
+.board-canvas {
+  flex: 1 1 auto;
+  position: relative;
+  min-height: 0;
+}
+
+/* Excalidraw 自身需占满容器 */
+.board-canvas .excalidraw {
+  height: 100%;
+  width: 100%;
+}

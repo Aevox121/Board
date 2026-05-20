@@ -1,0 +1,117 @@
+/**
+ * 顶栏样式 —— 设计系统 §7.1「顶部工具栏」。
+ * 干净的暖色外壳：白色表面、规整边框、柔和阴影；不使用手绘质感。
+ */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 auto;
+  height: 52px;
+  padding: 0 var(--space-4);
+  background: var(--c-surface);
+  border-bottom: 1px solid var(--c-border);
+  box-shadow: var(--shadow-md);
+  /* 顶栏需压在 Excalidraw 之上，避免画布 UI 抢交互 */
+  position: relative;
+  z-index: 10;
+}
+
+.topbar__left,
+.topbar__right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.topbar__logo {
+  font-size: var(--text-lg);
+  color: var(--c-accent);
+  line-height: 1;
+}
+
+/* 白板名 —— 手写体点缀（设计系统允许的「手绘呼应」） */
+.topbar__name,
+.topbar__name-input {
+  font-family: var(--font-hand);
+  font-size: var(--text-lg);
+  color: var(--c-ink);
+  line-height: 1.25;
+}
+
+.topbar__name {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: text;
+  transition: background var(--dur-micro) var(--ease);
+}
+
+.topbar__name:hover {
+  background: var(--c-surface-sunken);
+}
+
+.topbar__name-input {
+  border: 1px solid var(--c-border-strong);
+  background: var(--c-surface);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  outline: none;
+  min-width: 180px;
+}
+
+.topbar__name-input:focus {
+  box-shadow: var(--focus-ring);
+  border-color: var(--c-accent);
+}
+
+.topbar__meta {
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  color: var(--c-ink-3);
+}
+
+/* ── 按钮（设计系统 §7.2）─────────────────────────── */
+
+.btn {
+  appearance: none;
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  height: 32px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition:
+    background var(--dur-micro) var(--ease),
+    border-color var(--dur-micro) var(--ease);
+}
+
+.btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.btn--primary {
+  background: var(--c-accent);
+  color: var(--c-on-accent);
+  border: 1px solid var(--c-accent);
+  font-weight: 600;
+}
+
+.btn--primary:hover {
+  background: var(--c-accent-strong);
+  border-color: var(--c-accent-strong);
+}
+
+.btn--secondary {
+  background: var(--c-surface);
+  color: var(--c-ink);
+  border: 1px solid var(--c-border);
+}
+
+.btn--secondary:hover {
+  background: var(--c-surface-sunken);
+}
