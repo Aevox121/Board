@@ -1,0 +1,17 @@
+{
+  "name": "board",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Agent 协作白板 — 无限画布与真实文件系统二合一",
+  "type": "module",
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev:web": "pnpm --filter @board/web dev",
+    "dev:server": "pnpm --filter @board/server dev",
+    "typecheck": "pnpm -r exec tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  },
+  "packageManager": "pnpm@9.1.0"
+}

@@ -1,0 +1,21 @@
+{
+  "name": "@board/cli",
+  "version": "0.0.0",
+  "private": true,
+  "description": "board CLI — Agent 操作白板的默认方式",
+  "type": "module",
+  "bin": {
+    "board": "./dist/index.js"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@board/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.16.0"
+  }
+}
