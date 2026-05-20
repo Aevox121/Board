@@ -90,7 +90,8 @@ async function main(): Promise<void> {
       if (result.changed) {
         console.log(
           `[board-server] reconcile(${reason}): 新增 ${result.added.length}` +
-            ` / 移除 ${result.removed.length} 个 file 元素`,
+            ` / 移动 ${result.moved.length}` +
+            ` / 缺失 ${result.missing.length} 个 file 元素`,
         );
         sse.broadcast({ type: 'board-changed' });
       }

@@ -39,13 +39,35 @@ export interface ReconcileResult {
   scene: BoardScene;
   /** 新增 file 元素的路径 */
   added: string[];
-  /** 移除的文件路径 */
-  removed: string[];
-  /** 场景是否发生变化 */
+  /** 命中「移动检测」而被改名 / 移动的文件新路径（R5：更新元素 path，不删旧建新） */
+  moved: string[];
+  /** 仍指向不存在文件的 file 元素路径（R6 缺失态，元素保留不删除） */
+  missing: string[];
+  /**
+   * 场景或可见文件状态是否变化。为 true 时调用方应 saveBoard 并广播刷新——
+   * 包括存在缺失文件的情况：场景字节虽未变，但客户端需据最新文件列表渲染缺失态。
+   */
   changed: boolean;
 }
 
-/** 把磁盘文件列表 reconcile 进场景，返回新场景与变更摘要。 */
+/** 取相对路径末段（文件名）—— 移动检测按同名配对消失元素与新文件。 */
+function baseName(path: string): string {
+  const i = path.lastIndexOf('/');
+  return i >= 0 ? path.slice(i + 1) : path;
+}
+
+/**
+ * 把磁盘文件列表 reconcile 进场景，返回新场景与变更摘要。
+ *
+ * 流程：
+ *  1. 移动检测——把「磁盘上消失的 file 元素」与「尚无元素的新文件」配对：
+ *     命中即视为文件被改名 / 移动，更新元素 `path`、`parentId`（R5 路径即真相，
+ *     不删旧建新）。同名优先配对；最后剩 1 对 1 也配对（覆盖纯改名）。
+ *  2. 未配对的新文件 → 新建 file 元素并自动排版。
+ *  3. 被移动的元素重新落位到（新）容器。
+ *  4. 未配对的消失元素 → **不删除**，保留为「缺失」渲染态（R6），等待恢复或清理。
+ *  5. 各区域 grow-only 增长以容纳全部子元素。
+ */
 export function reconcileFiles(input: ReconcileInput): ReconcileResult {
   const { diskFiles, sizes, actor } = input;
   const limitBytes = (input.previewLimitMB ?? 20) * MB;
@@ -54,28 +76,59 @@ export function reconcileFiles(input: ReconcileInput): ReconcileResult {
   const elements = [...input.scene.elements];
   const regions = regionsOf(elements);
 
-  // 已有 file 元素的 path 集合
-  const existingFilePaths = new Set<string>();
-  for (const el of elements) {
-    if (el.type === 'file') existingFilePaths.add(el.path);
+  // 现有 file 元素及其 path 集合
+  const fileEls = elements.filter((e): e is FileElement => e.type === 'file');
+  const existingFilePaths = new Set(fileEls.map((e) => e.path));
+
+  // 两侧待处理：磁盘上已消失的 file 元素 / 尚无对应元素的磁盘新文件
+  const goneEls = fileEls.filter((e) => !diskSet.has(e.path));
+  const newPaths = diskFiles.filter((p) => !existingFilePaths.has(p));
+
+  // ── 1. 移动检测：消失元素 ↔ 新文件 配对 ─────────────────────────
+  const pendingNew = [...newPaths];
+  const moveTo = new Map<string, string>(); // file 元素 id → 新 path
+  for (const g of goneEls) {
+    const base = baseName(g.path);
+    const idx = pendingNew.findIndex((p) => baseName(p) === base);
+    if (idx < 0) continue;
+    const [match] = pendingNew.splice(idx, 1);
+    if (match !== undefined) moveTo.set(g.id, match);
+  }
+  // 同名配对后仍各剩 1 个 → 视为纯改名，也配对。
+  const unpairedGone = goneEls.filter((g) => !moveTo.has(g.id));
+  const lastGone = unpairedGone[0];
+  const lastNew = pendingNew[0];
+  if (
+    unpairedGone.length === 1 &&
+    pendingNew.length === 1 &&
+    lastGone &&
+    lastNew !== undefined
+  ) {
+    moveTo.set(lastGone.id, lastNew);
+    pendingNew.splice(0, 1);
   }
 
-  const added: string[] = [];
-  const removed: string[] = [];
-
-  // 1. 移除磁盘上已不存在的 file 元素
-  let next = elements.filter((el) => {
-    if (el.type === 'file' && !diskSet.has(el.path)) {
-      removed.push(el.path);
-      return false;
-    }
-    return true;
+  // ── 2. 应用移动：更新被移动元素的 path / parentId（位置稍后重排）─────
+  const ts = new Date().toISOString();
+  const moved: string[] = [];
+  const next: Element[] = elements.map((el) => {
+    if (el.type !== 'file') return el;
+    const to = moveTo.get(el.id);
+    if (to === undefined) return el;
+    moved.push(to);
+    const region = regionForFile(to, regions);
+    return {
+      ...el,
+      path: to,
+      parentId: region ? region.id : null,
+      updatedBy: actor,
+      updatedAt: ts,
+    };
   });
 
-  // 2. 为新文件创建 file 元素并自动排版
-  for (const path of diskFiles) {
-    if (existingFilePaths.has(path)) continue;
-
+  // ── 3. 为未配对的新文件创建 file 元素并自动排版 ─────────────────
+  const added: string[] = [];
+  for (const path of pendingNew) {
     const region = regionForFile(path, regions);
     const parentId = region ? region.id : null;
     const container: Rect = region
@@ -110,14 +163,47 @@ export function reconcileFiles(input: ReconcileInput): ReconcileResult {
     added.push(path);
   }
 
-  // 3. 各区域增长到能容纳其全部子元素（grow-only）——「区域必须包含所有内容」。
+  // ── 4. 被移动的元素重新落位到（新）容器 —— CLI mv 的「自动归位」───────
+  for (const id of moveTo.keys()) {
+    const idx = next.findIndex((e) => e.id === id);
+    if (idx < 0) continue;
+    const el = next[idx];
+    if (!el) continue;
+    const region = regions.find((r) => r.id === el.parentId);
+    const container: Rect = region
+      ? { x: region.x, y: region.y, width: region.width, height: region.height }
+      : INBOX_RECT;
+    const occupied: Rect[] = next
+      .filter((e, i) => i !== idx && e.parentId === el.parentId)
+      .map((e) => ({ x: e.x, y: e.y, width: e.width, height: e.height }));
+    const pos = nextSlot(container, occupied, {
+      width: el.width,
+      height: el.height,
+    });
+    next[idx] = { ...el, x: pos.x, y: pos.y, autoPlaced: true };
+  }
+
+  // ── 5. 各区域增长到能容纳其全部子元素（grow-only）─────────────────
+  // 注：消失但未配对的 file 元素已留在 next 中（R6 缺失态），不删除。
   const grown = growRegions(next);
+
+  // 仍指向不存在文件的元素 —— 移动检测后未被配对的「消失元素」即缺失态。
+  const missing = goneEls
+    .filter((g) => !moveTo.has(g.id))
+    .map((g) => g.path);
 
   return {
     scene: { ...input.scene, elements: grown.elements },
     added,
-    removed,
-    changed: added.length > 0 || removed.length > 0 || grown.changed,
+    moved,
+    missing,
+    // 缺失文件存在时也置 changed —— 场景字节未变，但需广播让客户端拉取
+    // 最新文件列表、把对应元素渲染为缺失态。
+    changed:
+      added.length > 0 ||
+      moved.length > 0 ||
+      grown.changed ||
+      missing.length > 0,
   };
 }
 

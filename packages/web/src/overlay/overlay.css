@@ -37,8 +37,9 @@
   position: absolute;
 }
 
-/* 文件卡槽 —— 可拖拽改归属（M2 增量2）。整槽接收指针事件并显示抓取光标。 */
-.ov-slot--file {
+/* 文件 / 文本卡槽 —— 可拖拽（M2 增量2/3）。整槽接收指针事件并显示抓取光标。 */
+.ov-slot--file,
+.ov-slot--text {
   pointer-events: auto;
   cursor: grab;
 }
@@ -182,26 +183,28 @@
   color: var(--c-ink);
 }
 
-/* Markdown 渲染内容的基础排版 —— 克制，贴合卡片尺度。 */
-.ov-file__md-body h1,
-.ov-file__md-body h2,
-.ov-file__md-body h3 {
+/* ── 共用 Markdown 排版（.ov-md）─────────────────────────────
+ * 文件 Markdown 预览（.ov-file__md-body）与文本卡片（.ov-text__body）共用，
+ * 克制、贴合卡片尺度。 */
+.ov-md h1,
+.ov-md h2,
+.ov-md h3 {
   margin: var(--space-2) 0 var(--space-1);
   font-size: var(--text-base);
   line-height: 1.25;
 }
 
-.ov-file__md-body p,
-.ov-file__md-body ul,
-.ov-file__md-body ol {
+.ov-md p,
+.ov-md ul,
+.ov-md ol {
   margin: var(--space-1) 0;
 }
 
-.ov-file__md-body a {
+.ov-md a {
   color: var(--c-accent);
 }
 
-.ov-file__md-body code {
+.ov-md code {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   background: var(--c-surface-sunken);
@@ -209,19 +212,19 @@
   border-radius: var(--radius-sm);
 }
 
-.ov-file__md-body pre {
+.ov-md pre {
   background: var(--c-surface-sunken);
   padding: var(--space-2);
   border-radius: var(--radius-sm);
   overflow: auto;
 }
 
-.ov-file__md-body pre code {
+.ov-md pre code {
   background: transparent;
   padding: 0;
 }
 
-.ov-file__md-body img {
+.ov-md img {
   max-width: 100%;
 }
 
@@ -403,6 +406,173 @@
 }
 .ov-region__rz--se:hover::after {
   opacity: 1;
+}
+
+/* ── 文件卡片 · PDF 预览态 ─────────────────────────────────── */
+.ov-file--pdf .ov-file__head {
+  border-bottom: 1px solid var(--c-border);
+}
+
+.ov-file__pdf-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--c-surface-sunken);
+  overflow: hidden;
+}
+
+.ov-file__pdf {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+  /* 只作首页预览：不接收指针事件，卡片整体仍可拖拽 */
+  pointer-events: none;
+}
+
+/* ── 文件卡片 · CSV 表格预览态 ──────────────────────────────── */
+.ov-file--csv .ov-file__head {
+  border-bottom: 1px solid var(--c-border);
+}
+
+.ov-file__csv-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.ov-file__csv {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-xs);
+  color: var(--c-ink);
+}
+
+.ov-file__csv th,
+.ov-file__csv td {
+  max-width: 160px;
+  padding: 3px var(--space-2);
+  border: 1px solid var(--c-border);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ov-file__csv th {
+  background: var(--c-surface-sunken);
+  font-family: var(--font-ui);
+  font-weight: 600;
+}
+
+/* ── 文件卡片 · 纯文本预览态 ────────────────────────────────── */
+.ov-file--text .ov-file__head {
+  border-bottom: 1px solid var(--c-border);
+}
+
+.ov-file__text-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  overflow: auto;
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--c-ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── 文件卡片 · 缺失态（R6）──────────────────────────────────
+ * path 指向的文件已不在磁盘上：虚线边框 + 暗金警示，不预览，
+ * 不删除元素 —— 等待文件恢复或用户清理。 */
+.ov-file--missing {
+  justify-content: center;
+  background: var(--c-surface-sunken);
+  border: 1.5px dashed var(--c-warning);
+  box-shadow: none;
+}
+
+.ov-file--missing .ov-file__glyph {
+  color: var(--c-warning);
+}
+
+.ov-file--missing .ov-file__name {
+  color: var(--c-ink-2);
+  text-decoration: line-through;
+}
+
+.ov-file__missing-note {
+  color: var(--c-warning);
+}
+
+/* ── 文本 / Markdown 卡片（.ov-text）──────────────────────────
+ * 白板原生 Markdown 卡片（数据模型 §6.4）：手绘质感、source/preview 可切换。 */
+.ov-text {
+  display: flex;
+  flex-direction: column;
+  background: var(--c-surface);
+  border: 1.5px solid var(--c-ink);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.ov-text__bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
+  background: var(--c-surface-sunken);
+  border-bottom: 1px solid var(--c-border);
+}
+
+.ov-text__tag {
+  flex: 1 1 auto;
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  color: var(--c-ink-2);
+}
+
+.ov-text__toggle {
+  flex: 0 0 auto;
+  padding: 1px var(--space-2);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  color: var(--c-ink);
+  cursor: pointer;
+}
+
+.ov-text__toggle:hover {
+  background: var(--c-accent-tint);
+  border-color: var(--c-accent);
+}
+
+.ov-text__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--c-ink);
+}
+
+.ov-text__source {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ov-text__empty {
+  color: var(--c-ink-2);
+  font-style: italic;
 }
 
 /* ── 右键上下文菜单 ─────────────────────────────────────────────

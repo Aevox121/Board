@@ -16,12 +16,14 @@ import { listBoardFiles, loadBoard, saveBoard } from '@board/core/node';
 
 /** 一次 reconcile 的结果摘要。 */
 export interface ReconcileRunResult {
-  /** 场景是否发生变化（变化才会 saveBoard） */
+  /** 场景或可见文件状态是否发生变化（变化才会 saveBoard + 广播） */
   changed: boolean;
   /** 新增 file 元素的路径 */
   added: string[];
-  /** 移除的 file 元素路径 */
-  removed: string[];
+  /** 被移动 / 改名的文件新路径（移动检测命中） */
+  moved: string[];
+  /** 仍指向不存在文件的 file 元素路径（R6 缺失态） */
+  missing: string[];
 }
 
 /**
@@ -72,6 +74,7 @@ export async function runReconcile(
   return {
     changed: result.changed,
     added: result.added,
-    removed: result.removed,
+    moved: result.moved,
+    missing: result.missing,
   };
 }

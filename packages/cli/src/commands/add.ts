@@ -213,7 +213,7 @@ async function addLocal(
       dest: destRel,
       region: regionSeg === '' ? null : regionSeg,
       added: result.added,
-      removed: result.removed,
+      moved: result.moved,
     },
   };
 }

@@ -85,3 +85,56 @@ export function formatBytes(bytes: number): string {
   const text = value < 10 ? value.toFixed(1) : Math.round(value).toString();
   return `${text} ${units[unitIdx]}`;
 }
+
+/**
+ * 极简 CSV 解析 —— 支持双引号包裹字段（内部 `""` 转义、字段内含逗号/换行）。
+ *
+ * 用于文件卡的 CSV 就地预览：只需前若干行即够呈现，命中行数上限即停止解析。
+ *
+ * @param text    CSV 原文
+ * @param maxRows 最多解析的行数（含表头），默认 12
+ * @returns 行 × 列 的字符串二维数组
+ */
+export function parseCsv(text: string, maxRows = 12): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let quoted = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text[i];
+    if (quoted) {
+      if (c === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i += 1; // 跳过转义的第二个引号
+        } else {
+          quoted = false;
+        }
+      } else {
+        field += c;
+      }
+      continue;
+    }
+    if (c === '"') {
+      quoted = true;
+    } else if (c === ',') {
+      row.push(field);
+      field = '';
+    } else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i += 1; // 吃掉 CRLF 的 LF
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = '';
+      if (rows.length >= maxRows) return rows;
+    } else {
+      field += c;
+    }
+  }
+  // 收尾：最后一行若无结尾换行
+  if (field !== '' || row.length > 0) {
+    row.push(field);
+    rows.push(row);
+  }
+  return rows;
+}

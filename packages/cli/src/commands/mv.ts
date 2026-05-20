@@ -5,7 +5,8 @@
  * 文件系统」方向的命令行入口，与 Web 端拖拽文件卡改归属等价 —— Agent 默认经
  * CLI 操作白板。
  *
- * 移动后 reconcile：旧路径的 file 元素移除，新路径的元素按所属区域自动归位。
+ * 移动后 reconcile：移动检测命中后更新该 file 元素的 path / parentId，
+ * 并按新所属区域自动归位（不删旧建新，R5 路径即真相）。
  */
 import { mkdir, rename, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -91,7 +92,7 @@ export async function cmdMv(args: ParsedArgs): Promise<CmdResult> {
   await mkdir(dirname(toAbs), { recursive: true });
   await rename(fromAbs, toAbs);
 
-  // reconcile：旧路径 file 元素移除，新路径元素按区域自动归位
+  // reconcile：移动检测把该 file 元素重定位到新路径并按区域自动归位
   const diskFiles = await listBoardFiles(dir);
   const actor = args.options.get('actor') ?? DEFAULT_ACTOR;
   const result = reconcileFiles({ scene: handle.scene, diskFiles, actor });
@@ -101,12 +102,12 @@ export async function cmdMv(args: ParsedArgs): Promise<CmdResult> {
     code: EXIT.OK,
     text:
       `已移动 files/${from} → files/${to}` +
-      `  (新增 ${result.added.length} / 移除 ${result.removed.length} 个 file 元素)`,
+      `  (重定位 ${result.moved.length} / 新增 ${result.added.length} 个 file 元素)`,
     data: {
       from,
       to,
       added: result.added,
-      removed: result.removed,
+      moved: result.moved,
     },
   };
 }

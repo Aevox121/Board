@@ -33,7 +33,7 @@ export interface ExcalidrawSceneData {
  * core 场景 → Excalidraw 场景数据。
  *
  * core 元素按 `z` 升序排列后转换（Excalidraw 用数组顺序表达层级）。
- * 非绘图类元素（file/folder/region 等）此阶段跳过。
+ * 非绘图类元素（file/folder/region/text 等）此阶段跳过 —— 它们归 DOM 覆盖层。
  */
 export function sceneToExcalidraw(scene: BoardScene): ExcalidrawSceneData {
   const ordered = [...scene.elements].sort((a, b) =>
@@ -64,12 +64,16 @@ export function sceneToExcalidraw(scene: BoardScene): ExcalidrawSceneData {
   };
 }
 
-/** 归 Excalidraw 画布管理的元素类型；其余（file/folder/region…）归 DOM 覆盖层。 */
+/**
+ * 归 Excalidraw 画布管理的元素类型；其余（file/folder/region/text…）归 DOM 覆盖层。
+ *
+ * `text` 是白板原生的「文本 / Markdown 卡片」（数据模型 §6.4），需要 source/preview
+ * 切换与 Markdown 渲染 —— Excalidraw 原生 text 表达不了，故归覆盖层渲染。
+ */
 const DRAWING_TYPES: ReadonlySet<Element['type']> = new Set([
   'draw',
   'shape',
   'connector',
-  'text',
 ]);
 
 /**

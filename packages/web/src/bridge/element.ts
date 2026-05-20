@@ -7,7 +7,7 @@
  * | rectangle / ellipse / diamond     | shape           | shape 字段直存几何类型 |
  * | arrow / line                      | connector       | line → endArrow 'none'；arrow → endArrow 'arrow' |
  * | freedraw                          | draw            | points/pressures 转为相对左上角 |
- * | text                              | text            | 纯文本存入 markdown 字段 |
+ * | text                              | text            | 纯文本存入 markdown；仅入向（core text 归覆盖层渲染，不回 Excalidraw） |
  * | image / frame / embeddable / 未知 | （原样存入 meta）| 见 unknownToCore，保证往返不丢 |
  *
  * 设计原则：
@@ -41,13 +41,6 @@ const nowISO = (): string => new Date().toISOString();
 
 /** Excalidraw 字体常量（constants.ts FONT_FAMILY）。 */
 const EX_FONT = { Virgil: 1, Helvetica: 2, Cascadia: 3 } as const;
-
-/** core fontFamily → Excalidraw fontFamily 数值。 */
-function toExFontFamily(f: Style['fontFamily']): number {
-  if (f === 'code') return EX_FONT.Cascadia;
-  if (f === 'normal') return EX_FONT.Helvetica;
-  return EX_FONT.Virgil; // hand → 手写体 Virgil/Excalifont
-}
 
 /** Excalidraw fontFamily 数值 → core fontFamily。 */
 function toCoreFontFamily(f: number): Style['fontFamily'] {
@@ -136,19 +129,8 @@ export function coreToExcalidraw(el: Element): ExElementSkeleton | null {
       }
       return sk;
     }
-    case 'text': {
-      const sk: ExElementSkeleton = {
-        ...base,
-        type: 'text',
-        // core text 是 markdown 卡片；M1 画布以纯文本回显其 markdown 源。
-        text: el.markdown,
-        fontSize: el.style.fontSize,
-        fontFamily: toExFontFamily(el.style.fontFamily),
-      };
-      return sk;
-    }
-    // file/folder/region/image/suggestion/embed —— 非 Excalidraw 原生绘图类型。
-    // 它们将由后续里程碑的 DOM 覆盖层渲染，不进 Excalidraw 场景。
+    // text/file/folder/region/image/suggestion/embed —— 不进 Excalidraw 场景。
+    // text 是白板原生的「Markdown 卡片」，连同内容元素一并由 DOM 覆盖层渲染。
     default:
       return null;
   }

@@ -113,6 +113,18 @@ export function BoardCanvas(): JSX.Element {
         sceneRef.current,
       );
       replaceScene(next, 'canvas');
+
+      // text 元素归 DOM 覆盖层渲染为 Markdown 卡片，不应留在 Excalidraw 内
+      // （否则与覆盖层卡片重影）。用户用文本工具画完、退出编辑后，把不含
+      // text 的场景回推 Excalidraw，使其丢弃原生 text 元素，交由覆盖层接管。
+      // 仍在编辑（editingElement 非空）时不回推，以免打断文本输入框。
+      const editing = (appState as { editingElement?: unknown }).editingElement;
+      if (!editing && apiRef.current && elements.some((e) => e.type === 'text')) {
+        suppressNextChange.current = true;
+        apiRef.current.updateScene({
+          elements: sceneToExcalidraw(next).elements,
+        });
+      }
     },
     [actorId, replaceScene],
   );

@@ -21,13 +21,20 @@ import type {
   Element,
   FileElement,
   RegionElement,
+  TextElement,
 } from '@board/core';
-import { regionsOf, regionForFile, arrangeScene } from '@board/core';
+import {
+  regionsOf,
+  regionForFile,
+  arrangeScene,
+  growRegions,
+} from '@board/core';
 import { useBoard } from '../board/BoardContext';
 import { moveFile } from '../server/files';
 import { putScene } from '../server/client';
 import { FileCard } from './FileCard';
 import { FolderCard } from './FolderCard';
+import { TextCard } from './TextCard';
 import {
   RegionCard,
   type PointerHandlers,
@@ -59,17 +66,25 @@ export interface OverlayLayerProps {
 }
 
 /** 本覆盖层负责渲染的内容元素类型。 */
-type ContentElement = Extract<Element, { type: 'file' | 'folder' | 'region' }>;
+type ContentElement = Extract<
+  Element,
+  { type: 'file' | 'folder' | 'region' | 'text' }
+>;
 
 /** 判断一个元素是否属于本层渲染范围。 */
 function isContentElement(el: Element): el is ContentElement {
-  return el.type === 'file' || el.type === 'folder' || el.type === 'region';
+  return (
+    el.type === 'file' ||
+    el.type === 'folder' ||
+    el.type === 'region' ||
+    el.type === 'text'
+  );
 }
 
-/** 拖拽（移动）过程的瞬时状态 —— 文件卡或区域共用。 */
+/** 拖拽（移动）过程的瞬时状态 —— 文件卡 / 文本卡 / 区域共用。 */
 interface DragState {
-  /** 被拖对象类型：文件卡 / 区域。 */
-  kind: 'file' | 'region';
+  /** 被拖对象类型：文件卡 / 文本卡 / 区域。 */
+  kind: 'file' | 'region' | 'text';
   /** 被拖元素 id。 */
   elementId: string;
   /** 捕获的指针 id。 */
@@ -229,7 +244,7 @@ export function OverlayLayer({
   viewport,
 }: OverlayLayerProps): JSX.Element {
   const { scrollX, scrollY, zoom } = viewport;
-  const { actorId, connection, replaceScene } = useBoard();
+  const { actorId, connection, serverFiles, replaceScene } = useBoard();
 
   // 拖拽 / 缩放瞬时状态；null = 未在进行。
   const [drag, setDrag] = useState<DragState | null>(null);
@@ -258,9 +273,21 @@ export function OverlayLayer({
       .sort((a, b) => (a.z < b.z ? -1 : a.z > b.z ? 1 : 0));
   }, [scene.elements]);
 
-  // 拖拽文件卡时实时算出落点所在区域（仅文件拖拽需要）—— 用于高亮提示。
+  // R6 缺失态：path 不在 server 文件列表里的 file 元素 id 集合。
+  // 仅「已连接」时判定 —— 离线模式 serverFiles 为空，不应误判全部缺失。
+  const missingFileIds = useMemo<Set<string>>(() => {
+    const ids = new Set<string>();
+    if (connection !== 'connected') return ids;
+    const disk = new Set(serverFiles);
+    for (const el of scene.elements) {
+      if (el.type === 'file' && !disk.has(el.path)) ids.add(el.id);
+    }
+    return ids;
+  }, [scene.elements, serverFiles, connection]);
+
+  // 拖拽文件 / 文本卡时实时算出落点所在区域 —— 用于高亮提示（区域拖拽不需要）。
   const dropRegionId = useMemo<string | null>(() => {
-    if (!drag || !drag.moved || drag.kind !== 'file') return null;
+    if (!drag || !drag.moved || drag.kind === 'region') return null;
     const el = scene.elements.find((x) => x.id === drag.elementId);
     if (!el) return null;
     const cardRect: RectLike = {
@@ -545,9 +572,39 @@ export function OverlayLayer({
     persist(next, '区域移动');
   }
 
+  /** 文本卡拖拽结束 —— 重新定位并按落点重设所属区域（文本无文件系统对应物）。 */
+  function finishTextDrag(d: DragState): void {
+    const cur = sceneRef.current;
+    const el = cur.elements.find(
+      (x): x is TextElement => x.id === d.elementId && x.type === 'text',
+    );
+    if (!el) return;
+    const finalX = d.startX + d.offsetX;
+    const finalY = d.startY + d.offsetY;
+    const cardRect: RectLike = {
+      x: finalX,
+      y: finalY,
+      width: el.width,
+      height: el.height,
+    };
+    const target = regionForCard(cardRect, regionsOf(cur.elements));
+    const patched = patchElement(cur, el.id, {
+      x: finalX,
+      y: finalY,
+      autoPlaced: false,
+      parentId: target ? target.id : null,
+    });
+    // 文本卡落入区域后，区域增长以包含它（与文件落点一致）。
+    const grown = growRegions(patched.elements);
+    const next: BoardScene = { ...patched, elements: grown.elements };
+    replaceScene(next, 'canvas');
+    persist(next, '文本卡片移动');
+  }
+
   /** 拖拽结束分发。 */
   function finishDrag(d: DragState): void {
     if (d.kind === 'region') finishRegionDrag(d);
+    else if (d.kind === 'text') finishTextDrag(d);
     else finishFileDrag(d);
   }
 
@@ -555,7 +612,7 @@ export function OverlayLayer({
   function beginDrag(
     e: React.PointerEvent<HTMLDivElement>,
     el: Element,
-    kind: 'file' | 'region',
+    kind: 'file' | 'region' | 'text',
   ): void {
     if (e.button !== 0) return; // 仅响应主键
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -729,6 +786,9 @@ export function OverlayLayer({
       <div className="ov-transform" style={transformStyle}>
         {contentElements.map((el) => {
           const isFile = el.type === 'file';
+          const isText = el.type === 'text';
+          // 文件卡与文本卡可拖拽（重定位 / 改归属）；文件夹、区域另有交互。
+          const draggable = isFile || isText;
 
           // 拖拽偏移：被拖元素自身，或被拖区域的子元素（随区域一起动）。
           let dx = 0;
@@ -768,6 +828,7 @@ export function OverlayLayer({
           const className =
             'ov-slot' +
             (isFile ? ' ov-slot--file' : '') +
+            (isText ? ' ov-slot--text' : '') +
             (offset ? ' ov-slot--dragging' : '');
 
           // 区域的拖拽手柄 / 八向缩放 API
@@ -795,11 +856,13 @@ export function OverlayLayer({
               className={className}
               style={slotStyle}
               onPointerDown={
-                isFile ? (e) => beginDrag(e, el, 'file') : undefined
+                draggable
+                  ? (e) => beginDrag(e, el, isFile ? 'file' : 'text')
+                  : undefined
               }
-              onPointerMove={isFile ? handlePointerMove : undefined}
-              onPointerUp={isFile ? handlePointerUp : undefined}
-              onPointerCancel={isFile ? handlePointerCancel : undefined}
+              onPointerMove={draggable ? handlePointerMove : undefined}
+              onPointerUp={draggable ? handlePointerUp : undefined}
+              onPointerCancel={draggable ? handlePointerCancel : undefined}
             >
               {el.type === 'region' ? (
                 <RegionCard
@@ -811,8 +874,10 @@ export function OverlayLayer({
                 />
               ) : el.type === 'folder' ? (
                 <FolderCard element={el} />
+              ) : el.type === 'text' ? (
+                <TextCard element={el} />
               ) : (
-                <FileCard element={el} />
+                <FileCard element={el} missing={missingFileIds.has(el.id)} />
               )}
             </div>
           );
