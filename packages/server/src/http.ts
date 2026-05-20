@@ -15,7 +15,15 @@ import { createReadStream } from 'node:fs';
 import { mkdir, rename, stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { dirname, resolve, sep } from 'node:path';
-import { guessMime, normalizePath, SCHEMA_VERSION, type BoardScene } from '@board/core';
+import {
+  growRegions,
+  guessMime,
+  normalizePath,
+  regionForFile,
+  regionsOf,
+  SCHEMA_VERSION,
+  type BoardScene,
+} from '@board/core';
 import { loadBoard, saveBoard } from '@board/core/node';
 import type { SseHub } from './sse.js';
 
@@ -235,14 +243,18 @@ async function handleGetFile(
 /**
  * POST /api/files/move —— 把 files/ 下的一个文件移动到新的相对路径。
  *
- * 请求体 `{ from, to }`，两者均为相对 files/ 的路径。这是「画布 → 文件系统」
- * 方向的同步入口：Web 端拖动文件卡跨区域时调用，server 据此重命名真实文件，
- * 再 reconcile 把变更同步回画布。
+ * 请求体 `{ from, to, x?, y? }`：from/to 为相对 files/ 的路径。这是
+ * 「画布 → 文件系统」方向的同步入口：Web 端拖动文件卡跨区域时调用。
+ *
+ * 落点 `x,y`（可选）：
+ *  - 带落点（Web 拖拽）—— 直接把对应 file 元素改名并定位到该落点，
+ *    **保留位置、不自动排布**（类访达：文件停在你松手处）。
+ *  - 无落点（如 CLI mv）—— 走 reconcile 自动排布。
  *
  * 约束：
  *  - from / to 解析后必须仍落在 files/ 内（防目录穿越）。
  *  - from 必须是已存在的文件；to 不得已存在（避免静默覆盖）。
- *  - 重命名成功后立即 reconcile 并广播，Web 端据 SSE 刷新。
+ *  - 同步后广播 board-changed，Web 端据 SSE 刷新。
  */
 async function handleMoveFile(
   deps: HttpDeps,
@@ -278,6 +290,12 @@ async function handleMoveFile(
     fail(res, 400, '源路径与目标路径相同');
     return;
   }
+
+  // 可选落点坐标 —— Web 端拖拽传入，用于「保留落点」（不走自动排布）。
+  const rawX = (body as Record<string, unknown>)['x'];
+  const rawY = (body as Record<string, unknown>)['y'];
+  const dropX = typeof rawX === 'number' && Number.isFinite(rawX) ? rawX : null;
+  const dropY = typeof rawY === 'number' && Number.isFinite(rawY) ? rawY : null;
 
   // 防目录穿越：from / to 解析后都必须落在 files/ 内
   const filesRoot = resolve(deps.dir, 'files');
@@ -323,8 +341,50 @@ async function handleMoveFile(
     return;
   }
 
-  // 立即 reconcile：旧路径 file 元素移除、新路径元素按区域归位，并广播 board-changed
-  await deps.reconcileNow('move');
+  // 同步画布
+  if (dropX !== null && dropY !== null) {
+    // 带落点：把对应 file 元素改名并定位到落点 —— 保留位置，不自动排布。
+    try {
+      const handle = await loadBoard(deps.dir);
+      const hasEl = handle.scene.elements.some(
+        (el) => el.type === 'file' && el.path === from,
+      );
+      if (hasEl) {
+        const regions = regionsOf(handle.scene.elements);
+        const parent = regionForFile(to, regions);
+        const ts = new Date().toISOString();
+        const moved = handle.scene.elements.map((el) =>
+          el.type === 'file' && el.path === from
+            ? {
+                ...el,
+                path: to,
+                x: dropX,
+                y: dropY,
+                parentId: parent ? parent.id : null,
+                autoPlaced: false,
+                updatedAt: ts,
+              }
+            : el,
+        );
+        // 区域增长以容纳落点处的文件（区域始终包含其内容）
+        const grown = growRegions(moved);
+        await saveBoard(deps.dir, handle.meta, {
+          ...handle.scene,
+          elements: grown.elements,
+        });
+        deps.sse.broadcast({ type: 'board-changed' });
+      } else {
+        // 该文件尚无对应画布元素 —— 退回 reconcile 兜底。
+        await deps.reconcileNow('move');
+      }
+    } catch (err) {
+      fail(res, 500, `移动后同步画布失败: ${errMsg(err)}`);
+      return;
+    }
+  } else {
+    // 无落点（如 CLI mv）：reconcile 自动排布。
+    await deps.reconcileNow('move');
+  }
   ok(res, { from, to });
 }
 

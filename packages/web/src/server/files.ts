@@ -68,22 +68,37 @@ interface MoveEnvelope {
 /**
  * 请求 server 把 `files/` 下的一个文件移动到新的相对路径（画布 → 文件系统）。
  *
- * 用于 Web 端拖动文件卡跨区域：server 重命名真实文件后会 reconcile 并经 SSE
- * 广播 `board-changed`，Web 据此刷新画布。
+ * 用于 Web 端拖动文件卡跨区域：server 重命名真实文件后经 SSE 广播
+ * `board-changed`，Web 据此刷新画布。
+ *
+ * 传入落点 `x,y` 时，server 会把文件卡定位到该落点并**保留位置（不自动排布）**；
+ * 不传则由 server 自动排布。
  *
  * @param from 源相对路径（相对 `files/`）
  * @param to   目标相对路径（相对 `files/`）
+ * @param x    可选，文件卡落点的画布 X 坐标
+ * @param y    可选，文件卡落点的画布 Y 坐标
  * @throws Error 网络不可达、超时、或 server 拒绝移动（错误信息可读，供 UI 提示）。
  */
-export async function moveFile(from: string, to: string): Promise<void> {
+export async function moveFile(
+  from: string,
+  to: string,
+  x?: number,
+  y?: number,
+): Promise<void> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FILE_REQUEST_TIMEOUT_MS);
+  const payload: Record<string, unknown> = { from, to };
+  if (typeof x === 'number' && typeof y === 'number') {
+    payload.x = x;
+    payload.y = y;
+  }
   let res: Response;
   try {
     res = await fetch(`${API_BASE}/files/move`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from, to }),
+      body: JSON.stringify(payload),
       signal: controller.signal,
     });
   } catch (err) {

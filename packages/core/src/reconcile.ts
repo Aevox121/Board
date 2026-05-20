@@ -7,7 +7,7 @@
  *
  * 纯函数，浏览器与 Node 通用。
  */
-import type { BoardScene, FileElement, ParticipantId } from './types.js';
+import type { BoardScene, Element, FileElement, ParticipantId } from './types.js';
 import { regionsOf, regionForFile } from './fs-mapping.js';
 import { createFileElement, nextZ } from './factory.js';
 import {
@@ -111,26 +111,83 @@ export function reconcileFiles(input: ReconcileInput): ReconcileResult {
   }
 
   // 3. 各区域增长到能容纳其全部子元素（grow-only）——「区域必须包含所有内容」。
-  //    只增不减：手动放大的区域不会被缩回；用户手动缩小有内容下限（见 web 缩放）。
-  let regionsGrew = false;
-  for (let i = 0; i < next.length; i += 1) {
-    const r = next[i];
-    if (!r || r.type !== 'region') continue;
-    const kids = next.filter((e) => e.parentId === r.id);
-    if (kids.length === 0) continue;
+  const grown = growRegions(next);
+
+  return {
+    scene: { ...input.scene, elements: grown.elements },
+    added,
+    removed,
+    changed: added.length > 0 || removed.length > 0 || grown.changed,
+  };
+}
+
+/**
+ * 让场景内每个区域增长到能容纳其全部子元素（grow-only，只增不减）。
+ *
+ * 只增不减：手动放大的区域不会被缩回；用户手动缩小另有内容下限（见 web 缩放）。
+ *
+ * @returns 新的元素数组与是否发生变化
+ */
+export function growRegions(elements: Element[]): {
+  elements: Element[];
+  changed: boolean;
+} {
+  let changed = false;
+  const next = elements.map((r) => {
+    if (r.type !== 'region') return r;
+    const kids = elements.filter((e) => e.parentId === r.id);
+    if (kids.length === 0) return r;
     const cs = regionContentSize(r, kids);
     const width = Math.max(r.width, cs.width);
     const height = Math.max(r.height, cs.height);
-    if (width !== r.width || height !== r.height) {
-      next[i] = { ...r, width, height };
-      regionsGrew = true;
+    if (width === r.width && height === r.height) return r;
+    changed = true;
+    return { ...r, width, height };
+  });
+  return { elements: next, changed };
+}
+
+/**
+ * 手动「自动对齐」：把场景内所有 file 元素在其所属区域 / 收件区内重新网格排布。
+ *
+ * 与 reconcile 的新文件排布同构，但作用于全部文件 —— 供右键菜单「自动对齐」调用。
+ * 平时拖拽文件**不**自动对齐（保留落点，类访达），仅用户显式触发本函数时才整理。
+ *
+ * 文件按当前位置（上→下、左→右）排序后逐个落入网格槽位，保留大致顺序。
+ */
+export function arrangeScene(scene: BoardScene): BoardScene {
+  const regions = regionsOf(scene.elements);
+  // 容器列表：收件区 + 各区域
+  const containers: Array<{ id: string | null; rect: Rect }> = [
+    { id: null, rect: INBOX_RECT },
+    ...regions.map((r) => ({
+      id: r.id,
+      rect: { x: r.x, y: r.y, width: r.width, height: r.height },
+    })),
+  ];
+
+  const placed = new Map<string, { x: number; y: number }>();
+  for (const container of containers) {
+    const files = scene.elements
+      .filter(
+        (e): e is FileElement =>
+          e.type === 'file' && (e.parentId ?? null) === container.id,
+      )
+      .sort((a, b) => a.y - b.y || a.x - b.x);
+    const occupied: Rect[] = [];
+    for (const f of files) {
+      const size = { width: f.width, height: f.height };
+      const pos = nextSlot(container.rect, occupied, size);
+      placed.set(f.id, pos);
+      occupied.push({ ...pos, width: size.width, height: size.height });
     }
   }
+  if (placed.size === 0) return scene;
 
-  return {
-    scene: { ...input.scene, elements: next },
-    added,
-    removed,
-    changed: added.length > 0 || removed.length > 0 || regionsGrew,
-  };
+  const repositioned = scene.elements.map((e) => {
+    const p = placed.get(e.id);
+    return p ? ({ ...e, x: p.x, y: p.y, autoPlaced: true } as Element) : e;
+  });
+  const grown = growRegions(repositioned);
+  return { ...scene, elements: grown.elements };
 }

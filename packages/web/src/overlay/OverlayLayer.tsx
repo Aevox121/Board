@@ -16,14 +16,14 @@
  *  - 区域可拖拽（拖头部）与八向缩放（四角四边手柄）。缩放下限钳制为
  *    「内容包围盒」—— 区域不会缩到压住其内文件。区域增删改经 PUT 落盘。
  */
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   BoardScene,
   Element,
   FileElement,
   RegionElement,
 } from '@board/core';
-import { regionsOf, regionForFile } from '@board/core';
+import { regionsOf, regionForFile, arrangeScene } from '@board/core';
 import { useBoard } from '../board/BoardContext';
 import { moveFile } from '../server/files';
 import { putScene } from '../server/client';
@@ -195,6 +195,8 @@ export function OverlayLayer({
   // 拖拽 / 缩放瞬时状态；null = 未在进行。
   const [drag, setDrag] = useState<DragState | null>(null);
   const [resize, setResize] = useState<ResizeState | null>(null);
+  // 右键上下文菜单位置（屏幕坐标）；null = 未显示。
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
   // 持有最新场景，供拖拽结束（可能在异步之后）的落点计算读取，避免闭包陈旧。
   const sceneRef = useRef(scene);
@@ -221,6 +223,16 @@ export function OverlayLayer({
     const target = regionForCard(cardRect, regionsOf(scene.elements));
     return target ? target.id : null;
   }, [drag, scene.elements]);
+
+  // 上下文菜单打开时，Esc 关闭。
+  useEffect(() => {
+    if (!menu) return;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setMenu(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [menu]);
 
   /** 把场景中某元素的若干 envelope 字段打补丁，返回新场景。 */
   function patchElement(
@@ -304,8 +316,9 @@ export function OverlayLayer({
     });
     replaceScene(optimistic, 'canvas');
     try {
-      await moveFile(el.path, to);
-      // 成功：server 已 reconcile 并广播 board-changed，App 会经 SSE 刷回权威场景。
+      // 传落点 —— server 据此把文件卡定位到松手处并保留位置（不自动排布）。
+      await moveFile(el.path, to, finalX, finalY);
+      // 成功：server 已同步并广播 board-changed，App 会经 SSE 刷回权威场景。
     } catch (err) {
       // 失败：回滚到拖拽前场景并提示原因（如目标区域已有同名文件）。
       replaceScene(base, 'canvas');
@@ -515,6 +528,26 @@ export function OverlayLayer({
     setResize((r) => (r && r.pointerId === e.pointerId ? null : r));
   }
 
+  /** 右键内容元素 —— 打开 Board 上下文菜单（阻止浏览器默认菜单）。 */
+  function handleContextMenu(e: React.MouseEvent<HTMLDivElement>): void {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenu({ x: e.clientX, y: e.clientY });
+  }
+
+  /** 关闭上下文菜单。 */
+  function closeMenu(): void {
+    setMenu(null);
+  }
+
+  /** 菜单项「自动对齐」—— 把所有文件在其区域 / 收件区内重新网格排布。 */
+  function handleAutoArrange(): void {
+    const next = arrangeScene(sceneRef.current);
+    replaceScene(next, 'canvas');
+    persist(next, '自动对齐');
+    closeMenu();
+  }
+
   // 变换容器样式 —— 复刻 Excalidraw 的 screen = (canvas + scroll) * zoom。
   const transformStyle: React.CSSProperties = {
     transform: `translate(${scrollX * zoom}px, ${scrollY * zoom}px) scale(${zoom})`,
@@ -523,7 +556,11 @@ export function OverlayLayer({
 
   return (
     <div className="ov-root" aria-hidden={contentElements.length === 0}>
-      <div className="ov-transform" style={transformStyle}>
+      <div
+        className="ov-transform"
+        style={transformStyle}
+        onContextMenu={handleContextMenu}
+      >
         {contentElements.map((el) => {
           const isFile = el.type === 'file';
 
@@ -615,6 +652,38 @@ export function OverlayLayer({
           );
         })}
       </div>
+
+      {/* 右键上下文菜单 —— 唯一项「自动对齐」（平时拖拽不自动对齐，类访达） */}
+      {menu ? (
+        <>
+          <div
+            className="ov-menu-backdrop"
+            onPointerDown={closeMenu}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              closeMenu();
+            }}
+          />
+          <div
+            className="ov-menu"
+            style={{
+              left: `${Math.min(menu.x, window.innerWidth - 196)}px`,
+              top: `${Math.min(menu.y, window.innerHeight - 56)}px`,
+            }}
+          >
+            <button
+              type="button"
+              className="ov-menu__item"
+              onClick={handleAutoArrange}
+            >
+              <span className="ov-menu__icon" aria-hidden="true">
+                ▦
+              </span>
+              自动对齐文件
+            </button>
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

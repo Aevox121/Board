@@ -404,3 +404,53 @@
 .ov-region__rz--se:hover::after {
   opacity: 1;
 }
+
+/* ── 右键上下文菜单 ─────────────────────────────────────────────
+ * 干净的暖色 UI（同顶栏风格，非手绘）。屏幕定位，故为 .ov-root 的直接
+ * 子元素、不进变换容器。.ov-root 自身 pointer-events:none，菜单单独开启。 */
+.ov-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  pointer-events: auto;
+}
+
+.ov-menu {
+  position: fixed;
+  z-index: 51;
+  pointer-events: auto;
+  min-width: 184px;
+  padding: var(--space-1);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg, 0 10px 28px rgba(60, 40, 30, 0.28));
+  font-family: var(--font-ui);
+}
+
+.ov-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  color: var(--c-ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ov-menu__item:hover {
+  background: var(--c-surface-sunken);
+}
+
+.ov-menu__icon {
+  flex: 0 0 auto;
+  font-size: var(--text-md);
+  line-height: 1;
+  color: var(--c-accent);
+}
