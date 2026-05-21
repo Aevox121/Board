@@ -75,6 +75,64 @@ export interface OverlayViewport {
   zoom: number;
 }
 
+/**
+ * 连线目标外包围高亮 —— 按元素形状套一圈半透明高亮环，贴着元素外缘。
+ * 矩形 / 卡片 / 手绘用圆角矩形环；图形按其形状（椭圆 → 椭圆环、菱形 →
+ * 菱形环）。环宽 = 自动连接识别宽度（CONNECT_TOL）、内缘贴元素边。
+ */
+function ConnectTargetRing({ element }: { element: Element }): JSX.Element {
+  const w = element.width;
+  const h = element.height;
+  const half = CONNECT_TOL / 2;
+  // 描边居中于路径：路径外扩 half，描边宽 CONNECT_TOL → 环内缘恰贴元素边。
+  const common = {
+    className: 'ov-connect-target__shape',
+    fill: 'none',
+    strokeWidth: CONNECT_TOL,
+  } as const;
+  let ring: JSX.Element;
+  if (element.type === 'shape' && element.shape === 'ellipse') {
+    ring = (
+      <ellipse
+        cx={w / 2}
+        cy={h / 2}
+        rx={w / 2 + half}
+        ry={h / 2 + half}
+        {...common}
+      />
+    );
+  } else if (element.type === 'shape' && element.shape === 'diamond') {
+    ring = (
+      <polygon
+        points={`${w / 2},${-half} ${w + half},${h / 2} ${w / 2},${h + half} ${-half},${h / 2}`}
+        {...common}
+      />
+    );
+  } else {
+    ring = (
+      <rect
+        x={-half}
+        y={-half}
+        width={w + CONNECT_TOL}
+        height={h + CONNECT_TOL}
+        rx={8}
+        {...common}
+      />
+    );
+  }
+  return (
+    <svg
+      className="ov-connect-target"
+      style={{ left: `${element.x}px`, top: `${element.y}px` }}
+      width={w}
+      height={h}
+      aria-hidden="true"
+    >
+      {ring}
+    </svg>
+  );
+}
+
 export interface OverlayLayerProps {
   /** 内存中的白板场景（board.json 真相源）。 */
   scene: BoardScene;
@@ -1842,20 +1900,8 @@ export function OverlayLayer({
           </div>
         ))}
 
-        {/* 连线模式：仅给鼠标悬停的元素画一圈外包围高亮，圈宽 = 自动连接
-            识别宽度（CONNECT_TOL）。未悬停任何元素时界面不变。 */}
-        {hoverConnEl ? (
-          <div
-            className="ov-connect-target"
-            style={{
-              left: `${hoverConnEl.x - CONNECT_TOL}px`,
-              top: `${hoverConnEl.y - CONNECT_TOL}px`,
-              width: `${hoverConnEl.width + CONNECT_TOL * 2}px`,
-              height: `${hoverConnEl.height + CONNECT_TOL * 2}px`,
-            }}
-            aria-hidden="true"
-          />
-        ) : null}
+        {/* 连线 / 端点拖拽：给悬停的元素套一圈贴合其形状的外包围高亮。 */}
+        {hoverConnEl ? <ConnectTargetRing element={hoverConnEl} /> : null}
 
         {/* 右键框选的虚线框 */}
         {marquee ? (

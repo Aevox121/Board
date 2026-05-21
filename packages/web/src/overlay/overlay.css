@@ -1191,16 +1191,19 @@
   pointer-events: none;
 }
 
-/* 连线目标外包围高亮 —— 连线模式下，鼠标悬停某元素时仅给它套一圈半透明
- * 陶土橙。圈宽 = 自动连接的识别宽度（与 OverlayLayer 的 CONNECT_TOL 一致，
- * 12px）。靠 12px 边框形成「外包围环」，中心透明、不挡元素内容。 */
+/* 连线目标外包围高亮 —— 鼠标悬停 / 连线端点拖拽落点处的元素套一圈半透明
+ * 陶土橙环，贴着元素外缘、形状与元素一致（矩形 / 椭圆 / 菱形）。环宽 =
+ * 自动连接识别宽度（CONNECT_TOL，12px）。svg overflow:visible 让环画到
+ * 元素包围盒之外。 */
 .ov-connect-target {
   position: absolute;
-  box-sizing: border-box;
-  border: 12px solid var(--c-accent);
-  border-radius: var(--radius-md);
+  overflow: visible;
   opacity: 0.3;
   pointer-events: none;
+}
+
+.ov-connect-target__shape {
+  stroke: var(--c-accent);
 }
 
 /* ── 覆盖层元素样式面板（StylePanel）──────────────────────────────
