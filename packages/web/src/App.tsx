@@ -9,13 +9,13 @@
  *  - server 可达 → 载入其持有的真实 .board，进入「已连接」模式，「保存」可用。
  *  - server 不可达 → 「离线」模式，保留空白板 + 导入/导出兜底。
  *
- * M2 实时刷新：
+ * 实时同步（M2 SSE / M4 操作级）：
  *  - 进入「已连接」模式后，用 EventSource 订阅 server 的 `/api/events` SSE。
- *  - 收到 `{"type":"board-changed"}` → 重新 fetchBoard() 刷新场景（含覆盖层）。
+ *  - 收到 `board-changed`（文件变化等）→ 重新 fetchBoard() 整板刷新。
+ *  - 收到 `ops` 帧（M4）→ 按元素 id 增量合并，不整板覆盖。
+ *  - 本地编辑 → diff 出增量 ops 发往 server（POST /api/ops），只发本端动过的
+ *    元素 —— 多端（CLI / 其他浏览器）并发写互不覆盖。
  *  - server 不可达 / 端点未实现时 SSE 静默失败，不影响离线模式。
- *
- * 后续里程碑在此基础上叠加：
- *  - M3：Agent 在场、Pencil 式过程可视化
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BoardProvider, useBoard } from './board/BoardContext';
@@ -23,8 +23,8 @@ import { TopBar, type SaveState } from './components/TopBar';
 import { BoardCanvas } from './components/BoardCanvas';
 import { FolderPanel } from './components/FolderPanel';
 import { downloadBoardJSON, pickAndParseBoardJSON } from './board/boardFile';
-import { BoardParseError } from '@board/core';
-import { checkHealth, fetchBoard, putScene, ServerError } from './server/client';
+import { BoardParseError, diffToOps, type BoardOp, type BoardScene } from '@board/core';
+import { checkHealth, fetchBoard, sendOps, ServerError } from './server/client';
 import { subscribeBoardEvents } from './server/events';
 import './App.css';
 
@@ -37,6 +37,7 @@ function BoardApp(): JSX.Element {
     renameBoard,
     replaceScene,
     loadFromServer,
+    applyRemoteOps,
     importTick,
   } = useBoard();
 
@@ -49,14 +50,20 @@ function BoardApp(): JSX.Element {
   // 防止 React 18 StrictMode 下 effect 跑两遍而重复探测/重复载入。
   const probedRef = useRef(false);
 
-  // 用 ref 持有最新的 loadFromServer，供 SSE 回调闭包稳定引用。
+  // 用 ref 持有最新的 loadFromServer / applyRemoteOps，供 SSE 回调闭包稳定引用。
   const loadFromServerRef = useRef(loadFromServer);
   loadFromServerRef.current = loadFromServer;
+  const applyRemoteOpsRef = useRef(applyRemoteOps);
+  applyRemoteOpsRef.current = applyRemoteOps;
 
-  // 自动保存：防抖计时器 + 上次见到的 importTick（用于区分「本地画布编辑」
-  // 与「导入 / server 载入」—— 后者会自增 importTick，不应被回存）。
+  // 自动同步：防抖计时器 + 上次见到的 importTick（用于区分「本地画布编辑」
+  // 与「导入 / server 载入 / 远端 ops」—— 后者会自增 importTick，不应被回发）。
   const saveTimerRef = useRef<number | undefined>(undefined);
   const lastTickRef = useRef(0);
+  // 本端会话 id —— 随 ops 发往 server，使本端能忽略自己回声的 ops 帧。
+  const clientIdRef = useRef<string>(crypto.randomUUID());
+  // 「已与 server 同步」的场景基线 —— 自动同步据此 diff 出本端的增量 ops。
+  const lastSyncedRef = useRef<BoardScene>(scene);
 
   // ── 启动时探测 board-server（整个生命周期仅一次）──────────────
   // probedRef 保证只探测一次（含 StrictMode 二次挂载）。
@@ -89,7 +96,7 @@ function BoardApp(): JSX.Element {
   useEffect(() => {
     if (connection !== 'connected') return;
 
-    // 收到 board-changed → 重新拉取白板并替换内存场景。
+    // 收到 board-changed（reconcile / 文件变化等非操作流改动）→ 整板重新拉取。
     // 重新拉取失败（server 临时不可达）不报错 —— 保留当前场景，等下次事件。
     const handleBoardChanged = (): void => {
       void (async () => {
@@ -108,33 +115,52 @@ function BoardApp(): JSX.Element {
       })();
     };
 
-    const unsubscribe = subscribeBoardEvents(handleBoardChanged);
+    // 收到 ops 帧（M4 实时同步）→ 按元素 id 增量合并进本地场景。
+    // origin 为本端会话 id 时是自己的回声，忽略。
+    const handleOps = (frame: { ops: unknown; origin: string }): void => {
+      if (frame.origin === clientIdRef.current) return;
+      if (!Array.isArray(frame.ops)) return;
+      applyRemoteOpsRef.current(frame.ops as BoardOp[]);
+    };
+
+    const unsubscribe = subscribeBoardEvents({
+      onBoardChanged: handleBoardChanged,
+      onOps: handleOps,
+    });
     return unsubscribe;
   }, [connection]);
 
-  // ── 本地画布编辑自动保存 ─────────────────────────────────────────
-  // 画布上画的图形 / 连线 / 文本等只更新内存场景，不经 server reconcile
-  // 持久化 —— 不自动保存的话刷新就丢。这里在场景变化后防抖 800ms putScene。
-  // 仅本地编辑触发：导入 / server 载入会自增 importTick，据此跳过，避免把
-  // server 刚下发的数据又原样回存（回声）。
+  // ── 本地画布编辑自动同步（M4：操作级）────────────────────────────
+  // 画布上画的图形 / 连线 / 文本等只更新内存场景 —— 不同步的话刷新就丢。
+  // 这里在场景变化后防抖 800ms，diff 出「本端改了哪些元素」的增量 ops 发往
+  // server。关键：只发本端动过的元素 —— 不整场景覆盖，故不会冲掉别端（CLI /
+  // 其他浏览器）的并发改动。
+  // 仅本地编辑触发：导入 / server 载入 / 远端 ops 会自增 importTick，据此跳过，
+  // 同时把同步基线对齐到当前场景。
   useEffect(() => {
     if (connection !== 'connected') return;
     if (importTick !== lastTickRef.current) {
-      // 本次场景变化来自导入 / server 载入 —— 不回存。
+      // 本次场景变化来自导入 / server 载入 / 远端 ops —— 即「已同步」态：
+      // 对齐同步基线，不回发（否则会把刚收到的数据原样发回去）。
       lastTickRef.current = importTick;
+      lastSyncedRef.current = scene;
       return;
     }
     window.clearTimeout(saveTimerRef.current);
     saveTimerRef.current = window.setTimeout(() => {
+      const ops = diffToOps(lastSyncedRef.current, scene);
+      if (ops.length === 0) return;
+      const synced = scene;
       setSaveState('saving');
-      void putScene(scene)
+      void sendOps(ops, clientIdRef.current)
         .then(() => {
+          lastSyncedRef.current = synced;
           setSaveState('saved');
           window.setTimeout(() => setSaveState('idle'), 1500);
         })
         .catch((err) => {
           setSaveState('error');
-          console.warn('[board-web] 自动保存失败（可手动点保存）：', err);
+          console.warn('[board-web] 自动同步失败（可手动点保存）：', err);
           window.setTimeout(() => setSaveState('idle'), 2000);
         });
     }, 800);
@@ -161,14 +187,22 @@ function BoardApp(): JSX.Element {
     }
   }, [replaceScene]);
 
-  // ── 保存到 server（已连接模式下手动触发）────────────────────
+  // ── 同步到 server（已连接模式下手动触发）────────────────────
+  // 与自动同步同源：diff 出本端增量 ops 发往 server，不整场景覆盖。
   const handleSave = useCallback(async () => {
     if (connection !== 'connected') return;
+    const ops = diffToOps(lastSyncedRef.current, scene);
+    if (ops.length === 0) {
+      setSaveState('saved');
+      window.setTimeout(() => setSaveState('idle'), 1500);
+      return;
+    }
+    const synced = scene;
     setSaveState('saving');
     try {
-      await putScene(scene);
+      await sendOps(ops, clientIdRef.current);
+      lastSyncedRef.current = synced;
       setSaveState('saved');
-      // 「已保存」提示 2 秒后回落到 idle。
       window.setTimeout(() => setSaveState('idle'), 2000);
     } catch (err) {
       setSaveState('error');

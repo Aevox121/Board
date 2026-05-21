@@ -7,18 +7,20 @@
  *  - GET  /api/health           → 服务状态（M1）
  *  - GET  /api/board            → { meta, scene, files }（M1）
  *  - PUT  /api/board            → 请求体 { scene } → saveBoard 落盘（M1）
+ *  - POST /api/ops              → 元素级操作合并入 board.json（M4：实时同步）
  *  - GET  /api/files/<相对路径>  → files/ 下文件原始内容（M2，含防目录穿越）
  *  - POST /api/files/move       → 移动 files/ 内文件（M2 增量2：画布→文件系统）
  *  - POST /api/tasks            → 新建 Agent 任务（M3：Pencil 式过程可视化）
  *  - POST /api/tasks/progress   → 上报任务进度
  *  - POST /api/tasks/finish     → 完成任务，draft 元素转 committed
  *  - DELETE /api/tasks/<id>     → 移除任务（× 关闭 / 完成态超时清理）
- *  - POST /api/refresh          → 外部写入后主动触发 board-changed 广播（M3）
+ *  - POST /api/refresh          → 外部写入后触发同步（事件流 + board-changed，M3）
  *  - POST /api/suggestions/accept  → 同意建议（M3：建议机制，PRD §7.3）
  *  - POST /api/suggestions/reject  → 拒绝建议
  *  - POST /api/suggestions/describe → 向建议追加反馈
  *  - POST /api/elements/delete  → 删除元素（file 移入回收站、连带清引用）
- *  - GET  /api/events           → SSE，board 变化时推送 board-changed（M2）
+ *  - GET  /api/events           → SSE，board-changed + 结构化事件流（M2/M4）
+ *  - GET  /api/events/log       → 按游标增量拉取留存事件（M4：事件流）
  */
 import { createReadStream } from 'node:fs';
 import { mkdir, rename, stat } from 'node:fs/promises';
@@ -26,23 +28,28 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import {
   acceptSuggestion,
+  applyOps,
   clampPercent,
   commitDraftElements,
   createTask,
   describeSuggestion,
   growRegions,
   guessMime,
+  isBoardOp,
   normalizePath,
   regionForFile,
   regionsOf,
   rejectSuggestion,
   removeElement,
   SCHEMA_VERSION,
+  type BoardEventType,
+  type BoardOp,
   type BoardScene,
   type BoardTask,
   type SuggestionResult,
 } from '@board/core';
 import { loadBoard, saveBoard } from '@board/core/node';
+import type { EventLog } from './events.js';
 import type { SseHub } from './sse.js';
 import type { TaskStore } from './tasks.js';
 
@@ -69,6 +76,24 @@ export interface HttpDeps {
    * 不必等 chokidar 监听的防抖窗口。
    */
   reconcileNow(reason: string): Promise<void>;
+  /** 事件日志 —— GET /api/events/log 按游标增量拉取。 */
+  events: EventLog;
+  /**
+   * 比对 board.json 与基线场景，产出 element / file / region 类事件并广播；
+   * 末尾广播 board-changed。改动 board.json 的整场景写操作完成后调用。
+   */
+  recordChange(actor: string): Promise<void>;
+  /**
+   * 操作级写入（POST /api/ops）完成后调用：产事件流事件 + 广播 ops 帧
+   * （各端据此增量更新；`origin` 让发起方忽略回声）。不广播 board-changed。
+   */
+  recordOps(actor: string, ops: BoardOp[], origin: string): Promise<void>;
+  /** 直接发出一条结构化事件（task 等非 board.json 来源用）。 */
+  emitEvent(
+    type: BoardEventType,
+    actor: string,
+    payload: Record<string, unknown>,
+  ): void;
 }
 
 const HOST = '127.0.0.1';
@@ -190,7 +215,68 @@ async function handlePutBoard(
     return;
   }
 
+  // 比对前后场景产出事件（board watch / 多端订阅据此感知 Web 编辑）。
+  await deps.recordChange('u_local');
   ok(res, { saved: true });
+}
+
+/**
+ * POST /api/ops —— 应用一批元素级操作（M4：操作级实时同步）。
+ *
+ * 请求体 `{ ops, actor?, origin? }`。各客户端只发「自己改了哪些元素」的增量
+ * 操作（upsert / delete），服务端按 id 合并进 board.json —— 取代整场景 PUT，
+ * 消除并发写时的「后写覆盖前写」。应用后广播 `{type:'ops',...}`，其余客户端
+ * 据此增量更新；`origin`（客户端 id）让发起方忽略自己的回声。
+ */
+async function handleApplyOps(
+  deps: HttpDeps,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch (err) {
+    fail(res, 400, errMsg(err));
+    return;
+  }
+  if (typeof body !== 'object' || body === null) {
+    fail(res, 400, '请求体必须为 { ops: BoardOp[] }');
+    return;
+  }
+  const rec = body as Record<string, unknown>;
+  const rawOps = rec['ops'];
+  if (!Array.isArray(rawOps) || !rawOps.every(isBoardOp)) {
+    fail(res, 400, 'ops 必须为合法的 BoardOp 数组（upsert / delete）');
+    return;
+  }
+  const ops = rawOps as BoardOp[];
+  const actor =
+    typeof rec['actor'] === 'string' && rec['actor'] ? rec['actor'] : 'u_local';
+  const origin = typeof rec['origin'] === 'string' ? rec['origin'] : '';
+
+  if (ops.length === 0) {
+    ok(res, { applied: 0 });
+    return;
+  }
+
+  let handle;
+  try {
+    handle = await loadBoard(deps.dir);
+  } catch (err) {
+    fail(res, 404, `读取白板失败: ${errMsg(err)}`);
+    return;
+  }
+  const next = applyOps(handle.scene, ops);
+  try {
+    await saveBoard(deps.dir, handle.meta, next);
+  } catch (err) {
+    fail(res, 500, `保存白板失败: ${errMsg(err)}`);
+    return;
+  }
+
+  await deps.recordOps(actor, ops, origin);
+  ok(res, { applied: ops.length });
 }
 
 /**
@@ -394,7 +480,7 @@ async function handleMoveFile(
           ...handle.scene,
           elements: grown.elements,
         });
-        deps.sse.broadcast({ type: 'board-changed' });
+        await deps.recordChange('u_local');
       } else {
         // 该文件尚无对应画布元素 —— 退回 reconcile 兜底。
         await deps.reconcileNow('move');
@@ -473,6 +559,11 @@ async function handleCreateTask(
 
   const task = createTask({ title, agentId, regionId, x, y });
   await deps.tasks.put(task);
+  deps.emitEvent('agent.task.started', agentId, {
+    taskId: task.id,
+    title,
+    region: regionName || null,
+  });
   deps.sse.broadcast({ type: 'board-changed' });
   ok(res, { taskId: task.id, task });
 }
@@ -513,6 +604,11 @@ async function handleTaskProgress(
     next.percent = clampPercent(rec['percent']);
   }
   await deps.tasks.put(next);
+  deps.emitEvent('agent.task.progress', next.agentId, {
+    taskId: next.id,
+    step: next.steps[next.steps.length - 1]?.text ?? null,
+    percent: next.percent,
+  });
   deps.sse.broadcast({ type: 'board-changed' });
   ok(res, { task: next });
 }
@@ -560,16 +656,28 @@ async function handleTaskFinish(
   await deps.tasks.put(next);
 
   // 提交本流程产出的 draft 态元素 → committed。失败不影响任务完成本身。
+  let committedChanged = false;
   try {
     const handle = await loadBoard(deps.dir);
     const committed = commitDraftElements(handle.scene, task.agentId);
     if (committed.changed) {
       await saveBoard(deps.dir, handle.meta, committed.scene);
+      committedChanged = true;
     }
   } catch (err) {
     console.error('[board-server] task.finish 提交 draft 元素失败:', err);
   }
-  deps.sse.broadcast({ type: 'board-changed' });
+  deps.emitEvent('agent.task.finished', task.agentId, {
+    taskId: next.id,
+    summary: next.summary,
+  });
+  // draft → committed 改了 board.json，比对产出 element.updated 事件并广播；
+  // 无 draft 元素时只发 board-changed 即可。
+  if (committedChanged) {
+    await deps.recordChange(task.agentId);
+  } else {
+    deps.sse.broadcast({ type: 'board-changed' });
+  }
   ok(res, { task: next });
 }
 
@@ -596,13 +704,28 @@ async function handleDeleteTask(
 }
 
 /**
- * POST /api/refresh —— 主动触发一次 board-changed 广播。
+ * POST /api/refresh —— 外部写入后主动触发同步。
  *
  * 供「绕过 server 直接改 .board 的外部写入方」（如 CLI / MCP Server 的内容操作）
- * 在写入 board.json 后调用，使 Web 端经 SSE 实时刷新。
+ * 在写入 board.json 后调用：比对场景产出事件流、并广播 board-changed 让 Web
+ * 实时刷新。请求体可选 `{ actor }` —— 带上则事件归因更准，省略默认 `u_local`。
  */
-function handleRefresh(deps: HttpDeps, res: ServerResponse): void {
-  deps.sse.broadcast({ type: 'board-changed' });
+async function handleRefresh(
+  deps: HttpDeps,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  let actor = 'u_local';
+  try {
+    const body = await readJsonBody(req);
+    if (typeof body === 'object' && body !== null) {
+      const a = (body as Record<string, unknown>)['actor'];
+      if (typeof a === 'string' && a) actor = a;
+    }
+  } catch {
+    // refresh 允许空请求体 —— 用默认 actor。
+  }
+  await deps.recordChange(actor);
   ok(res, { refreshed: true });
 }
 
@@ -679,7 +802,16 @@ async function handleSuggestionOp(
       return;
     }
   }
-  deps.sse.broadcast({ type: 'board-changed' });
+  // 语义事件 —— accept/reject/describe 的意图无法由场景 diff 还原，直接发。
+  const semantic: BoardEventType =
+    op === 'accept'
+      ? 'suggestion.accepted'
+      : op === 'reject'
+        ? 'suggestion.rejected'
+        : 'suggestion.commented';
+  deps.emitEvent(semantic, actor, { suggestionId });
+  // 再比对场景，产出建议元素移除 / 目标更新等 element.* 事件并广播 board-changed。
+  await deps.recordChange(actor);
   ok(res, { suggestionId, op });
 }
 
@@ -716,6 +848,8 @@ async function handleDeleteElement(
     fail(res, 400, '缺少 elementId');
     return;
   }
+  const rawActor = (body as Record<string, unknown>)['actor'];
+  const actor = typeof rawActor === 'string' && rawActor ? rawActor : 'u_local';
 
   let handle;
   try {
@@ -767,13 +901,38 @@ async function handleDeleteElement(
     }
   }
 
-  deps.sse.broadcast({ type: 'board-changed' });
+  // 比对场景产出 element.deleted / file.deleted（含连带清理的连线 / 建议）事件。
+  await deps.recordChange(actor);
   ok(res, { removed: elementId, type: target.type, trashedFile, removedRefs });
 }
 
-/** GET /api/events —— SSE 长连接，board 变化时推送 board-changed。 */
+/**
+ * GET /api/events —— SSE 长连接。两类帧共享此通道：
+ *  - `board-changed` —— Web 据此整板刷新；
+ *  - 结构化 `BoardEvent`（带 `seq`）—— `board watch` 据此输出事件流。
+ */
 function handleEvents(deps: HttpDeps, req: IncomingMessage, res: ServerResponse): void {
   deps.sse.handle(req, res);
+}
+
+/**
+ * GET /api/events/log?since=<seq>&region=<名> —— 按游标增量拉取留存事件。
+ *
+ * 供 MCP `board_subscribe_events` 轮询：传上次拿到的 `cursor`，取其后的新事件。
+ * `region` 可选 —— 只返回 payload.region 命中该区域的事件。
+ */
+function handleEventLog(deps: HttpDeps, res: ServerResponse, url: URL): void {
+  const sinceRaw = url.searchParams.get('since');
+  const since =
+    sinceRaw !== null && sinceRaw !== '' && Number.isFinite(Number(sinceRaw))
+      ? Number(sinceRaw)
+      : 0;
+  const region = url.searchParams.get('region');
+  let list = deps.events.since(since);
+  if (region) {
+    list = list.filter((e) => e.payload['region'] === region);
+  }
+  ok(res, { events: list, cursor: deps.events.cursor() });
 }
 
 /** 轻量结构校验：判断一个值是否像 BoardScene。 */
@@ -838,6 +997,16 @@ async function route(
     await handlePutBoard(deps, req, res);
     return;
   }
+  // POST /api/ops —— 操作级实时同步（M4）
+  if (path === '/api/ops' && method === 'POST') {
+    await handleApplyOps(deps, req, res);
+    return;
+  }
+  // GET /api/events/log —— 事件增量拉取；须先于 /api/events 判断
+  if (path === '/api/events/log' && method === 'GET') {
+    handleEventLog(deps, res, url);
+    return;
+  }
   if (path === '/api/events' && method === 'GET') {
     handleEvents(deps, req, res);
     return;
@@ -865,9 +1034,9 @@ async function route(
     await handleDeleteTask(deps, res, path.slice('/api/tasks/'.length));
     return;
   }
-  // POST /api/refresh —— 外部写入后主动触发 board-changed 广播
+  // POST /api/refresh —— 外部写入后主动触发同步（事件流 + board-changed）
   if (path === '/api/refresh' && method === 'POST') {
-    handleRefresh(deps, res);
+    await handleRefresh(deps, req, res);
     return;
   }
   // POST /api/suggestions/<op> —— 建议机制三操作（M3，PRD §7.3）

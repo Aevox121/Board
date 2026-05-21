@@ -10,11 +10,13 @@
  * 端点：
  *  - `checkHealth()` —— GET /api/health，探测服务是否可达。
  *  - `fetchBoard()`  —— GET /api/board，取 meta + scene + files。
- *  - `putScene()`    —— PUT /api/board，把当前场景落盘。
+ *  - `putScene()`    —— PUT /api/board，整场景落盘（导入等全量替换用）。
+ *  - `sendOps()`     —— POST /api/ops，提交元素级增量操作（M4 实时同步）。
  */
 import {
   type BoardScene,
   type BoardMeta,
+  type BoardOp,
   type BoardTask,
   parseScene,
   parseMeta,
@@ -181,6 +183,24 @@ export async function putScene(scene: BoardScene): Promise<void> {
     body: JSON.stringify({ scene }),
   });
   await readEnvelope<{ saved: boolean }>(res, 'PUT /api/board');
+}
+
+/**
+ * 提交一批元素级操作到 server（POST /api/ops）—— M4 操作级实时同步。
+ *
+ * 取代整场景 PUT：只发「本端改了哪些元素」的增量操作，server 按元素 id
+ * 合并 —— 多端并发写时互不覆盖。`origin` 为本端会话 id，server 把它带进
+ * 广播帧，使本端能忽略自己的回声。
+ *
+ * @throws ServerError —— 服务不可达、HTTP 错误、或 server 拒绝。
+ */
+export async function sendOps(ops: BoardOp[], origin: string): Promise<void> {
+  const res = await fetchWithTimeout('/ops', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ops, origin }),
+  });
+  await readEnvelope<{ applied: number }>(res, 'POST /api/ops');
 }
 
 /**

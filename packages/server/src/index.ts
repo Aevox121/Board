@@ -15,7 +15,14 @@
  *  - M4：Yjs 协同文档 + 中继服务器对接
  */
 import { resolve } from 'node:path';
+import {
+  diffScenes,
+  type BoardEventType,
+  type BoardOp,
+  type BoardScene,
+} from '@board/core';
 import { listBoardFiles, loadBoard } from '@board/core/node';
+import { createEventLog } from './events.js';
 import { createHttpServer, HOST, type HttpDeps } from './http.js';
 import { runReconcile } from './reconcile.js';
 import { createSseHub } from './sse.js';
@@ -84,9 +91,86 @@ async function main(): Promise<void> {
   // Agent 任务运行时存储（Pencil 式过程可视化）—— 从 .runtime/tasks.json 恢复
   const tasks = await createTaskStore(dir);
 
+  // 事件日志：编号 + 留存最近事件，供 board watch / board_subscribe_events 订阅
+  const events = createEventLog();
+
+  // 服务启动时先做一次初始 reconcile，让 files/ 里已有文件生成 file 元素。
+  // 启动 reconcile 不产事件 —— 已有文件不是「新增」。
+  try {
+    await runReconcile(dir, SYSTEM_ACTOR);
+  } catch (err) {
+    console.error('[board-server] 启动 reconcile 失败:', err);
+  }
+
+  // 事件 diff 的基线场景 —— 取启动 reconcile 之后的场景。后续每次变更都与它比对。
+  let lastScene: BoardScene = (await loadBoard(dir)).scene;
+
+  /**
+   * 比对 board.json 与基线场景，产出 element / file / region 类事件流事件并
+   * 广播，更新基线。不广播 board-changed / ops —— 由调用方按写入方式补。
+   */
+  async function syncSceneEvents(actor: string): Promise<void> {
+    try {
+      const handle = await loadBoard(dir);
+      const drafts = diffScenes(lastScene, handle.scene, actor);
+      lastScene = handle.scene;
+      for (const evt of events.append(drafts)) sse.broadcast(evt);
+    } catch (err) {
+      console.error('[board-server] 记录变更事件失败:', err);
+    }
+  }
+
+  /**
+   * 串行化执行 —— 并发写时若两次 diff 撞同一基线，会把同一批变更重复发两遍；
+   * 用 Promise 链强制顺序执行，规避此竞争。
+   */
+  let recordChain: Promise<void> = Promise.resolve();
+  function serialize(fn: () => Promise<void>): Promise<void> {
+    recordChain = recordChain.then(fn);
+    return recordChain;
+  }
+
+  /**
+   * 整场景写入（PUT / reconcile / 端点等）后：产事件流事件 + 广播 board-changed
+   * （Web 据此整板刷新）。
+   */
+  function recordChange(actor: string): Promise<void> {
+    return serialize(async () => {
+      await syncSceneEvents(actor);
+      sse.broadcast({ type: 'board-changed' });
+    });
+  }
+
+  /**
+   * 操作级写入（POST /api/ops）后：产事件流事件 + 广播 ops 帧。各端据 ops 帧
+   * 增量更新；`origin` 让发起方忽略自己的回声。不广播 board-changed —— 避免
+   * 各端再做一次整板刷新、把彼此未同步的本地编辑冲掉。
+   */
+  function recordOps(actor: string, ops: BoardOp[], origin: string): Promise<void> {
+    return serialize(async () => {
+      await syncSceneEvents(actor);
+      const frame = { type: 'ops', ops, origin };
+      sse.broadcast(frame);
+    });
+  }
+
+  /**
+   * 直接发出一条结构化事件（task 等非 board.json 来源用）。
+   * 不广播 board-changed —— 调用方按需自行广播。
+   */
+  function emitEvent(
+    type: BoardEventType,
+    actor: string,
+    payload: Record<string, unknown>,
+  ): void {
+    for (const evt of events.append([{ type, actor, payload }])) {
+      sse.broadcast(evt);
+    }
+  }
+
   /**
    * 执行一次 reconcile：files/ → 画布。
-   * changed 时广播 board-changed 事件。失败仅打印，不让进程崩溃。
+   * changed 时经 recordChange 产出 file.* 事件并广播。失败仅打印，不让进程崩溃。
    */
   async function reconcileOnce(reason: string): Promise<void> {
     try {
@@ -97,15 +181,12 @@ async function main(): Promise<void> {
             ` / 移动 ${result.moved.length}` +
             ` / 缺失 ${result.missing.length} 个 file 元素`,
         );
-        sse.broadcast({ type: 'board-changed' });
+        await recordChange(SYSTEM_ACTOR);
       }
     } catch (err) {
       console.error(`[board-server] reconcile(${reason}) 失败:`, err);
     }
   }
-
-  // 服务启动时先做一次初始 reconcile，让 files/ 里已有文件生成 file 元素
-  await reconcileOnce('startup');
 
   // reconcile 防抖：批量文件变更（如解压、批量拷贝）合并为一次 reconcile
   let debounceTimer: NodeJS.Timeout | null = null;
@@ -138,6 +219,10 @@ async function main(): Promise<void> {
     sse,
     tasks,
     reconcileNow: reconcileOnce,
+    events,
+    recordChange,
+    recordOps,
+    emitEvent,
   };
   const server = createHttpServer(deps);
 

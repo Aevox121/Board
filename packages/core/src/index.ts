@@ -15,3 +15,5 @@ export * from './reconcile.js';
 export * from './mutate.js';
 export * from './task.js';
 export * from './suggestion.js';
+export * from './events.js';
+export * from './ops.js';

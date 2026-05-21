@@ -8,9 +8,17 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-/** 推给客户端的事件载荷。 */
+/**
+ * 推给客户端的事件载荷。两类帧共用同一 SSE 通道：
+ *  - `{ type: 'board-changed' }` —— 粗粒度变更信号，Web 据此整板刷新；
+ *  - 结构化 `BoardEvent`（带 `seq` 等额外字段）—— 事件流，`board watch`
+ *    据此输出 NDJSON。
+ *
+ * 类型上只约束 `type` 字段；`broadcast` 对整个对象做 `JSON.stringify`，
+ * 故 `BoardEvent` 的 seq/actor/ts/payload 仍会原样下发。Web 端只认
+ * `board-changed`、忽略其余；`board watch` 只认带 `seq` 的帧。
+ */
 export interface SseEvent {
-  /** 事件类型，目前仅 `board-changed` */
   type: string;
 }
 

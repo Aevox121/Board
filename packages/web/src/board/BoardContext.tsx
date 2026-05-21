@@ -25,8 +25,10 @@ import {
 import {
   type BoardScene,
   type BoardMeta,
+  type BoardOp,
   type BoardTask,
   type ParticipantId,
+  applyOps,
   createBoardScene,
   createBoardMeta,
 } from '@board/core';
@@ -71,8 +73,14 @@ export interface BoardContextValue {
     mode: 'initial' | 'refresh',
   ) => void;
   /**
-   * 「导入版本号」——每次导入 board.json 或载入 server 数据自增。
-   * App 层据此把场景推送进 Excalidraw（区别于画布自身的变更）。
+   * 应用一批来自其他端的元素级操作（M4 实时同步）。
+   * 按元素 id 合并进内存场景 —— 不整板覆盖，故不会冲掉本端未同步的编辑。
+   */
+  applyRemoteOps: (ops: BoardOp[]) => void;
+  /**
+   * 「导入版本号」——每次导入 board.json / 载入 server 数据 / 应用远端 ops 自增。
+   * App 层据此把场景推送进 Excalidraw（区别于画布自身的变更），并据此判定
+   * 本次场景变化非本地编辑、不回发 server。
    */
   importTick: number;
   /**
@@ -139,6 +147,14 @@ export function BoardProvider({
     setMeta((m) => ({ ...m, name, updatedAt: new Date().toISOString() }));
   }, []);
 
+  const applyRemoteOps = useCallback((ops: BoardOp[]) => {
+    if (ops.length === 0) return;
+    setScene((s) => applyOps(s, ops));
+    setMeta((m) => ({ ...m, updatedAt: new Date().toISOString() }));
+    // 复用 importTick 机制把场景推进 Excalidraw；保持当前视野、不回发 server。
+    setImportState((s) => ({ tick: s.tick + 1, fit: false }));
+  }, []);
+
   const loadFromServer = useCallback(
     (
       nextMeta: BoardMeta,
@@ -170,6 +186,7 @@ export function BoardProvider({
       replaceScene,
       renameBoard,
       loadFromServer,
+      applyRemoteOps,
       importTick: importState.tick,
       importFit: importState.fit,
     }),
@@ -182,6 +199,7 @@ export function BoardProvider({
       replaceScene,
       renameBoard,
       loadFromServer,
+      applyRemoteOps,
       importState,
     ],
   );

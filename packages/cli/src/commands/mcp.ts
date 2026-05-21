@@ -167,6 +167,42 @@ async function getBoardElement(
 }
 
 /**
+ * board_subscribe_events 实现 —— 按游标增量拉取白板事件流。MCP 专属（规格 §5）。
+ *
+ * MCP 工具是请求/响应式、非长连接 —— 故以「游标轮询」落地：每次返回自 `since`
+ * 以来的事件 + 最新 `cursor`，Agent 拿 cursor 作下次 since 再调。事件留存于
+ * 运行中的 board-server（`GET /api/events/log`），server 未运行则报错。
+ */
+async function subscribeEvents(
+  port: string,
+  since: number | undefined,
+  region: string | undefined,
+): Promise<CallToolResult> {
+  const qs = new URLSearchParams();
+  if (since !== undefined) qs.set('since', String(since));
+  if (region) qs.set('region', region);
+  let env: { ok?: boolean; data?: unknown; error?: string | null };
+  try {
+    const r = await fetch(
+      `http://127.0.0.1:${port}/api/events/log?${qs.toString()}`,
+    );
+    env = (await r.json()) as typeof env;
+  } catch {
+    return textResult(
+      'board_subscribe_events 失败：无法连接 board-server —— 事件流需 server 在运行。',
+      true,
+    );
+  }
+  if (!env.ok) {
+    return textResult(
+      `board_subscribe_events 失败：${env.error ?? '未知错误'}`,
+      true,
+    );
+  }
+  return textResult(JSON.stringify(env.data, null, 2));
+}
+
+/**
  * 启动 MCP Server（stdio）。Promise 在 Agent 断开 stdio 连接前不会 resolve。
  *
  * @param boardPath 白板目录（.board）路径
@@ -727,6 +763,33 @@ export async function runMcpServer(
     async (a) =>
       safeHandler('board_get_element', () =>
         getBoardElement(boardPath, a.elementId),
+      ),
+  );
+
+  // ── 读：订阅白板事件流（增量游标）─────────────────────────────
+  server.registerTool(
+    'board_subscribe_events',
+    {
+      description:
+        '订阅白板事件流（specs §5）：取自上次游标以来的新事件 —— 元素增改移删 / ' +
+        '文件变化 / 区域 / 建议 / Agent 任务等。用法：首次不传 since 拿到当前 ' +
+        'events + cursor；之后每次把上次返回的 cursor 作为 since 再调，即可增量' +
+        '获知白板变化，省去反复全量 board_read_context。需 board-server 在运行。',
+      inputSchema: {
+        since: z
+          .number()
+          .int()
+          .optional()
+          .describe('上次返回的 cursor；省略 = 从最早留存事件取起'),
+        region: z
+          .string()
+          .optional()
+          .describe('只看某区域的事件时传其名称；省略 = 全板'),
+      },
+    },
+    async (a) =>
+      safeHandler('board_subscribe_events', () =>
+        subscribeEvents(port, a.since, a.region),
       ),
   );
 

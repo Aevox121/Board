@@ -35,7 +35,7 @@ import {
 } from '@board/core';
 import { useBoard } from '../board/BoardContext';
 import { moveFile } from '../server/files';
-import { putScene, deleteElement } from '../server/client';
+import { deleteElement } from '../server/client';
 import { FileCard } from './FileCard';
 import { FolderCard } from './FolderCard';
 import { TextCard } from './TextCard';
@@ -708,13 +708,9 @@ export function OverlayLayer({
     };
   }
 
-  /** 把场景落盘到 server（已连接时）—— 区域移动 / 缩放 / 整理等画布操作的持久化。 */
-  function persist(next: BoardScene, what: string): void {
-    if (connection !== 'connected') return;
-    void putScene(next).catch((err: unknown) => {
-      console.warn(`[board-web] 保存${what}失败（可稍后手动保存）：`, err);
-    });
-  }
+  // 覆盖层画布操作（移动 / 缩放 / 删除 / 整理）只改内存场景 —— 由 App 层的
+  // 操作级自动同步统一 diff 出增量 ops 发往 server（不再各自整场景 PUT，避免
+  // 并发写覆盖）。故以下操作均 replaceScene('canvas') 即可，无需主动落盘。
 
   /**
    * 删除选中的覆盖层元素（连线 / 文本卡 / 文件卡），连带清理悬空引用。
@@ -756,10 +752,9 @@ export function OverlayLayer({
       return;
     }
 
-    // connector / text 等无文件系统对应物 —— 直接改内存场景并落盘。
+    // connector / text 等无文件系统对应物 —— 改内存场景，自动同步负责落盘。
     const { scene: next } = removeElement(cur, id);
     replaceScene(next, 'canvas');
-    persist(next, '删除元素');
   }
 
   /**
@@ -794,8 +789,6 @@ export function OverlayLayer({
   ): void {
     const next = patchElement(base, el.id, { x, y, autoPlaced: false });
     replaceScene(next, 'canvas');
-    // 重新定位不涉及文件移动，不会触发 server reconcile，故需主动落盘。
-    persist(next, '重新定位');
   }
 
   /** 跨区域拖拽文件卡 —— 经 server 移动真实文件以改变文件归属。 */
@@ -878,7 +871,6 @@ export function OverlayLayer({
     }
     const next = moveElementsBy(curScene, ids, d.offsetX, d.offsetY);
     replaceScene(next, 'canvas');
-    persist(next, '区域移动');
   }
 
   /** 文本卡拖拽结束 —— 重新定位并按落点重设所属区域（文本无文件系统对应物）。 */
@@ -907,7 +899,6 @@ export function OverlayLayer({
     const grown = growRegions(patched.elements);
     const next: BoardScene = { ...patched, elements: grown.elements };
     replaceScene(next, 'canvas');
-    persist(next, '文本卡片移动');
   }
 
   /** 拖拽结束分发。 */
@@ -1057,7 +1048,6 @@ export function OverlayLayer({
         autoPlaced: false,
       });
       replaceScene(next, 'canvas');
-      persist(next, '缩放');
     }
   }
 
@@ -1084,7 +1074,6 @@ export function OverlayLayer({
       next = arrangeScene(cur, { fileIds: new Set(scope.fileIds) });
     }
     replaceScene(next, 'canvas');
-    persist(next, '自动对齐');
     closeMenu();
   }
 

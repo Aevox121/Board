@@ -37,6 +37,7 @@ import { cmdSearch } from './commands/search.js';
 import { cmdComment } from './commands/comment.js';
 import { cmdStyle } from './commands/style.js';
 import { runMcpServer } from './commands/mcp.js';
+import { runWatch } from './commands/watch.js';
 
 /** 命令处理函数签名。 */
 type Handler = (args: ParsedArgs) => Promise<CmdResult>;
@@ -66,7 +67,6 @@ const PLACEHOLDER_COMMANDS = [
   'open',
   'serve',
   'agent',
-  'watch',
   'snapshot',
   'restore',
   'export',
@@ -125,6 +125,9 @@ function printHelp(): void {
   console.log('  task progress <taskId> --step "<步骤>" [--percent <n>]         上报任务进度');
   console.log('  task finish <taskId> [--summary "<结果说明>"]                  完成任务');
   console.log('');
+  console.log('已实现命令 (M4，需 board-server 在运行):');
+  console.log('  watch [--region <名>] [--since <seq>]         订阅白板事件流（NDJSON）');
+  console.log('');
   console.log('占位命令 (尚未实现):');
   console.log('  ' + PLACEHOLDER_COMMANDS.join(', '));
 }
@@ -158,6 +161,20 @@ async function main(argv: string[]): Promise<number> {
       args.options.get('port') ?? process.env['BOARD_PORT'] ?? '4500';
     await runMcpServer(boardPath, port);
     return EXIT.OK;
+  }
+
+  // watch —— 长驻订阅事件流（NDJSON），不走「命令返回 CmdResult」的常规分发。
+  if (cmd === 'watch') {
+    try {
+      return await runWatch(args);
+    } catch (err) {
+      if (err instanceof CliError) {
+        emitError(err.message, json);
+        return err.code;
+      }
+      emitError(err instanceof Error ? err.message : String(err), json);
+      return EXIT.GENERAL;
+    }
   }
 
   // 未登记命令
