@@ -62,6 +62,7 @@ import {
   fileBaseName,
   intersectionArea,
   pointInRect,
+  segmentIntersectsRect,
   smallestHitAt,
   type RectLike,
 } from './util';
@@ -330,7 +331,10 @@ interface LeftPress {
   additive: boolean;
 }
 
-/** 左键框选可命中的元素类型 —— 区域 / 连线 / 建议不纳入框选。 */
+/**
+ * 左键框选中按「包围盒相交」判定的元素类型。连线另按线段相交单独判定
+ * （见 connectorAnchors / segmentIntersectsRect）；区域 / 建议不纳入框选。
+ */
 const MARQUEE_TYPES: ReadonlySet<string> = new Set([
   'shape',
   'draw',
@@ -408,6 +412,47 @@ function normRect(x0: number, y0: number, x1: number, y1: number): RectLike {
     y: Math.min(y0, y1),
     width: Math.abs(x1 - x0),
     height: Math.abs(y1 - y0),
+  };
+}
+
+/**
+ * 连线两端的当前画布坐标 —— 框选命中测试用。
+ *
+ * 绑定端取所连元素中心（连线实际贴元素边缘，中心落在元素内、足够近似）；
+ * 自由端取连线自身几何（meta.ex.points，缺省用包围盒对角）。不读连线存储的
+ * x/y/width/height —— 绑定端元素移动后那份包围盒会过期。
+ */
+function connectorAnchors(
+  conn: ConnectorElement,
+  elements: readonly Element[],
+): { a: { x: number; y: number }; b: { x: number; y: number } } {
+  const ex = conn.meta?.['ex'];
+  const raw =
+    ex && typeof ex === 'object'
+      ? (ex as { points?: unknown }).points
+      : undefined;
+  const pts = Array.isArray(raw) ? (raw as Array<[number, number]>) : null;
+  const p0 = pts && pts.length >= 1 ? pts[0] : null;
+  const pN = pts && pts.length >= 2 ? pts[pts.length - 1] : null;
+  const freeA = p0
+    ? { x: conn.x + p0[0], y: conn.y + p0[1] }
+    : { x: conn.x, y: conn.y };
+  const freeB = pN
+    ? { x: conn.x + pN[0], y: conn.y + pN[1] }
+    : { x: conn.x + conn.width, y: conn.y + conn.height };
+  const startEl = conn.start.elementId
+    ? elements.find((e) => e.id === conn.start.elementId)
+    : undefined;
+  const endEl = conn.end.elementId
+    ? elements.find((e) => e.id === conn.end.elementId)
+    : undefined;
+  return {
+    a: startEl
+      ? { x: startEl.x + startEl.width / 2, y: startEl.y + startEl.height / 2 }
+      : freeA,
+    b: endEl
+      ? { x: endEl.x + endEl.width / 2, y: endEl.y + endEl.height / 2 }
+      : freeB,
   };
 }
 
@@ -964,12 +1009,18 @@ export function OverlayLayer({
       if (!p || !p.moved) return; // 只是点击 —— 选区已在 onDown 处理
       const c = toCanvas(e.clientX, e.clientY);
       const box = normRect(p.startCX, p.startCY, c.x, c.y);
-      // 与虚线框相交的可框选元素（区域 / 连线 / 建议不纳入）。
-      const hits = sceneRef.current.elements
-        .filter(
-          (el) => MARQUEE_TYPES.has(el.type) && intersectionArea(box, el) > 0,
-        )
-        .map((el) => el.id);
+      // 与虚线框相交的元素：卡片 / 图形 / 手绘按包围盒判定，连线按线段判定
+      // （区域 / 建议不纳入框选）。
+      const els = sceneRef.current.elements;
+      const hits: string[] = [];
+      for (const el of els) {
+        if (MARQUEE_TYPES.has(el.type)) {
+          if (intersectionArea(box, el) > 0) hits.push(el.id);
+        } else if (el.type === 'connector') {
+          const { a, b } = connectorAnchors(el, els);
+          if (segmentIntersectsRect(a, b, box)) hits.push(el.id);
+        }
+      }
       setSelectedIds((prev) => {
         const next = p.additive ? new Set(prev) : new Set<string>();
         for (const id of hits) next.add(id);

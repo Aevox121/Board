@@ -96,6 +96,43 @@ export function intersectionArea(a: RectLike, b: RectLike): number {
   return w > 0 && h > 0 ? w * h : 0;
 }
 
+/** 平面点。 */
+type Pt = { x: number; y: number };
+
+/** 两线段 (a1→a2) 与 (b1→b2) 是否真正交叉（仅共线 / 触碰端点不算）。 */
+function segmentsCross(a1: Pt, a2: Pt, b1: Pt, b2: Pt): boolean {
+  const cross = (o: Pt, p: Pt, q: Pt): number =>
+    (p.x - o.x) * (q.y - o.y) - (p.y - o.y) * (q.x - o.x);
+  const d1 = cross(b1, b2, a1);
+  const d2 = cross(b1, b2, a2);
+  const d3 = cross(a1, a2, b1);
+  const d4 = cross(a1, a2, b2);
+  return (
+    ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+    ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))
+  );
+}
+
+/**
+ * 线段是否与轴对齐矩形相交 —— 任一端点落在矩形内，或线段穿过矩形任一条边。
+ *
+ * 用于连线的框选命中测试：连线是细线，按其线段而非（可能虚大的）包围盒判定，
+ * 才符合「框碰到线才选中」的直觉。
+ */
+export function segmentIntersectsRect(a: Pt, b: Pt, r: RectLike): boolean {
+  if (pointInRect(a.x, a.y, r) || pointInRect(b.x, b.y, r)) return true;
+  const tl = { x: r.x, y: r.y };
+  const tr = { x: r.x + r.width, y: r.y };
+  const br = { x: r.x + r.width, y: r.y + r.height };
+  const bl = { x: r.x, y: r.y + r.height };
+  return (
+    segmentsCross(a, b, tl, tr) ||
+    segmentsCross(a, b, tr, br) ||
+    segmentsCross(a, b, br, bl) ||
+    segmentsCross(a, b, bl, tl)
+  );
+}
+
 /**
  * 把字节数格式化为可读字符串（B / KB / MB / GB）。
  *
