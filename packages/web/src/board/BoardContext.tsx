@@ -39,6 +39,9 @@ export const LOCAL_USER_ID: ParticipantId = 'u_local';
 /** 连接模式 —— 决定是否启用 server 保存与「已连接」指示。 */
 export type ConnectionMode = 'offline' | 'connected';
 
+/** 撤销 / 重做历史栈的最大深度。 */
+const HISTORY_CAP = 100;
+
 export interface BoardContextValue {
   /** 内存中的场景（board.json 的真相源）。 */
   scene: BoardScene;
@@ -90,6 +93,14 @@ export interface BoardContextValue {
    * 用户导入 / 首次连接 → true；SSE 后台刷新 → false（不打扰当前视野）。
    */
   importFit: boolean;
+  /** 撤销上一步本地编辑（基于场景快照栈）。 */
+  undo: () => void;
+  /** 重做上一步被撤销的编辑。 */
+  redo: () => void;
+  /** 是否有可撤销的步骤。 */
+  canUndo: boolean;
+  /** 是否有可重做的步骤。 */
+  canRedo: boolean;
 }
 
 const BoardContext = createContext<BoardContextValue | null>(null);
@@ -134,8 +145,21 @@ export function BoardProvider({
   const sceneRef = useRef(scene);
   sceneRef.current = scene;
 
+  // 撤销 / 重做历史 —— 场景快照栈（自研画布层增量5）。
+  const undoRef = useRef<BoardScene[]>([]);
+  const redoRef = useRef<BoardScene[]>([]);
+  // 历史版本号 —— 自增以让 canUndo/canRedo 重新求值（栈是 ref，本身不触发渲染）。
+  const [histTick, setHistTick] = useState(0);
+
   const replaceScene = useCallback(
     (next: BoardScene, source: 'canvas' | 'import') => {
+      if (source === 'canvas') {
+        // 本地编辑 —— 变更前的场景压入撤销栈，清空重做栈。
+        undoRef.current.push(sceneRef.current);
+        if (undoRef.current.length > HISTORY_CAP) undoRef.current.shift();
+        redoRef.current = [];
+        setHistTick((t) => t + 1);
+      }
       setScene(next);
       setMeta((m) => ({ ...m, updatedAt: new Date().toISOString() }));
       if (source === 'import') {
@@ -144,6 +168,26 @@ export function BoardProvider({
     },
     [],
   );
+
+  /** 撤销 —— 弹出撤销栈顶并恢复；当前场景压入重做栈。 */
+  const undo = useCallback(() => {
+    const prev = undoRef.current.pop();
+    if (!prev) return;
+    redoRef.current.push(sceneRef.current);
+    setScene(prev);
+    setMeta((m) => ({ ...m, updatedAt: new Date().toISOString() }));
+    setHistTick((t) => t + 1);
+  }, []);
+
+  /** 重做 —— 弹出重做栈顶并恢复；当前场景压回撤销栈。 */
+  const redo = useCallback(() => {
+    const next = redoRef.current.pop();
+    if (!next) return;
+    undoRef.current.push(sceneRef.current);
+    setScene(next);
+    setMeta((m) => ({ ...m, updatedAt: new Date().toISOString() }));
+    setHistTick((t) => t + 1);
+  }, []);
 
   const renameBoard = useCallback((name: string) => {
     setMeta((m) => ({ ...m, name, updatedAt: new Date().toISOString() }));
@@ -170,8 +214,13 @@ export function BoardProvider({
       setServerFiles(files);
       setTasks(nextTasks);
       setConnection('connected');
-      // 复用 importTick 机制把 server 场景推进 Excalidraw；
-      // 仅首次连接缩放到全部内容，SSE 刷新保持当前视野。
+      if (mode === 'initial') {
+        // 首次连接 / 切换白板 —— 旧白板的历史已无意义，清空。
+        undoRef.current = [];
+        redoRef.current = [];
+        setHistTick((t) => t + 1);
+      }
+      // importTick 自增触发重渲染；仅首次连接聚焦到全部内容，刷新保持视野。
       setImportState((s) => ({ tick: s.tick + 1, fit: mode === 'initial' }));
     },
     [],
@@ -191,6 +240,10 @@ export function BoardProvider({
       applyRemoteOps,
       importTick: importState.tick,
       importFit: importState.fit,
+      undo,
+      redo,
+      canUndo: undoRef.current.length > 0,
+      canRedo: redoRef.current.length > 0,
     }),
     [
       scene,
@@ -203,6 +256,9 @@ export function BoardProvider({
       loadFromServer,
       applyRemoteOps,
       importState,
+      undo,
+      redo,
+      histTick,
     ],
   );
 

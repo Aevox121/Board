@@ -1,12 +1,12 @@
 /**
  * 自研画布层 —— 画布外壳（增量2 建立，增量3 接管全部渲染）。
  *
- * 增量3「大切换」后，Excalidraw 已从渲染树移除：画布外壳直接挂载覆盖层
- * （OverlayLayer 渲染全部 10 类元素，含图形 / 手绘）与在场层，没有中间桥。
+ * Excalidraw 已从渲染树移除：画布外壳直接挂载覆盖层（OverlayLayer 渲染全部
+ * 10 类元素，含图形 / 手绘）与在场层，没有中间桥。
  *
  * 层叠（自下而上）：
  *   cv-shell（暖色底 + 平移/缩放手势）→ 网格 → board-canvas（覆盖层 + 在场层）
- *   → 工具栏 / 缩放控件
+ *   → 工具栏 / 底部控件（撤销重做 + 缩放）
  *
  * 视口真相源在本组件的 `viewport` state，由平移/缩放手势与缩放控件写入；
  * 导入 / 首次连接时由 fitToContent 聚焦到全部内容。
@@ -31,10 +31,11 @@ const ZOOM_STEP = 1.2;
 
 /** 画布外壳。 */
 export function CanvasShell(): JSX.Element {
-  const { scene, importTick, importFit } = useBoard();
+  const { scene, importTick, importFit, undo, redo, canUndo, canRedo } =
+    useBoard();
   // 视口真相源。
   const [viewport, setViewport] = useState<CanvasViewport>(INITIAL_VIEWPORT);
-  // 当前工具 —— 由工具栏选择，覆盖层据此切换连线 / 橡皮擦模式。
+  // 当前工具 —— 由工具栏选择，覆盖层据此进入创建 / 连线 / 橡皮擦模式。
   const [activeTool, setActiveTool] = useState<string>('selection');
   const shellRef = useRef<HTMLDivElement>(null);
 
@@ -56,6 +57,30 @@ export function CanvasShell(): JSX.Element {
     const r = el.getBoundingClientRect();
     setViewport(fitToContent(scene.elements, r.width, r.height));
   }, [importTick, importFit, scene]);
+
+  // 撤销 / 重做快捷键 —— Ctrl/⌘+Z 撤销，Ctrl/⌘+Shift+Z 或 Ctrl/⌘+Y 重做。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const k = e.key.toLowerCase();
+      if (k !== 'z' && k !== 'y') return;
+      // 输入框 / 文本域聚焦时让位给原生撤销。
+      const ae = document.activeElement as HTMLElement | null;
+      if (
+        ae &&
+        (ae.tagName === 'INPUT' ||
+          ae.tagName === 'TEXTAREA' ||
+          ae.isContentEditable)
+      ) {
+        return;
+      }
+      e.preventDefault();
+      if (k === 'y' || (k === 'z' && e.shiftKey)) redo();
+      else undo();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [undo, redo]);
 
   // 缩放控件 —— 以外壳中心为锚缩放。
   const zoomBy = useCallback((factor: number) => {
@@ -87,34 +112,58 @@ export function CanvasShell(): JSX.Element {
         <PresenceLayer viewport={viewport} />
       </div>
       <Toolbar activeTool={activeTool} onSelect={setActiveTool} />
-      <div className="cv-zoom" role="group" aria-label="缩放">
-        <button
-          type="button"
-          className="cv-zoom__btn"
-          onClick={() => zoomBy(1 / ZOOM_STEP)}
-          title="缩小"
-          aria-label="缩小"
-        >
-          −
-        </button>
-        <button
-          type="button"
-          className="cv-zoom__pct"
-          onClick={resetZoom}
-          title="重置为 100%"
-          aria-label="重置缩放为 100%"
-        >
-          {Math.round(viewport.zoom * 100)}%
-        </button>
-        <button
-          type="button"
-          className="cv-zoom__btn"
-          onClick={() => zoomBy(ZOOM_STEP)}
-          title="放大"
-          aria-label="放大"
-        >
-          +
-        </button>
+      <div className="cv-bottombar">
+        <div className="cv-pill" role="group" aria-label="撤销重做">
+          <button
+            type="button"
+            className="cv-pill__btn"
+            onClick={undo}
+            disabled={!canUndo}
+            title="撤销 (Ctrl+Z)"
+            aria-label="撤销"
+          >
+            ↶
+          </button>
+          <button
+            type="button"
+            className="cv-pill__btn"
+            onClick={redo}
+            disabled={!canRedo}
+            title="重做 (Ctrl+Shift+Z)"
+            aria-label="重做"
+          >
+            ↷
+          </button>
+        </div>
+        <div className="cv-pill" role="group" aria-label="缩放">
+          <button
+            type="button"
+            className="cv-pill__btn"
+            onClick={() => zoomBy(1 / ZOOM_STEP)}
+            title="缩小"
+            aria-label="缩小"
+          >
+            −
+          </button>
+          <button
+            type="button"
+            className="cv-pill__pct"
+            onClick={resetZoom}
+            title="重置为 100%"
+            aria-label="重置缩放为 100%"
+          >
+            {Math.round(viewport.zoom * 100)}%
+          </button>
+          <button
+            type="button"
+            className="cv-pill__btn"
+            onClick={() => zoomBy(ZOOM_STEP)}
+            title="放大"
+            aria-label="放大"
+          >
+            +
+          </button>
+        </div>
       </div>
     </div>
   );

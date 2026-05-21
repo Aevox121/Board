@@ -35,9 +35,19 @@
   position: absolute;
 }
 
-/* 图形 / 手绘槽 —— 增量3 仅渲染、不交互（选择 / 变换 / 删除归增量5）。 */
+/* 创建预览槽 —— 拖拽创建过程中的预览，不接收指针。 */
 .ov-slot--drawing {
   pointer-events: none;
+}
+
+/* 图形 / 手绘槽 —— 自研画布层增量5 起可选中 / 拖拽 / 缩放。 */
+.ov-slot--shape {
+  pointer-events: auto;
+  cursor: grab;
+}
+
+.ov-slot--shape.ov-slot--dragging {
+  cursor: grabbing;
 }
 
 /* 评论角标（PRD §8.4）—— 贴在卡片右上角，显示评论条数；hover 出全文。 */

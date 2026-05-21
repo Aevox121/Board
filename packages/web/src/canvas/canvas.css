@@ -134,13 +134,19 @@
   background: var(--c-border);
 }
 
-/* ── 缩放控件 ───────────────────────────────────────────────── */
+/* ── 底部控件（撤销重做 + 缩放）─────────────────────────────── */
 
-.cv-zoom {
+.cv-bottombar {
   position: absolute;
   left: var(--space-3);
   bottom: var(--space-3);
   z-index: 6;
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* 圆角药丸容器 —— 撤销重做组 / 缩放组共用。 */
+.cv-pill {
   display: flex;
   align-items: center;
   background: var(--c-surface);
@@ -151,7 +157,7 @@
   overflow: hidden;
 }
 
-.cv-zoom__btn {
+.cv-pill__btn {
   width: 30px;
   height: 30px;
   border: none;
@@ -163,12 +169,17 @@
   transition: background var(--dur-micro) var(--ease);
 }
 
-.cv-zoom__btn:hover {
+.cv-pill__btn:hover:not(:disabled) {
   background: var(--c-surface-sunken);
   color: var(--c-ink);
 }
 
-.cv-zoom__pct {
+.cv-pill__btn:disabled {
+  color: var(--c-ink-3);
+  cursor: default;
+}
+
+.cv-pill__pct {
   min-width: 54px;
   height: 30px;
   border: none;
@@ -181,13 +192,13 @@
   transition: background var(--dur-micro) var(--ease);
 }
 
-.cv-zoom__pct:hover {
+.cv-pill__pct:hover {
   background: var(--c-surface-sunken);
   color: var(--c-ink);
 }
 
-.cv-zoom__btn:focus-visible,
-.cv-zoom__pct:focus-visible {
+.cv-pill__btn:focus-visible,
+.cv-pill__pct:focus-visible {
   outline: none;
   box-shadow: inset var(--focus-ring);
 }

@@ -112,10 +112,10 @@ function isCanvasElement(el: Element): el is CanvasElement {
   );
 }
 
-/** 拖拽（移动）过程的瞬时状态 —— 文件卡 / 文本卡 / 区域共用。 */
+/** 拖拽（移动）过程的瞬时状态 —— 文件卡 / 文本卡 / 区域 / 图形手绘共用。 */
 interface DragState {
-  /** 被拖对象类型：文件卡 / 文本卡 / 区域。 */
-  kind: 'file' | 'region' | 'text';
+  /** 被拖对象类型：文件卡 / 区域 / 文本卡 / 图形手绘（element）。 */
+  kind: 'file' | 'region' | 'text' | 'element';
   /** 被拖元素 id。 */
   elementId: string;
   /** 捕获的指针 id。 */
@@ -1138,10 +1138,38 @@ export function OverlayLayer({
     replaceScene(next, 'canvas');
   }
 
+  /**
+   * 图形 / 手绘拖拽结束 —— 重新定位并按落点重设所属区域。
+   * 与文本卡一致：图形 / 手绘无文件系统对应物，落入区域只改 parentId。
+   */
+  function finishPlainDrag(d: DragState): void {
+    const cur = sceneRef.current;
+    const el = cur.elements.find((x) => x.id === d.elementId);
+    if (!el) return;
+    const finalX = d.startX + d.offsetX;
+    const finalY = d.startY + d.offsetY;
+    const rect: RectLike = {
+      x: finalX,
+      y: finalY,
+      width: el.width,
+      height: el.height,
+    };
+    const target = regionForCard(rect, regionsOf(cur.elements));
+    const patched = patchElement(cur, el.id, {
+      x: finalX,
+      y: finalY,
+      autoPlaced: false,
+      parentId: target ? target.id : null,
+    });
+    const grown = growRegions(patched.elements);
+    replaceScene({ ...patched, elements: grown.elements }, 'canvas');
+  }
+
   /** 拖拽结束分发。 */
   function finishDrag(d: DragState): void {
     if (d.kind === 'region') finishRegionDrag(d);
     else if (d.kind === 'text') finishTextDrag(d);
+    else if (d.kind === 'element') finishPlainDrag(d);
     else finishFileDrag(d);
   }
 
@@ -1265,11 +1293,11 @@ export function OverlayLayer({
     replaceScene(next, 'canvas');
   }
 
-  /** 指针按下文件卡 / 区域头部 —— 捕获指针，记录起点，进入待拖拽状态。 */
+  /** 指针按下卡片 / 图形 / 区域头部 —— 捕获指针，记录起点，进入待拖拽状态。 */
   function beginDrag(
     e: React.PointerEvent<HTMLDivElement>,
     el: Element,
-    kind: 'file' | 'region' | 'text',
+    kind: 'file' | 'region' | 'text' | 'element',
   ): void {
     if (e.button !== 0) return; // 仅响应主键
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -1324,12 +1352,12 @@ export function OverlayLayer({
 
   /**
    * 指针按下缩放手柄 —— 记录起始矩形、最小尺寸与（区域）内容包围盒边界。
-   * 文件 / 文本 / 文件夹卡同样可缩放：它们无子元素，内容边界 clamp 自动失效，
-   * 仅受最小尺寸约束。
+   * 文件 / 文本 / 文件夹卡、图形 / 手绘同样可缩放：它们无子元素，内容边界
+   * clamp 自动失效，仅受最小尺寸约束。
    */
   function beginResize(
     e: React.PointerEvent<HTMLDivElement>,
-    el: ContentElement,
+    el: CanvasElement,
     hx: -1 | 0 | 1,
     hy: -1 | 0 | 1,
   ): void {
@@ -1397,14 +1425,41 @@ export function OverlayLayer({
     }
     setResize(null);
     if (r.x !== r.x0 || r.y !== r.y0 || r.w !== r.w0 || r.h !== r.h0) {
-      const next = patchElement(sceneRef.current, r.elementId, {
-        x: r.x,
-        y: r.y,
-        width: r.w,
-        height: r.h,
-        autoPlaced: false,
-      });
-      replaceScene(next, 'canvas');
+      const cur = sceneRef.current;
+      const el = cur.elements.find((x) => x.id === r.elementId);
+      if (el && el.type === 'draw' && r.w0 > 0 && r.h0 > 0) {
+        // 手绘缩放：采样点按比例缩放，笔迹随包围盒一起变 —— 否则笔迹会
+        // 与新包围盒脱节（点是相对原点的固定坐标，不会自动跟着缩放）。
+        const sx = r.w / r.w0;
+        const sy = r.h / r.h0;
+        const scaled: Element = {
+          ...el,
+          x: r.x,
+          y: r.y,
+          width: r.w,
+          height: r.h,
+          autoPlaced: false,
+          points: el.points.map((p) => [p[0] * sx, p[1] * sy]),
+          updatedBy: actorId,
+          updatedAt: new Date().toISOString(),
+        };
+        replaceScene(
+          {
+            ...cur,
+            elements: cur.elements.map((x) => (x.id === el.id ? scaled : x)),
+          },
+          'canvas',
+        );
+      } else {
+        const next = patchElement(cur, r.elementId, {
+          x: r.x,
+          y: r.y,
+          width: r.w,
+          height: r.h,
+          autoPlaced: false,
+        });
+        replaceScene(next, 'canvas');
+      }
     }
   }
 
@@ -1454,8 +1509,8 @@ export function OverlayLayer({
         ) ?? null)
       : null;
 
-  // 选中的覆盖层元素 —— 决定是否浮出样式面板。原生图形 / 手绘由 Excalidraw
-  // 自带属性面板编辑（也不会成为 selectedId），故不在此。
+  // 选中的元素 —— 决定是否浮出样式面板。图形 / 手绘自研画布层后也由本面板
+  // 编辑（自研画布层增量5），不再依赖 Excalidraw 属性面板。
   const styleEl = selectedId
     ? (scene.elements.find(
         (e) =>
@@ -1464,7 +1519,9 @@ export function OverlayLayer({
             e.type === 'file' ||
             e.type === 'folder' ||
             e.type === 'region' ||
-            e.type === 'text'),
+            e.type === 'text' ||
+            e.type === 'shape' ||
+            e.type === 'draw'),
       ) ?? null)
     : null;
 
@@ -1502,48 +1559,10 @@ export function OverlayLayer({
         ) : null}
 
         {canvasElements.map((el) => {
-          // 图形 / 手绘 —— 非交互渲染（选择 / 变换 / 删除归增量5）。
-          // 仍随所属区域拖拽而跟随（与卡片一致）。
-          if (el.type === 'shape' || el.type === 'draw') {
-            let ddx = 0;
-            let ddy = 0;
-            if (
-              drag?.moved &&
-              drag.kind === 'region' &&
-              el.parentId === drag.elementId
-            ) {
-              ddx = drag.offsetX;
-              ddy = drag.offsetY;
-            }
-            const drawStyle: React.CSSProperties = {
-              left: `${el.x}px`,
-              top: `${el.y}px`,
-              width: `${el.width}px`,
-              height: `${el.height}px`,
-            };
-            if (ddx !== 0 || ddy !== 0) {
-              drawStyle.transform = `translate(${ddx}px, ${ddy}px)`;
-            }
-            if (el.style.opacity !== DEFAULT_STYLE.opacity) {
-              drawStyle.opacity = el.style.opacity / 100;
-            }
-            return (
-              <div
-                key={el.id}
-                className="ov-slot ov-slot--drawing"
-                data-element-id={el.id}
-                style={drawStyle}
-              >
-                {el.type === 'shape' ? (
-                  <ShapeView element={el} />
-                ) : (
-                  <DrawView element={el} />
-                )}
-              </div>
-            );
-          }
           const isFile = el.type === 'file';
           const isText = el.type === 'text';
+          const isShape = el.type === 'shape';
+          const isDraw = el.type === 'draw';
 
           // 拖拽偏移：被拖元素自身，或被拖区域的子元素（随区域一起动）。
           let dx = 0;
@@ -1589,6 +1608,7 @@ export function OverlayLayer({
             'ov-slot' +
             (isFile ? ' ov-slot--file' : '') +
             (isText ? ' ov-slot--text' : '') +
+            (isShape || isDraw ? ' ov-slot--shape' : '') +
             (el.state === 'draft' ? ' ov-slot--draft' : '') +
             (offset ? ' ov-slot--dragging' : '');
 
@@ -1624,12 +1644,14 @@ export function OverlayLayer({
                 el.type === 'region'
                   ? undefined
                   : (e) => {
-                      // 点选该元素（显示选择框 / 手柄）；文件 / 文本卡同时
-                      // 进入待拖拽态。区域走头部手柄，不在此。
+                      // 点选该元素（显示选择框 / 手柄）并进入待拖拽态。
+                      // 区域走头部手柄，不在此。
                       if (e.button !== 0) return;
                       setSelectedId(el.id);
                       if (isFile || isText) {
                         beginDrag(e, el, isFile ? 'file' : 'text');
+                      } else if (isShape || isDraw) {
+                        beginDrag(e, el, 'element');
                       }
                     }
               }
@@ -1655,6 +1677,10 @@ export function OverlayLayer({
                   element={el}
                   onCommit={(md) => commitTextMarkdown(el.id, md)}
                 />
+              ) : el.type === 'shape' ? (
+                <ShapeView element={el} />
+              ) : el.type === 'draw' ? (
+                <DrawView element={el} />
               ) : (
                 <FileCard element={el} missing={missingFileIds.has(el.id)} />
               )}
