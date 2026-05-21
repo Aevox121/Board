@@ -236,10 +236,18 @@ function isCanvasElement(el: Element): el is CanvasElement {
 
 /** 拖拽（移动）过程的瞬时状态 —— 文件卡 / 文本卡 / 区域 / 图形手绘共用。 */
 interface DragState {
-  /** 被拖对象类型：文件卡 / 区域 / 文本卡 / 图形手绘（element）。 */
-  kind: 'file' | 'region' | 'text' | 'element';
-  /** 被拖元素 id。 */
+  /**
+   * 被拖对象类型：文件卡 / 区域 / 文本卡 / 图形手绘（element）/ 多选整组
+   * （group）。group 为多选整组拖拽 —— 仅按偏移整体平移，落定走 finishGroupDrag。
+   */
+  kind: 'file' | 'region' | 'text' | 'element' | 'group';
+  /** 被拖元素 id（group 时为按下的那个元素）。 */
   elementId: string;
+  /**
+   * 随本次拖拽一起平移的全部元素 id —— 单拖为 {elementId}；区域拖拽含其子
+   * 元素；整组拖拽为整个选区（含其中区域的子元素）。渲染与连线层据此实时跟随。
+   */
+  memberIds: ReadonlySet<string>;
   /** 捕获的指针 id。 */
   pointerId: number;
   /** 指针按下时的屏幕坐标。 */
@@ -306,6 +314,29 @@ interface RightPress {
   /** 右键命中的覆盖层元素 / 连线 id（用于菜单「删除」项）；空白处为 null。 */
   targetId: string | null;
 }
+
+/** 左键空白处框选的瞬时状态（plain ref，不进 React state）。 */
+interface LeftPress {
+  /** 按下时的屏幕坐标。 */
+  startX: number;
+  startY: number;
+  /** 按下时的画布坐标。 */
+  startCX: number;
+  startCY: number;
+  /** 是否已越过阈值（成为框选）。 */
+  moved: boolean;
+  /** 是否叠加到既有选区（按下时 shift 键按住）。 */
+  additive: boolean;
+}
+
+/** 左键框选可命中的元素类型 —— 区域 / 连线 / 建议不纳入框选。 */
+const MARQUEE_TYPES: ReadonlySet<string> = new Set([
+  'shape',
+  'draw',
+  'text',
+  'file',
+  'folder',
+]);
 
 /** 启动拖拽 / 框选的位移阈值（屏幕像素）。 */
 const DRAG_THRESHOLD_PX = 4;
@@ -598,8 +629,13 @@ export function OverlayLayer({
   const [hoverConnId, setHoverConnId] = useState<string | null>(null);
   // 连线端点拖拽落点所在的可连接元素 id —— 拖拽中临时高亮（同连线创建）。
   const [endpointHover, setEndpointHover] = useState<string | null>(null);
-  // 当前选中的内容元素 id —— 选中时显示选择框 + 八向缩放手柄；null = 未选中。
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // 当前选中的元素 id 集合 —— 空集 = 未选中；选中态显示选择框，单选（size===1）
+  // 才出八向缩放手柄与样式面板，多选可整组拖拽 / 批量删除。
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  // 左键空白处框选的虚线框（画布坐标矩形）；null = 未在框选。
+  const [selectMarquee, setSelectMarquee] = useState<RectLike | null>(null);
   // 右键上下文菜单（屏幕坐标 + 作用域）；null = 未显示。
   const [menu, setMenu] = useState<{
     x: number;
@@ -626,6 +662,29 @@ export function OverlayLayer({
   const rootRef = useRef<HTMLDivElement | null>(null);
   // 右键框选的瞬时跟踪（不触发渲染）。
   const rightPressRef = useRef<RightPress | null>(null);
+  // 左键空白处框选的瞬时跟踪（不触发渲染）。
+  const leftPressRef = useRef<LeftPress | null>(null);
+  // 选区的 ref 镜像 —— 供挂在 window 上的框选回调读取最新值。
+  const selectedIdsRef = useRef<ReadonlySet<string>>(selectedIds);
+  selectedIdsRef.current = selectedIds;
+
+  /** 选中单个元素（替换当前选区）。 */
+  function selectOnly(id: string): void {
+    setSelectedIds(new Set([id]));
+  }
+  /** 在选区中切换某元素的去留（shift 点选 —— 加入 / 移出多选）。 */
+  function toggleInSelection(id: string): void {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  /** 清空选区。 */
+  function clearSelection(): void {
+    setSelectedIds((prev) => (prev.size === 0 ? prev : new Set()));
+  }
 
   // 筛出画布元素并按 z 升序排序 —— 字典序即层级序（与 factory.nextZ 同构）。
   const canvasElements = useMemo<CanvasElement[]>(() => {
@@ -690,10 +749,7 @@ export function OverlayLayer({
     const m = new Map<string, RectLike>();
     if (drag?.moved) {
       for (const el of scene.elements) {
-        if (
-          el.id === drag.elementId ||
-          (drag.kind === 'region' && el.parentId === drag.elementId)
-        ) {
+        if (drag.memberIds.has(el.id)) {
           m.set(el.id, {
             x: el.x + drag.offsetX,
             y: el.y + drag.offsetY,
@@ -716,7 +772,9 @@ export function OverlayLayer({
 
   // 拖拽文件 / 文本卡时实时算出落点所在区域 —— 用于高亮提示（区域拖拽不需要）。
   const dropRegionId = useMemo<string | null>(() => {
-    if (!drag || !drag.moved || drag.kind === 'region') return null;
+    if (!drag || !drag.moved) return null;
+    // 区域拖拽 / 整组拖拽不重设归属 —— 不显示落点高亮。
+    if (drag.kind === 'region' || drag.kind === 'group') return null;
     const el = scene.elements.find((x) => x.id === drag.elementId);
     if (!el) return null;
     const cardRect: RectLike = {
@@ -865,6 +923,44 @@ export function OverlayLayer({
       }
     };
 
+    // ── 左键空白处框选（多选）──────────────────────────────────
+    const onLeftMove = (e: PointerEvent): void => {
+      const p = leftPressRef.current;
+      if (!p) return;
+      if (
+        !p.moved &&
+        Math.hypot(e.clientX - p.startX, e.clientY - p.startY) <=
+          DRAG_THRESHOLD_PX
+      ) {
+        return;
+      }
+      p.moved = true;
+      const c = toCanvas(e.clientX, e.clientY);
+      setSelectMarquee(normRect(p.startCX, p.startCY, c.x, c.y));
+    };
+
+    const onLeftUp = (e: PointerEvent): void => {
+      const p = leftPressRef.current;
+      leftPressRef.current = null;
+      window.removeEventListener('pointermove', onLeftMove);
+      window.removeEventListener('pointerup', onLeftUp);
+      setSelectMarquee(null);
+      if (!p || !p.moved) return; // 只是点击 —— 选区已在 onDown 处理
+      const c = toCanvas(e.clientX, e.clientY);
+      const box = normRect(p.startCX, p.startCY, c.x, c.y);
+      // 与虚线框相交的可框选元素（区域 / 连线 / 建议不纳入）。
+      const hits = sceneRef.current.elements
+        .filter(
+          (el) => MARQUEE_TYPES.has(el.type) && intersectionArea(box, el) > 0,
+        )
+        .map((el) => el.id);
+      setSelectedIds((prev) => {
+        const next = p.additive ? new Set(prev) : new Set<string>();
+        for (const id of hits) next.add(id);
+        return next;
+      });
+    };
+
     const onDown = (e: PointerEvent): void => {
       // 创建工具激活 + 左键 → 进入创建（优先于选中 / 卡片交互）。
       const tool = activeToolRef.current;
@@ -889,13 +985,29 @@ export function OverlayLayer({
         return;
       }
       if (e.button === 0) {
-        // 左键：点在内容元素 / 连线 / 手柄 / 样式面板之外 → 取消选中。
+        // 左键空白处：点在内容元素 / 连线 / 手柄 / 样式面板上 → 交给各自处理。
         const t = e.target as HTMLElement | null;
-        if (
-          !t ||
-          !t.closest('[data-element-id],[data-connector-id],.ov-style-panel')
-        ) {
-          setSelectedId(null);
+        const onEl =
+          !!t &&
+          !!t.closest('[data-element-id],[data-connector-id],.ov-style-panel');
+        if (onEl) return;
+        // 空白处：非 shift 即清空选区；选择工具下左键拖拽 = 框选多选。
+        if (!e.shiftKey) {
+          setSelectedIds(new Set());
+          setSelectMarquee(null);
+        }
+        if (activeToolRef.current === 'selection') {
+          const c = toCanvas(e.clientX, e.clientY);
+          leftPressRef.current = {
+            startX: e.clientX,
+            startY: e.clientY,
+            startCX: c.x,
+            startCY: c.y,
+            moved: false,
+            additive: e.shiftKey,
+          };
+          window.addEventListener('pointermove', onLeftMove);
+          window.addEventListener('pointerup', onLeftUp);
         }
         return;
       }
@@ -937,6 +1049,8 @@ export function OverlayLayer({
       host.removeEventListener('contextmenu', onContextMenu, true);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointermove', onLeftMove);
+      window.removeEventListener('pointerup', onLeftUp);
       window.removeEventListener('pointermove', onCreateMove);
       window.removeEventListener('pointerup', onCreateUp);
       window.removeEventListener('pointercancel', onCreateUp);
@@ -968,15 +1082,15 @@ export function OverlayLayer({
 
   // 进连线模式时清掉选中态 —— 连线模式不显示选择框 / 手柄。
   useEffect(() => {
-    if (connectMode) setSelectedId(null);
+    if (connectMode) setSelectedIds(new Set());
   }, [connectMode]);
 
-  // 选中态键盘操作：Esc 取消选中；Delete / Backspace 删除选中元素。
+  // 选中态键盘操作：Esc 取消选中；Delete / Backspace 删除选中元素（含多选批量）。
   useEffect(() => {
-    if (!selectedId) return;
+    if (selectedIds.size === 0) return;
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
-        setSelectedId(null);
+        setSelectedIds(new Set());
         return;
       }
       if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -991,12 +1105,12 @@ export function OverlayLayer({
           return;
         }
         e.preventDefault();
-        void deleteSelected(selectedId);
+        void deleteSelectedSet(selectedIds);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedId]);
+  }, [selectedIds]);
 
   // 橡皮擦模式：在 .board-canvas 上以捕获阶段拦截左键按下 —— 命中画布元素
   // （图形 / 手绘 / 连线 / 文件卡 / 文本卡）即删除并吞掉事件（不触发拖拽）；
@@ -1081,11 +1195,11 @@ export function OverlayLayer({
     const cur = sceneRef.current;
     const el = cur.elements.find((e) => e.id === id);
     if (!el) {
-      setSelectedId(null);
+      clearSelection();
       return;
     }
     if (el.type === 'region' || el.type === 'folder') return;
-    setSelectedId(null);
+    clearSelection();
 
     if (el.type === 'file') {
       if (connection !== 'connected') {
@@ -1112,6 +1226,47 @@ export function OverlayLayer({
     // connector / text 等无文件系统对应物 —— 改内存场景，自动同步负责落盘。
     const { scene: next } = removeElement(cur, id);
     replaceScene(next, 'canvas');
+  }
+
+  /**
+   * 批量删除一组选中元素 —— 多选 Delete 用。
+   *
+   * 与单删一致：区域 / 文件夹背后是真实文件夹，不在画布删除范围；连线 / 文本 /
+   * 图形 / 手绘一次性从内存场景移除；文件元素背后是真实文件，乐观移除后逐个经
+   * server 移入回收站。removeElement 连带清理指向被删元素的悬空连线。
+   */
+  async function deleteSelectedSet(ids: ReadonlySet<string>): Promise<void> {
+    const cur = sceneRef.current;
+    const els = [...ids]
+      .map((id) => cur.elements.find((e) => e.id === id))
+      .filter(
+        (e): e is Element => !!e && e.type !== 'region' && e.type !== 'folder',
+      );
+    clearSelection();
+    if (els.length === 0) return;
+    const files = els.filter((e): e is FileElement => e.type === 'file');
+    const others = els.filter((e) => e.type !== 'file');
+    const canDeleteFiles = connection === 'connected';
+    // 先在内存场景里移除可删元素（removeElement 连带清理悬空连线引用）。
+    let working = cur;
+    for (const e of others) working = removeElement(working, e.id).scene;
+    if (canDeleteFiles) {
+      for (const f of files) working = removeElement(working, f.id).scene;
+    }
+    if (working !== cur) replaceScene(working, 'canvas');
+    if (files.length > 0 && !canDeleteFiles) {
+      window.alert('未连接 board-server，文件元素未删除。');
+      return;
+    }
+    // 文件元素背后是真实文件 —— 逐个经 server 移入回收站。
+    for (const f of files) {
+      try {
+        await deleteElement(f.id);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        window.alert(`删除文件「${fileBaseName(f.path)}」失败：${msg}`);
+      }
+    }
   }
 
   /**
@@ -1287,9 +1442,33 @@ export function OverlayLayer({
     replaceScene({ ...patched, elements: grown.elements }, 'canvas');
   }
 
+  /**
+   * 多选整组拖拽结束 —— 把选区内全部元素按相同偏移整体平移。
+   * 纯空间批量移动：不重设归属、不触发区域增长、不做文件系统层面的移动
+   * （区分于单文件卡跨区域拖拽）。各元素标记为手动定位，避免被自动排版拉回。
+   */
+  function finishGroupDrag(d: DragState): void {
+    const cur = sceneRef.current;
+    const ts = new Date().toISOString();
+    const elements = cur.elements.map((e): Element =>
+      d.memberIds.has(e.id)
+        ? ({
+            ...e,
+            x: e.x + d.offsetX,
+            y: e.y + d.offsetY,
+            autoPlaced: false,
+            updatedBy: actorId,
+            updatedAt: ts,
+          } as Element)
+        : e,
+    );
+    replaceScene({ ...cur, elements }, 'canvas');
+  }
+
   /** 拖拽结束分发。 */
   function finishDrag(d: DragState): void {
-    if (d.kind === 'region') finishRegionDrag(d);
+    if (d.kind === 'group') finishGroupDrag(d);
+    else if (d.kind === 'region') finishRegionDrag(d);
     else if (d.kind === 'text') finishTextDrag(d);
     else if (d.kind === 'element') finishPlainDrag(d);
     else finishFileDrag(d);
@@ -1379,7 +1558,7 @@ export function OverlayLayer({
     }
     if (!el) return;
     replaceScene({ ...cur, elements: [...cur.elements, el] }, 'canvas');
-    setSelectedId(el.id);
+    selectOnly(el.id);
     onActiveToolChange?.('selection');
   }
 
@@ -1396,7 +1575,7 @@ export function OverlayLayer({
       markdown: '文本',
     });
     replaceScene({ ...cur, elements: [...cur.elements, el] }, 'canvas');
-    setSelectedId(el.id);
+    selectOnly(el.id);
     onActiveToolChange?.('selection');
   }
 
@@ -1494,13 +1673,28 @@ export function OverlayLayer({
   function beginDrag(
     e: React.PointerEvent<HTMLDivElement>,
     el: Element,
-    kind: 'file' | 'region' | 'text' | 'element',
+    kind: 'file' | 'region' | 'text' | 'element' | 'group',
   ): void {
     if (e.button !== 0) return; // 仅响应主键
     e.currentTarget.setPointerCapture(e.pointerId);
+    const cur = sceneRef.current;
+    // 随本次拖拽一起平移的元素集 —— group 为整个选区，其余仅自身；其中若含
+    // 区域则连带其子元素（保持「区域包含其内容」一起移动）。
+    const members = new Set<string>(
+      kind === 'group' ? selectedIdsRef.current : [el.id],
+    );
+    for (const id of [...members]) {
+      const m = cur.elements.find((x) => x.id === id);
+      if (m?.type === 'region') {
+        for (const c of cur.elements) {
+          if (c.parentId === id) members.add(c.id);
+        }
+      }
+    }
     setDrag({
       kind,
       elementId: el.id,
+      memberIds: members,
       pointerId: e.pointerId,
       startScreenX: e.clientX,
       startScreenY: e.clientY,
@@ -1540,6 +1734,10 @@ export function OverlayLayer({
     }
     setDrag(null);
     if (d.moved) finishDrag(d);
+    else if (d.kind === 'group') {
+      // 多选中对某元素的单击（未拖拽）—— 选区收敛到该元素。
+      selectOnly(d.elementId);
+    }
   }
 
   /** 指针取消（如系统手势打断）—— 直接丢弃拖拽，不改场景。 */
@@ -1693,13 +1891,18 @@ export function OverlayLayer({
     ? (connectTargets.find((e) => e.id === highlightTargetId) ?? null)
     : null;
 
+  // 恰好选中一个元素时的单选 id —— 样式面板 / 缩放手柄 / 连线端点手柄
+  // 只在单选时出现（多选只显示选择框，可整组拖拽 / 批量删除）。
+  const soloId: string | null =
+    selectedIds.size === 1 ? ([...selectedIds][0] ?? null) : null;
+
   // 选中连线时 —— 其两端实际绑定的元素（「实际连接的位置」），给它们也套上
   // 对应形状的外包围，直观显示这条连线连了谁。
   const selectedConnector =
-    selectedId != null
+    soloId != null
       ? scene.elements.find(
           (e): e is ConnectorElement =>
-            e.id === selectedId && e.type === 'connector',
+            e.id === soloId && e.type === 'connector',
         )
       : undefined;
   const connBoundEls: Element[] = selectedConnector
@@ -1725,10 +1928,10 @@ export function OverlayLayer({
 
   // 选中的元素 —— 决定是否浮出样式面板。图形 / 手绘自研画布层后也由本面板
   // 编辑（自研画布层增量5），不再依赖 Excalidraw 属性面板。
-  const styleEl = selectedId
+  const styleEl = soloId
     ? (scene.elements.find(
         (e) =>
-          e.id === selectedId &&
+          e.id === soloId &&
           (e.type === 'connector' ||
             e.type === 'file' ||
             e.type === 'folder' ||
@@ -1832,8 +2035,16 @@ export function OverlayLayer({
             const region = el;
             headerHandlers = {
               onPointerDown: (e) => {
-                if (e.button === 0) setSelectedId(region.id);
-                beginDrag(e, region, 'region');
+                if (e.button !== 0) return;
+                if (e.shiftKey) {
+                  // shift 点选 —— 切换区域在多选中的去留，不拖拽。
+                  toggleInSelection(region.id);
+                  return;
+                }
+                const inGroup =
+                  selectedIds.has(region.id) && selectedIds.size > 1;
+                if (!inGroup) selectOnly(region.id);
+                beginDrag(e, region, inGroup ? 'group' : 'region');
               },
               onPointerMove: handlePointerMove,
               onPointerUp: handlePointerUp,
@@ -1861,8 +2072,18 @@ export function OverlayLayer({
                       // 点选该元素（显示选择框 / 手柄）并进入待拖拽态。
                       // 区域走头部手柄，不在此。
                       if (e.button !== 0) return;
-                      setSelectedId(el.id);
-                      if (isFile || isText) {
+                      if (e.shiftKey) {
+                        // shift 点选 —— 切换该元素在多选中的去留，不拖拽。
+                        toggleInSelection(el.id);
+                        return;
+                      }
+                      // 在已有多选中按下 → 整组拖拽；否则单选该元素后单拖。
+                      const inGroup =
+                        selectedIds.has(el.id) && selectedIds.size > 1;
+                      if (!inGroup) selectOnly(el.id);
+                      if (inGroup) {
+                        beginDrag(e, el, 'group');
+                      } else if (isFile || isText) {
                         beginDrag(e, el, isFile ? 'file' : 'text');
                       } else if (isShape || isDraw) {
                         beginDrag(e, el, 'element');
@@ -1906,14 +2127,12 @@ export function OverlayLayer({
               ) : (
                 <FileCard element={el} missing={missingFileIds.has(el.id)} />
               )}
-              {/* 选中态：选择框 + 八向缩放手柄（圆点）—— 像 Excalidraw 原生
-                  元素那样，选中后才出现包围框与可拖拽的圆点。 */}
-              {el.id === selectedId ? (
-                <>
-                  <SelectionFrame element={el} width={rw} height={rh} />
-                  <ResizeHandles api={resizeApi} />
-                </>
+              {/* 选中态：选择框 —— 选中（含多选）即出现。 */}
+              {selectedIds.has(el.id) ? (
+                <SelectionFrame element={el} width={rw} height={rh} />
               ) : null}
+              {/* 八向缩放手柄（圆点）—— 仅单选时出现（多选不缩放）。 */}
+              {soloId === el.id ? <ResizeHandles api={resizeApi} /> : null}
               {/* 评论角标（PRD §8.4）—— 元素有评论时显示条数 */}
               {(el.comments?.length ?? 0) > 0 ? (
                 <div
@@ -1935,8 +2154,10 @@ export function OverlayLayer({
         <ConnectorLayer
           scene={scene}
           liveRects={liveRects}
-          selectedId={selectedId}
-          onSelect={setSelectedId}
+          selectedIds={selectedIds}
+          onSelect={(id, additive) =>
+            additive ? toggleInSelection(id) : selectOnly(id)
+          }
           interactive={!connectMode}
           zoom={zoom}
           onEndpointCommit={rebindConnectorEndpoint}
@@ -2002,6 +2223,19 @@ export function OverlayLayer({
               top: `${marquee.y}px`,
               width: `${marquee.width}px`,
               height: `${marquee.height}px`,
+            }}
+          />
+        ) : null}
+
+        {/* 左键框选多选的虚线框 */}
+        {selectMarquee ? (
+          <div
+            className="ov-marquee"
+            style={{
+              left: `${selectMarquee.x}px`,
+              top: `${selectMarquee.y}px`,
+              width: `${selectMarquee.width}px`,
+              height: `${selectMarquee.height}px`,
             }}
           />
         ) : null}

@@ -71,10 +71,16 @@ export interface ConnectorLayerProps {
    * 其余元素直接读场景坐标。
    */
   liveRects: ReadonlyMap<string, RectLike>;
-  /** 当前选中的连线 id —— 选中态在线下垫一道高亮光晕、两端浮出手柄。 */
-  selectedId?: string | null;
-  /** 点击连线时回调其 id（用于选中该连线，配合 Delete 删除）。 */
-  onSelect?: (id: string) => void;
+  /**
+   * 当前选区 id 集合 —— 选中的连线在线下垫高亮光晕；恰好单选该连线时两端
+   * 浮出端点重连手柄。
+   */
+  selectedIds?: ReadonlySet<string>;
+  /**
+   * 点击连线时回调其 id —— additive（shift 点击）为 true 时切换其在多选中的
+   * 去留，否则单选该连线。
+   */
+  onSelect?: (id: string, additive: boolean) => void;
   /**
    * 是否启用连线点选命中区。连线模式（箭头工具）下传 false —— 否则连线的
    * 透明命中描边会挡住「从连线上画起 / 画到」。
@@ -227,7 +233,7 @@ function arrowPath(tip: Pt, dir: Pt): string {
 export function ConnectorLayer({
   scene,
   liveRects,
-  selectedId,
+  selectedIds,
   onSelect,
   interactive = true,
   zoom = 1,
@@ -434,7 +440,10 @@ export function ConnectorLayer({
         const endDir = unit(lpts[lpts.length - 2]!, last);
         const startDir = unit(lpts[1]!, first);
         const pointStr = lpts.map((p) => `${p.x},${p.y}`).join(' ');
-        const showHandles = g.id === selectedId && !!onEndpointCommit;
+        const isSelected = !!selectedIds?.has(g.id);
+        // 端点重连手柄 —— 仅恰好单选该连线时出现（多选不重连）。
+        const showHandles =
+          isSelected && selectedIds?.size === 1 && !!onEndpointCommit;
         return (
           <svg
             key={g.id}
@@ -447,7 +456,7 @@ export function ConnectorLayer({
           >
             <g opacity={g.opacity}>
               {/* 选中态：可见线之下垫一道半透明光晕。 */}
-              {g.id === selectedId ? (
+              {isSelected ? (
                 <polyline
                   className="ov-connector-sel"
                   points={pointStr}
@@ -482,7 +491,7 @@ export function ConnectorLayer({
                   strokeWidth={Math.max(g.strokeWidth + 10, 14)}
                   onPointerDown={(e) => {
                     e.stopPropagation();
-                    onSelect(g.id);
+                    onSelect(g.id, e.shiftKey);
                   }}
                 />
               ) : null}
