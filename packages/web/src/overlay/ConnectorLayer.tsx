@@ -1,20 +1,22 @@
 /**
  * 连线层 —— 覆盖层内以 SVG 渲染 `connector` 元素。
  *
- * 连线脱离 Excalidraw、改由覆盖层绘制（M2 增量）。这样连线能连接**任意**
- * 元素 —— 图形 / 文件卡 / 文本卡 / 区域，并随端点元素移动 / 缩放实时跟随
- * （覆盖层在每次场景或拖拽状态变化时重渲染）。
+ * 连线由覆盖层绘制，能连接**任意**元素 —— 图形 / 文件卡 / 文本卡 / 区域，并随
+ * 端点元素移动 / 缩放实时跟随（覆盖层在每次场景或拖拽状态变化时重渲染）。
  *
  * 路由：
  *  - 两端都绑定元素 → 端点贴各自矩形边缘（连线不戳进卡片内部，留 `EDGE_GAP`
  *    间隙），从根本上避免「连线压在图形上」。
- *  - 自由连线（用户用箭头工具画、无绑定）→ 按自身几何（meta.ex.points）画折线。
+ *  - 自由连线（无绑定）→ 按自身几何（meta.ex.points）画折线。
  *
- * 渲染：每条连线一个独立 `<svg>`，尺寸贴合该连线的包围盒并按画布坐标定位 ——
- * 不用 0×0 + overflow 的技巧（外层 svg 视口为 0 时浏览器会裁掉描边、连线画
- * 不出来）。端点元素的实时矩形由 `liveRects` 覆写（拖拽 / 缩放进行中的元素）。
+ * 端点重连（自研画布层）：选中连线后两端浮出圆形手柄，拖动手柄即把该端点
+ * 重连到落点处的元素（落在空白处则变为自由端），由 `onEndpointCommit` 落定。
+ *
+ * 渲染：每条连线一个独立 `<svg>`，尺寸贴合该连线的包围盒并按画布坐标定位。
+ * 端点元素的实时矩形由 `liveRects` 覆写（拖拽 / 缩放进行中的元素）。
  */
-import { useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { BoardScene, ConnectorElement, ArrowHead } from '@board/core';
 import type { RectLike } from './util';
 
@@ -25,11 +27,35 @@ const ARROW_LEN = 13;
 const ARROW_HALF = 5;
 /** 点形端点的半径（画布单位）。 */
 const DOT_R = 4;
+/** 端点重连手柄的屏幕半径（像素）—— 按 zoom 反向缩放，保持恒定屏幕尺寸。 */
+const HANDLE_R = 7;
 
 /** 平面点。 */
 interface Pt {
   x: number;
   y: number;
+}
+
+/** 端点拖拽的瞬时状态。 */
+interface EndpointDrag {
+  /** 被拖连线 id。 */
+  connectorId: string;
+  /** 被拖的是哪一端。 */
+  which: 'start' | 'end';
+  /** 捕获的指针 id。 */
+  pointerId: number;
+  /** 指针按下时的屏幕坐标。 */
+  startScreenX: number;
+  startScreenY: number;
+  /** 被拖端点按下时的画布坐标。 */
+  startCanvasX: number;
+  startCanvasY: number;
+  /** 另一端（不动）的画布坐标 —— 落定时用于重算几何。 */
+  anchorX: number;
+  anchorY: number;
+  /** 被拖端点当前画布坐标。 */
+  curX: number;
+  curY: number;
 }
 
 export interface ConnectorLayerProps {
@@ -40,7 +66,7 @@ export interface ConnectorLayerProps {
    * 其余元素直接读场景坐标。
    */
   liveRects: ReadonlyMap<string, RectLike>;
-  /** 当前选中的连线 id —— 选中态在线下垫一道高亮光晕。 */
+  /** 当前选中的连线 id —— 选中态在线下垫一道高亮光晕、两端浮出手柄。 */
   selectedId?: string | null;
   /** 点击连线时回调其 id（用于选中该连线，配合 Delete 删除）。 */
   onSelect?: (id: string) => void;
@@ -49,6 +75,21 @@ export interface ConnectorLayerProps {
    * 透明命中描边会挡住「从连线上画起 / 画到」。
    */
   interactive?: boolean;
+  /** 当前缩放 —— 端点拖拽把屏幕位移换算到画布、手柄按 zoom 反向缩放。 */
+  zoom?: number;
+  /**
+   * 端点拖拽落定 —— 由 OverlayLayer 做命中测试、重绑端点、重算几何并落盘。
+   * @param dropX/dropY     被拖端点的落点（画布坐标）
+   * @param anchorX/anchorY 另一端的画布坐标
+   */
+  onEndpointCommit?: (
+    connectorId: string,
+    which: 'start' | 'end',
+    dropX: number,
+    dropY: number,
+    anchorX: number,
+    anchorY: number,
+  ) => void;
 }
 
 /** 一条连线渲染所需的几何 + 样式。 */
@@ -165,10 +206,16 @@ export function ConnectorLayer({
   selectedId,
   onSelect,
   interactive = true,
+  zoom = 1,
+  onEndpointCommit,
 }: ConnectorLayerProps): JSX.Element | null {
+  // 端点拖拽瞬时状态；ref 镜像供指针回调读取最新值。
+  const [epDrag, setEpDrag] = useState<EndpointDrag | null>(null);
+  const epDragRef = useRef<EndpointDrag | null>(null);
+  epDragRef.current = epDrag;
+
   const geoms = useMemo<ConnGeom[]>(() => {
-    // 按 id 去重（保留最后一次出现）—— 防御性兜底：即便上游意外塞进重复
-    // connector，也不渲染重影、不触发 React 重复 key 警告。
+    // 按 id 去重（保留最后一次出现）—— 防御性兜底。
     const seen = new Set<string>();
     const connectors: ConnectorElement[] = [];
     for (let i = scene.elements.length - 1; i >= 0; i -= 1) {
@@ -193,17 +240,25 @@ export function ConnectorLayer({
 
     const out: ConnGeom[] = [];
     for (const conn of connectors) {
-      const aRect = conn.start.elementId ? rectOf(conn.start.elementId) : null;
-      const bRect = conn.end.elementId ? rectOf(conn.end.elementId) : null;
+      // 正被拖拽的那一端视作自由端（忽略其绑定），停在光标处。
+      const drag =
+        epDrag && epDrag.connectorId === conn.id ? epDrag : null;
+      const aBound = !!conn.start.elementId && drag?.which !== 'start';
+      const bBound = !!conn.end.elementId && drag?.which !== 'end';
+      const aRect = aBound ? rectOf(conn.start.elementId!) : null;
+      const bRect = bBound ? rectOf(conn.end.elementId!) : null;
+
+      // 两端的「自由位置」—— 拖拽端用光标位置，否则取 meta.ex.points。
+      const free = freePoints(conn);
+      let fa = free[0]!;
+      let fb = free[free.length - 1]!;
+      if (drag?.which === 'start') fa = { x: drag.curX, y: drag.curY };
+      if (drag?.which === 'end') fb = { x: drag.curX, y: drag.curY };
 
       let pts: Pt[];
       if (aRect || bRect) {
-        // 至少一端绑定元素：绑定端贴该元素矩形边缘并随之移动 / 缩放跟随；
-        // 自由端停在自身几何端点上。两端皆绑定即标准「贴边路由」。
-        const free = freePoints(conn);
-        const fa = free[0]!;
-        const fb = free[free.length - 1]!;
-        // 绑定端的朝向目标：对端中心（对端也绑定时）否则对端自由点。
+        // 至少一端绑定元素：绑定端贴该元素矩形边缘并随之跟随；自由端停在
+        // 自身位置。两端皆绑定即标准「贴边路由」。
         const towardA = bRect ? center(bRect) : fb;
         const towardB = aRect ? center(aRect) : fa;
         let p1 = aRect ? edgePoint(aRect, towardA.x, towardA.y) : fa;
@@ -217,8 +272,8 @@ export function ConnectorLayer({
         }
         pts = [p1, p2];
       } else {
-        // 两端都自由：按自身几何画折线。
-        pts = freePoints(conn);
+        // 两端都自由：用两端的自由位置。
+        pts = [fa, fb];
       }
       if (pts.length < 2) continue;
 
@@ -237,7 +292,87 @@ export function ConnectorLayer({
       });
     }
     return out;
-  }, [scene.elements, liveRects]);
+  }, [scene.elements, liveRects, epDrag]);
+
+  // ── 端点拖拽指针处理 ─────────────────────────────────────────
+  // 移动 / 抬起监听挂在 window 上（不靠 SVG 元素的 setPointerCapture ——
+  // 后者在 SVG 子元素上不可靠）。用 ref 让回调读到最新 zoom / 提交回调。
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+  const commitRef = useRef(onEndpointCommit);
+  commitRef.current = onEndpointCommit;
+
+  const onWinMove = useCallback((e: PointerEvent): void => {
+    const d = epDragRef.current;
+    if (!d || e.pointerId !== d.pointerId) return;
+    const dx = (e.clientX - d.startScreenX) / zoomRef.current;
+    const dy = (e.clientY - d.startScreenY) / zoomRef.current;
+    const next: EndpointDrag = {
+      ...d,
+      curX: d.startCanvasX + dx,
+      curY: d.startCanvasY + dy,
+    };
+    epDragRef.current = next;
+    setEpDrag(next);
+  }, []);
+  const onWinUp = useCallback(
+    (e: PointerEvent): void => {
+      const d = epDragRef.current;
+      if (!d || e.pointerId !== d.pointerId) return;
+      window.removeEventListener('pointermove', onWinMove);
+      window.removeEventListener('pointerup', onWinUp);
+      window.removeEventListener('pointercancel', onWinUp);
+      epDragRef.current = null;
+      setEpDrag(null);
+      commitRef.current?.(
+        d.connectorId,
+        d.which,
+        d.curX,
+        d.curY,
+        d.anchorX,
+        d.anchorY,
+      );
+    },
+    [onWinMove],
+  );
+  // 卸载时兜底移除 window 监听。
+  useEffect(
+    () => () => {
+      window.removeEventListener('pointermove', onWinMove);
+      window.removeEventListener('pointerup', onWinUp);
+      window.removeEventListener('pointercancel', onWinUp);
+    },
+    [onWinMove, onWinUp],
+  );
+
+  const onHandleDown = (
+    e: ReactPointerEvent<SVGCircleElement>,
+    g: ConnGeom,
+    which: 'start' | 'end',
+  ): void => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    const ep = which === 'start' ? g.pts[0]! : g.pts[g.pts.length - 1]!;
+    const other = which === 'start' ? g.pts[g.pts.length - 1]! : g.pts[0]!;
+    const d: EndpointDrag = {
+      connectorId: g.id,
+      which,
+      pointerId: e.pointerId,
+      startScreenX: e.clientX,
+      startScreenY: e.clientY,
+      startCanvasX: ep.x,
+      startCanvasY: ep.y,
+      anchorX: other.x,
+      anchorY: other.y,
+      curX: ep.x,
+      curY: ep.y,
+    };
+    epDragRef.current = d;
+    setEpDrag(d);
+    window.addEventListener('pointermove', onWinMove);
+    window.addEventListener('pointerup', onWinUp);
+    window.addEventListener('pointercancel', onWinUp);
+  };
 
   if (geoms.length === 0) return null;
 
@@ -260,6 +395,7 @@ export function ConnectorLayer({
         const endDir = unit(lpts[lpts.length - 2]!, last);
         const startDir = unit(lpts[1]!, first);
         const pointStr = lpts.map((p) => `${p.x},${p.y}`).join(' ');
+        const showHandles = g.id === selectedId && !!onEndpointCommit;
         return (
           <svg
             key={g.id}
@@ -312,6 +448,28 @@ export function ConnectorLayer({
                 />
               ) : null}
             </g>
+            {/* 端点重连手柄 —— 选中态两端各一个圆，可拖拽改连接对象。
+                半径按 zoom 反向缩放，保持恒定屏幕尺寸。 */}
+            {showHandles ? (
+              <>
+                <circle
+                  className="ov-conn-handle"
+                  cx={first.x}
+                  cy={first.y}
+                  r={HANDLE_R / zoom}
+                  strokeWidth={1.6 / zoom}
+                  onPointerDown={(e) => onHandleDown(e, g, 'start')}
+                />
+                <circle
+                  className="ov-conn-handle"
+                  cx={last.x}
+                  cy={last.y}
+                  r={HANDLE_R / zoom}
+                  strokeWidth={1.6 / zoom}
+                  onPointerDown={(e) => onHandleDown(e, g, 'end')}
+                />
+              </>
+            ) : null}
           </svg>
         );
       })}

@@ -20,6 +20,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   BoardScene,
+  ConnectorElement,
   Element,
   FileElement,
   ParticipantId,
@@ -1293,6 +1294,66 @@ export function OverlayLayer({
     replaceScene(next, 'canvas');
   }
 
+  /**
+   * 连线端点拖拽落定 —— 对落点做命中测试，重绑该端点（落在空白处则变为
+   * 自由端），据落点与另一端重算连线包围盒与折线几何。
+   */
+  function rebindConnectorEndpoint(
+    connId: string,
+    which: 'start' | 'end',
+    dropX: number,
+    dropY: number,
+    anchorX: number,
+    anchorY: number,
+  ): void {
+    const cur = sceneRef.current;
+    const conn = cur.elements.find(
+      (e): e is ConnectorElement => e.id === connId && e.type === 'connector',
+    );
+    if (!conn) return;
+    // 落点命中元素 → 绑定到该元素；否则该端点变为自由端。
+    const targets = cur.elements.filter(
+      (e) => e.type !== 'connector' && e.type !== 'suggestion',
+    );
+    const hit = smallestHitAt(targets, dropX, dropY, CONNECT_TOL);
+    // 由落点与另一端重算包围盒与 meta.ex.points（相对包围盒左上角）。
+    const minX = Math.min(dropX, anchorX);
+    const minY = Math.min(dropY, anchorY);
+    const dropRel: [number, number] = [dropX - minX, dropY - minY];
+    const anchorRel: [number, number] = [anchorX - minX, anchorY - minY];
+    const startRel = which === 'start' ? dropRel : anchorRel;
+    const endRel = which === 'start' ? anchorRel : dropRel;
+    const newStart =
+      which === 'start'
+        ? { elementId: hit, anchor: 'auto' as const, point: dropRel }
+        : { ...conn.start, point: anchorRel };
+    const newEnd =
+      which === 'end'
+        ? { elementId: hit, anchor: 'auto' as const, point: dropRel }
+        : { ...conn.end, point: anchorRel };
+    const prevEx = conn.meta?.['ex'];
+    const exObj =
+      prevEx && typeof prevEx === 'object'
+        ? (prevEx as Record<string, unknown>)
+        : {};
+    const next: ConnectorElement = {
+      ...conn,
+      x: minX,
+      y: minY,
+      width: Math.abs(dropX - anchorX),
+      height: Math.abs(dropY - anchorY),
+      start: newStart,
+      end: newEnd,
+      meta: { ...conn.meta, ex: { ...exObj, points: [startRel, endRel] } },
+      updatedBy: actorId,
+      updatedAt: new Date().toISOString(),
+    };
+    replaceScene(
+      { ...cur, elements: cur.elements.map((e) => (e.id === connId ? next : e)) },
+      'canvas',
+    );
+  }
+
   /** 指针按下卡片 / 图形 / 区域头部 —— 捕获指针，记录起点，进入待拖拽状态。 */
   function beginDrag(
     e: React.PointerEvent<HTMLDivElement>,
@@ -1716,6 +1777,8 @@ export function OverlayLayer({
           selectedId={selectedId}
           onSelect={setSelectedId}
           interactive={!connectMode}
+          zoom={zoom}
+          onEndpointCommit={rebindConnectorEndpoint}
         />
 
         {/* 建议卡片（PRD §7.3）—— 承载 Agent 提议，含同意/拒绝/描述操作。

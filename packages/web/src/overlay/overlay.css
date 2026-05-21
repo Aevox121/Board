@@ -1151,6 +1151,19 @@
   pointer-events: none;
 }
 
+/* 连线端点重连手柄 —— 选中态两端的圆，可拖拽改连接对象。
+   父级 .ov-connector 是 pointer-events:none，本元素显式开启即可被拖。 */
+.ov-conn-handle {
+  fill: var(--c-surface);
+  stroke: var(--c-accent);
+  pointer-events: all;
+  cursor: grab;
+}
+
+.ov-conn-handle:hover {
+  fill: var(--c-accent-tint);
+}
+
 /* 连线标签 —— 贴在折线中点，浅底描边保证压在线上仍可读。 */
 .ov-connector-label {
   position: absolute;
