@@ -101,3 +101,55 @@ export function viewportsEqual(a: CanvasViewport, b: CanvasViewport): boolean {
     Math.abs(a.zoom - b.zoom) < 0.0001
   );
 }
+
+/** fitToContent 关心的元素包围盒字段。 */
+interface BoxLike {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * 计算把全部元素装入视口的视口值 —— 导入 / 首次连接时聚焦到内容。
+ *
+ * 缩放上限 1（不放大小内容、保持原始比例），下限 ZOOM_MIN；内容居中。
+ * 空场景或视口尺寸未知时回退到初始视口。
+ */
+export function fitToContent(
+  elements: ReadonlyArray<BoxLike>,
+  viewWidth: number,
+  viewHeight: number,
+  padding = 80,
+): CanvasViewport {
+  if (elements.length === 0 || viewWidth <= 0 || viewHeight <= 0) {
+    return INITIAL_VIEWPORT;
+  }
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const e of elements) {
+    minX = Math.min(minX, e.x);
+    minY = Math.min(minY, e.y);
+    maxX = Math.max(maxX, e.x + e.width);
+    maxY = Math.max(maxY, e.y + e.height);
+  }
+  const contentW = Math.max(1, maxX - minX);
+  const contentH = Math.max(1, maxY - minY);
+  const zoom = clampZoom(
+    Math.min(
+      (viewWidth - 2 * padding) / contentW,
+      (viewHeight - 2 * padding) / contentH,
+      1,
+    ),
+  );
+  // 内容中心对齐视口中心：(center + scroll) * zoom = viewSize/2。
+  const centerX = (minX + maxX) / 2;
+  const centerY = (minY + maxY) / 2;
+  return {
+    scrollX: viewWidth / 2 / zoom - centerX,
+    scrollY: viewHeight / 2 / zoom - centerY,
+    zoom,
+  };
+}

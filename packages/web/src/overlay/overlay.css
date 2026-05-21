@@ -15,10 +15,8 @@
   pointer-events: none;
   overflow: hidden;
   /*
-   * z-index 必须高于 Excalidraw 的「交互画布」(z-index:2)，否则那张透明画布
-   * 会盖在卡片之上、截走指针事件 —— 卡片看得见却点不动。取 3：在交互画布
-   * (2) 之上、Excalidraw UI 浮层 (.layer-ui__wrapper z-index:4) 之下。
-   * 本层 pointer-events:none，空白处指针仍下穿到交互画布（不影响画布绘图）。
+   * 叠在网格背景（.cv-grid z-index:0）之上。本层 pointer-events:none，
+   * 空白处指针下穿到画布外壳（用于平移手势 / 取消选中）。
    */
   z-index: 3;
 }
@@ -35,6 +33,11 @@
 /* 单个元素的定位槽 —— 按画布坐标绝对定位。 */
 .ov-slot {
   position: absolute;
+}
+
+/* 图形 / 手绘槽 —— 增量3 仅渲染、不交互（选择 / 变换 / 删除归增量5）。 */
+.ov-slot--drawing {
+  pointer-events: none;
 }
 
 /* 评论角标（PRD §8.4）—— 贴在卡片右上角，显示评论条数；hover 出全文。 */

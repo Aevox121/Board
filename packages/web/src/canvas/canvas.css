@@ -50,7 +50,7 @@
   cursor: grabbing !important;
 }
 
-/* 无限点阵网格 —— 铺在最底层（Excalidraw 之下，故 Excalidraw 背景须透明）。 */
+/* 无限点阵网格 —— 铺在最底层。 */
 .cv-grid {
   position: absolute;
   inset: 0;
@@ -62,6 +62,12 @@
     transparent 1.6px
   );
   background-repeat: repeat;
+}
+
+/* 覆盖层 + 在场层的定位容器 —— 铺满外壳，透明（透出网格）。 */
+.board-canvas {
+  position: absolute;
+  inset: 0;
 }
 
 /* ── 工具栏 ─────────────────────────────────────────────────── */

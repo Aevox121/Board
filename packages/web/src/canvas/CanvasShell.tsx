@@ -1,25 +1,29 @@
 /**
- * 自研画布层 —— 画布外壳（增量2）。
+ * 自研画布层 —— 画布外壳（增量2 建立，增量3 接管全部渲染）。
  *
- * 把「覆盖层」升级为「主画布」：外壳自己持有视口、处理平移 / 缩放手势、画网格、
- * 摆工具栏与缩放控件。Excalidraw 退居为外壳内的一个被动渲染器（仍画 draw/shape，
- * 见 BoardCanvas）—— 视口由外壳下发，Excalidraw 自有工具栏与平移让位给外壳。
+ * 增量3「大切换」后，Excalidraw 已从渲染树移除：画布外壳直接挂载覆盖层
+ * （OverlayLayer 渲染全部 10 类元素，含图形 / 手绘）与在场层，没有中间桥。
  *
  * 层叠（自下而上）：
- *   cv-shell（暖色底 + 手势）→ 网格 → BoardCanvas（Excalidraw + 覆盖层 + 在场层）
+ *   cv-shell（暖色底 + 平移/缩放手势）→ 网格 → board-canvas（覆盖层 + 在场层）
  *   → 工具栏 / 缩放控件
  *
- * 视口真相源在本组件的 `viewport` state。两个写入方：
- *  - 本组件的手势 hook（滚轮 / 中键）；
- *  - BoardCanvas 上传的 Excalidraw 自身视口变化（抓手平移 / 导入聚焦等）。
- * 增量3 拆掉 Excalidraw 后，本 state 即画布唯一视口。
+ * 视口真相源在本组件的 `viewport` state，由平移/缩放手势与缩放控件写入；
+ * 导入 / 首次连接时由 fitToContent 聚焦到全部内容。
  */
-import { useCallback, useRef, useState } from 'react';
-import { BoardCanvas } from '../components/BoardCanvas';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useBoard } from '../board/BoardContext';
+import { OverlayLayer } from '../overlay/OverlayLayer';
+import { PresenceLayer } from '../presence/PresenceLayer';
 import { CanvasGrid } from './CanvasGrid';
 import { Toolbar } from './Toolbar';
 import { useViewportGestures } from './useViewportGestures';
-import { INITIAL_VIEWPORT, zoomAt, type CanvasViewport } from './viewport';
+import {
+  INITIAL_VIEWPORT,
+  fitToContent,
+  zoomAt,
+  type CanvasViewport,
+} from './viewport';
 import './canvas.css';
 
 /** 缩放控件每次点击的缩放倍率。 */
@@ -27,9 +31,10 @@ const ZOOM_STEP = 1.2;
 
 /** 画布外壳。 */
 export function CanvasShell(): JSX.Element {
+  const { scene, importTick, importFit } = useBoard();
   // 视口真相源。
   const [viewport, setViewport] = useState<CanvasViewport>(INITIAL_VIEWPORT);
-  // 当前工具 —— 由工具栏选择，下发给 BoardCanvas 同步到 Excalidraw。
+  // 当前工具 —— 由工具栏选择，覆盖层据此切换连线 / 橡皮擦模式。
   const [activeTool, setActiveTool] = useState<string>('selection');
   const shellRef = useRef<HTMLDivElement>(null);
 
@@ -38,6 +43,19 @@ export function CanvasShell(): JSX.Element {
     viewport,
     onChange: setViewport,
   });
+
+  // 导入 / 首次连接（importTick 自增且 importFit）：把视口聚焦到全部内容。
+  // fittedTickRef 保证每个 importTick 只聚焦一次。
+  const fittedTickRef = useRef(0);
+  useEffect(() => {
+    if (importTick === 0 || !importFit) return;
+    if (importTick === fittedTickRef.current) return;
+    fittedTickRef.current = importTick;
+    const el = shellRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setViewport(fitToContent(scene.elements, r.width, r.height));
+  }, [importTick, importFit, scene]);
 
   // 缩放控件 —— 以外壳中心为锚缩放。
   const zoomBy = useCallback((factor: number) => {
@@ -59,12 +77,10 @@ export function CanvasShell(): JSX.Element {
       ref={shellRef}
     >
       <CanvasGrid viewport={viewport} />
-      <BoardCanvas
-        viewport={viewport}
-        onViewportChange={setViewport}
-        activeTool={activeTool}
-        onActiveToolChange={setActiveTool}
-      />
+      <div className="board-canvas">
+        <OverlayLayer scene={scene} viewport={viewport} activeTool={activeTool} />
+        <PresenceLayer viewport={viewport} />
+      </div>
       <Toolbar activeTool={activeTool} onSelect={setActiveTool} />
       <div className="cv-zoom" role="group" aria-label="缩放">
         <button

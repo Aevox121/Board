@@ -2,7 +2,7 @@
  * 白板状态层 — 用 React Context 持有一份 @board/core 的 `BoardScene` 与 `BoardMeta`。
  *
  * 内存里维护一份场景，作为 board.json 的唯一真相源（source of truth）。
- *  - Excalidraw 变更 → `replaceScene(...,'canvas')` 写回内存场景。
+ *  - 画布 / 覆盖层编辑 → `replaceScene(...,'canvas')` 写回内存场景。
  *  - 导入 board.json → `replaceScene(...,'import')` 替换内存场景并触发重渲染。
  *  - server 数据载入 → `loadFromServer` 替换内存场景并进入「已连接」模式。
  *
@@ -55,15 +55,10 @@ export interface BoardContextValue {
   /**
    * 用新场景替换内存场景。
    * @param source 变更来源：
-   *   - `canvas` —— 来自 Excalidraw / 覆盖层的本地编辑；
-   *   - `import` —— 来自导入文件（缩放到全部内容）；
-   *   - `canvas-sync` —— 覆盖层改动了 Excalidraw 原生元素（如拖区域带动其内
-   *     图形），需把场景重推进 Excalidraw 让图形跟随；仍属本地编辑、照常自动同步。
+   *   - `canvas` —— 来自画布 / 覆盖层的本地编辑；
+   *   - `import` —— 来自导入文件（聚焦到全部内容）。
    */
-  replaceScene: (
-    next: BoardScene,
-    source: 'canvas' | 'import' | 'canvas-sync',
-  ) => void;
+  replaceScene: (next: BoardScene, source: 'canvas' | 'import') => void;
   /** 改白板名（写入 meta）。 */
   renameBoard: (name: string) => void;
   /**
@@ -91,16 +86,10 @@ export interface BoardContextValue {
    */
   importTick: number;
   /**
-   * 当前 importTick 对应的变更是否应把视图缩放到全部内容。
+   * 当前 importTick 对应的变更是否应把视图聚焦到全部内容。
    * 用户导入 / 首次连接 → true；SSE 后台刷新 → false（不打扰当前视野）。
    */
   importFit: boolean;
-  /**
-   * 「画布同步版本号」—— 覆盖层移动了 Excalidraw 原生元素（如拖区域带动其内
-   * 图形）时自增。BoardCanvas 据此把场景重推进 Excalidraw 使图形跟随。
-   * 与 importTick 不同：它不会被自动同步当作「server 来源」跳过 —— 仍是本地编辑。
-   */
-  syncTick: number;
 }
 
 const BoardContext = createContext<BoardContextValue | null>(null);
@@ -140,22 +129,17 @@ export function BoardProvider({
   const [connection, setConnection] = useState<ConnectionMode>('offline');
   const [serverFiles, setServerFiles] = useState<string[]>([]);
   const [tasks, setTasks] = useState<BoardTask[]>([]);
-  // 画布同步版本号 —— 覆盖层动了 Excalidraw 原生元素时自增（见 syncTick 注释）。
-  const [syncTick, setSyncTick] = useState(0);
 
   // 用 ref 持有最新场景，供 replaceScene 的闭包同步读取（避免闭包陈旧）。
   const sceneRef = useRef(scene);
   sceneRef.current = scene;
 
   const replaceScene = useCallback(
-    (next: BoardScene, source: 'canvas' | 'import' | 'canvas-sync') => {
+    (next: BoardScene, source: 'canvas' | 'import') => {
       setScene(next);
       setMeta((m) => ({ ...m, updatedAt: new Date().toISOString() }));
       if (source === 'import') {
         setImportState((s) => ({ tick: s.tick + 1, fit: true }));
-      } else if (source === 'canvas-sync') {
-        // 覆盖层动了 Excalidraw 原生元素 —— 触发 BoardCanvas 把场景重推进 Excalidraw。
-        setSyncTick((n) => n + 1);
       }
     },
     [],
@@ -207,7 +191,6 @@ export function BoardProvider({
       applyRemoteOps,
       importTick: importState.tick,
       importFit: importState.fit,
-      syncTick,
     }),
     [
       scene,
@@ -220,7 +203,6 @@ export function BoardProvider({
       loadFromServer,
       applyRemoteOps,
       importState,
-      syncTick,
     ],
   );
 

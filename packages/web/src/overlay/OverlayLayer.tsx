@@ -45,6 +45,8 @@ import { RegionCard, type PointerHandlers } from './RegionCard';
 import { ConnectorLayer } from './ConnectorLayer';
 import { ResizeHandles, type ResizeApi } from './ResizeHandles';
 import { StylePanel } from './StylePanel';
+import { ShapeView } from '../canvas/ShapeView';
+import { DrawView } from '../canvas/DrawView';
 import {
   fileBaseName,
   intersectionArea,
@@ -73,19 +75,32 @@ export interface OverlayLayerProps {
   activeTool: string;
 }
 
-/** 本覆盖层负责渲染的内容元素类型。 */
+/** 可交互的内容元素（卡片类）—— 可拖拽 / 缩放 / 选中。 */
 type ContentElement = Extract<
   Element,
   { type: 'file' | 'folder' | 'region' | 'text' }
 >;
 
-/** 判断一个元素是否属于本层渲染范围。 */
-function isContentElement(el: Element): el is ContentElement {
+/**
+ * 本覆盖层负责渲染的全部画布元素 —— 卡片类 + 图形 / 手绘。
+ * 自研画布层增量3 起，图形（shape）与手绘（draw）也由覆盖层渲染
+ * （ShapeView / DrawView），与卡片同处一棵渲染树、按 z 统一排序，
+ * 不再经 Excalidraw。
+ */
+type CanvasElement = Extract<
+  Element,
+  { type: 'file' | 'folder' | 'region' | 'text' | 'shape' | 'draw' }
+>;
+
+/** 判断元素是否属于本层渲染范围。 */
+function isCanvasElement(el: Element): el is CanvasElement {
   return (
     el.type === 'file' ||
     el.type === 'folder' ||
     el.type === 'region' ||
-    el.type === 'text'
+    el.type === 'text' ||
+    el.type === 'shape' ||
+    el.type === 'draw'
   );
 }
 
@@ -337,10 +352,10 @@ export function OverlayLayer({
   // 右键框选的瞬时跟踪（不触发渲染）。
   const rightPressRef = useRef<RightPress | null>(null);
 
-  // 筛出内容元素并按 z 升序排序 —— 字典序即层级序（与 factory.nextZ 同构）。
-  const contentElements = useMemo<ContentElement[]>(() => {
+  // 筛出画布元素并按 z 升序排序 —— 字典序即层级序（与 factory.nextZ 同构）。
+  const canvasElements = useMemo<CanvasElement[]>(() => {
     return scene.elements
-      .filter(isContentElement)
+      .filter(isCanvasElement)
       .sort((a, b) => (a.z < b.z ? -1 : a.z > b.z ? 1 : 0));
   }, [scene.elements]);
 
@@ -870,12 +885,9 @@ export function OverlayLayer({
       if (e.parentId === region.id) ids.add(e.id);
     }
     const next = moveElementsBy(curScene, ids, d.offsetX, d.offsetY);
-    // 区域内若含 Excalidraw 原生元素（图形 / 手绘），用 canvas-sync 让 BoardCanvas
-    // 把它们重推进 Excalidraw —— 否则核心场景动了、画布上的图形却不跟随。
-    const movedNative = curScene.elements.some(
-      (e) => ids.has(e.id) && (e.type === 'shape' || e.type === 'draw'),
-    );
-    replaceScene(next, movedNative ? 'canvas-sync' : 'canvas');
+    // 区域 + 其内全部子元素（含图形 / 手绘）已在场景中整体平移；覆盖层按
+    // 场景重渲染即跟随，无需额外同步。
+    replaceScene(next, 'canvas');
   }
 
   /** 文本卡拖拽结束 —— 重新定位并按落点重设所属区域（文本无文件系统对应物）。 */
@@ -1127,7 +1139,7 @@ export function OverlayLayer({
       className={'ov-root' + (connectMode ? ' ov-root--connect' : '')}
       ref={rootRef}
       aria-hidden={
-        contentElements.length === 0 &&
+        canvasElements.length === 0 &&
         tasks.length === 0 &&
         suggestions.length === 0
       }
@@ -1149,7 +1161,47 @@ export function OverlayLayer({
           </svg>
         ) : null}
 
-        {contentElements.map((el) => {
+        {canvasElements.map((el) => {
+          // 图形 / 手绘 —— 非交互渲染（选择 / 变换 / 删除归增量5）。
+          // 仍随所属区域拖拽而跟随（与卡片一致）。
+          if (el.type === 'shape' || el.type === 'draw') {
+            let ddx = 0;
+            let ddy = 0;
+            if (
+              drag?.moved &&
+              drag.kind === 'region' &&
+              el.parentId === drag.elementId
+            ) {
+              ddx = drag.offsetX;
+              ddy = drag.offsetY;
+            }
+            const drawStyle: React.CSSProperties = {
+              left: `${el.x}px`,
+              top: `${el.y}px`,
+              width: `${el.width}px`,
+              height: `${el.height}px`,
+            };
+            if (ddx !== 0 || ddy !== 0) {
+              drawStyle.transform = `translate(${ddx}px, ${ddy}px)`;
+            }
+            if (el.style.opacity !== DEFAULT_STYLE.opacity) {
+              drawStyle.opacity = el.style.opacity / 100;
+            }
+            return (
+              <div
+                key={el.id}
+                className="ov-slot ov-slot--drawing"
+                data-element-id={el.id}
+                style={drawStyle}
+              >
+                {el.type === 'shape' ? (
+                  <ShapeView element={el} />
+                ) : (
+                  <DrawView element={el} />
+                )}
+              </div>
+            );
+          }
           const isFile = el.type === 'file';
           const isText = el.type === 'text';
 
