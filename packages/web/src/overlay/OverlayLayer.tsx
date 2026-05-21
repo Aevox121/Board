@@ -133,6 +133,51 @@ function ConnectTargetRing({ element }: { element: Element }): JSX.Element {
   );
 }
 
+/**
+ * 选中框 —— 选中元素时套一圈细描边，按元素形状走（矩形 / 椭圆 / 菱形），
+ * 外扩 4px 贴着元素外缘。渲染在卡槽内，故按卡槽（含缩放中的实时尺寸）定位。
+ */
+function SelectionFrame({
+  element,
+  width,
+  height,
+}: {
+  element: Element;
+  width: number;
+  height: number;
+}): JSX.Element {
+  const M = 4; // 外扩边距
+  const w = width;
+  const h = height;
+  const common = {
+    className: 'ov-select-frame__shape',
+    fill: 'none',
+    strokeWidth: 1.5,
+  } as const;
+  let frame: JSX.Element;
+  if (element.type === 'shape' && element.shape === 'ellipse') {
+    frame = (
+      <ellipse cx={w / 2} cy={h / 2} rx={w / 2 + M} ry={h / 2 + M} {...common} />
+    );
+  } else if (element.type === 'shape' && element.shape === 'diamond') {
+    frame = (
+      <polygon
+        points={`${w / 2},${-M} ${w + M},${h / 2} ${w / 2},${h + M} ${-M},${h / 2}`}
+        {...common}
+      />
+    );
+  } else {
+    frame = (
+      <rect x={-M} y={-M} width={w + 2 * M} height={h + 2 * M} rx={10} {...common} />
+    );
+  }
+  return (
+    <svg className="ov-select-frame" width={w} height={h} aria-hidden="true">
+      {frame}
+    </svg>
+  );
+}
+
 export interface OverlayLayerProps {
   /** 内存中的白板场景（board.json 真相源）。 */
   scene: BoardScene;
@@ -1632,6 +1677,22 @@ export function OverlayLayer({
     ? (connectTargets.find((e) => e.id === highlightTargetId) ?? null)
     : null;
 
+  // 选中连线时 —— 其两端实际绑定的元素（「实际连接的位置」），给它们也套上
+  // 对应形状的外包围，直观显示这条连线连了谁。
+  const selectedConnector =
+    selectedId != null
+      ? scene.elements.find(
+          (e): e is ConnectorElement =>
+            e.id === selectedId && e.type === 'connector',
+        )
+      : undefined;
+  const connBoundEls: Element[] = selectedConnector
+    ? [selectedConnector.start.elementId, selectedConnector.end.elementId]
+        .filter((id): id is string => !!id)
+        .map((id) => scene.elements.find((e) => e.id === id))
+        .filter((e): e is Element => !!e)
+    : [];
+
   // 右键菜单的删除目标 —— 右键落在连线 / 文件卡 / 文本卡上时可删。区域 /
   // 文件夹背后是真实文件夹，不在画布删除范围（与 board rm / Delete 键一致），
   // 故不纳入。
@@ -1825,7 +1886,7 @@ export function OverlayLayer({
                   元素那样，选中后才出现包围框与可拖拽的圆点。 */}
               {el.id === selectedId ? (
                 <>
-                  <div className="ov-select-frame" aria-hidden="true" />
+                  <SelectionFrame element={el} width={rw} height={rh} />
                   <ResizeHandles api={resizeApi} />
                 </>
               ) : null}
@@ -1898,6 +1959,11 @@ export function OverlayLayer({
           >
             <TaskCard task={task} />
           </div>
+        ))}
+
+        {/* 选中连线时 —— 其两端实际连接的元素套上对应形状的外包围。 */}
+        {connBoundEls.map((e) => (
+          <ConnectTargetRing key={`cb-${e.id}`} element={e} />
         ))}
 
         {/* 连线 / 端点拖拽：给悬停的元素套一圈贴合其形状的外包围高亮。 */}

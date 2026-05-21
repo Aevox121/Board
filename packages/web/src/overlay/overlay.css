@@ -376,12 +376,18 @@
  * （仅选中元素渲染，见 ResizeHandles）。 */
 
 /* 选择框 —— 比元素略大一圈的描边。 */
+/* 选中框 —— svg 描边，按元素形状走（见 OverlayLayer 的 SelectionFrame）。
+ * left/top:0 贴卡槽左上角，overflow:visible 让外扩 4px 的描边画到卡槽外。 */
 .ov-select-frame {
   position: absolute;
-  inset: -4px;
-  border: 1.5px solid var(--c-accent);
-  border-radius: var(--radius-md);
+  left: 0;
+  top: 0;
+  overflow: visible;
   pointer-events: none;
+}
+
+.ov-select-frame__shape {
+  stroke: var(--c-accent);
 }
 
 /* 八向缩放手柄 —— 可见圆点，落在选择框的四角与四边中点上。 */
