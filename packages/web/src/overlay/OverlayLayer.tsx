@@ -477,6 +477,8 @@ export function OverlayLayer({
   const [resize, setResize] = useState<ResizeState | null>(null);
   // 连线模式下鼠标悬停的可连接元素 id —— 高亮加强提示落点。
   const [hoverConnId, setHoverConnId] = useState<string | null>(null);
+  // 连线端点拖拽落点所在的可连接元素 id —— 拖拽中临时高亮（同连线创建）。
+  const [endpointHover, setEndpointHover] = useState<string | null>(null);
   // 当前选中的内容元素 id —— 选中时显示选择框 + 八向缩放手柄；null = 未选中。
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // 右键上下文菜单（屏幕坐标 + 作用域）；null = 未显示。
@@ -1354,6 +1356,21 @@ export function OverlayLayer({
     );
   }
 
+  /**
+   * 连线端点拖拽时的落点悬停 —— 命中测试落点元素，驱动「可连接元素」外包围
+   * 高亮（与连线创建时的悬停高亮一致）。pos 为 null 表示拖拽结束、清除高亮。
+   */
+  function handleEndpointHover(pos: { x: number; y: number } | null): void {
+    if (!pos) {
+      setEndpointHover(null);
+      return;
+    }
+    const targets = sceneRef.current.elements.filter(
+      (e) => e.type !== 'connector' && e.type !== 'suggestion',
+    );
+    setEndpointHover(smallestHitAt(targets, pos.x, pos.y, CONNECT_TOL));
+  }
+
   /** 指针按下卡片 / 图形 / 区域头部 —— 捕获指针，记录起点，进入待拖拽状态。 */
   function beginDrag(
     e: React.PointerEvent<HTMLDivElement>,
@@ -1550,11 +1567,12 @@ export function OverlayLayer({
     closeMenu();
   }
 
-  // 连线模式下鼠标悬停的那个可连接元素 —— 仅给它画外包围高亮（其余不变）。
-  const hoverConnEl =
-    connectMode && hoverConnId
-      ? (connectTargets.find((e) => e.id === hoverConnId) ?? null)
-      : null;
+  // 给「可连接元素」画外包围高亮的目标 —— 连线模式取鼠标悬停元素；连线
+  // 端点重连拖拽时取拖拽落点元素（与连线创建时的悬停高亮一致）。
+  const highlightTargetId = endpointHover ?? (connectMode ? hoverConnId : null);
+  const hoverConnEl = highlightTargetId
+    ? (connectTargets.find((e) => e.id === highlightTargetId) ?? null)
+    : null;
 
   // 右键菜单的删除目标 —— 右键落在连线 / 文件卡 / 文本卡上时可删。区域 /
   // 文件夹背后是真实文件夹，不在画布删除范围（与 board rm / Delete 键一致），
@@ -1779,6 +1797,7 @@ export function OverlayLayer({
           interactive={!connectMode}
           zoom={zoom}
           onEndpointCommit={rebindConnectorEndpoint}
+          onEndpointHover={handleEndpointHover}
         />
 
         {/* 建议卡片（PRD §7.3）—— 承载 Agent 提议，含同意/拒绝/描述操作。

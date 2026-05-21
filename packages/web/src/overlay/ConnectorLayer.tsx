@@ -90,6 +90,11 @@ export interface ConnectorLayerProps {
     anchorX: number,
     anchorY: number,
   ) => void;
+  /**
+   * 端点拖拽过程中的落点（画布坐标）—— 驱动「可连接元素」外包围高亮；
+   * 传 null 表示拖拽结束、清除高亮。
+   */
+  onEndpointHover?: (pos: { x: number; y: number } | null) => void;
 }
 
 /** 一条连线渲染所需的几何 + 样式。 */
@@ -208,6 +213,7 @@ export function ConnectorLayer({
   interactive = true,
   zoom = 1,
   onEndpointCommit,
+  onEndpointHover,
 }: ConnectorLayerProps): JSX.Element | null {
   // 端点拖拽瞬时状态；ref 镜像供指针回调读取最新值。
   const [epDrag, setEpDrag] = useState<EndpointDrag | null>(null);
@@ -301,6 +307,8 @@ export function ConnectorLayer({
   zoomRef.current = zoom;
   const commitRef = useRef(onEndpointCommit);
   commitRef.current = onEndpointCommit;
+  const hoverRef = useRef(onEndpointHover);
+  hoverRef.current = onEndpointHover;
 
   const onWinMove = useCallback((e: PointerEvent): void => {
     const d = epDragRef.current;
@@ -314,6 +322,8 @@ export function ConnectorLayer({
     };
     epDragRef.current = next;
     setEpDrag(next);
+    // 实时上报落点 —— 驱动「可连接元素」外包围高亮。
+    hoverRef.current?.({ x: next.curX, y: next.curY });
   }, []);
   const onWinUp = useCallback(
     (e: PointerEvent): void => {
@@ -324,6 +334,7 @@ export function ConnectorLayer({
       window.removeEventListener('pointercancel', onWinUp);
       epDragRef.current = null;
       setEpDrag(null);
+      hoverRef.current?.(null); // 清除外包围高亮
       commitRef.current?.(
         d.connectorId,
         d.which,
