@@ -20,6 +20,7 @@ import type {
   BoardScene,
   Element,
   FileElement,
+  ParticipantId,
   RegionElement,
   Style,
   SuggestionElement,
@@ -31,6 +32,11 @@ import {
   arrangeScene,
   growRegions,
   removeElement,
+  nextZ,
+  createShapeElement,
+  createDrawElement,
+  createTextElement,
+  createConnectorElement,
   DEFAULT_STYLE,
 } from '@board/core';
 import { useBoard } from '../board/BoardContext';
@@ -69,10 +75,12 @@ export interface OverlayViewport {
 export interface OverlayLayerProps {
   /** 内存中的白板场景（board.json 真相源）。 */
   scene: BoardScene;
-  /** 当前视口 —— 由 BoardCanvas 从 Excalidraw onChange 取得并下传。 */
+  /** 当前视口 —— 由画布外壳下传。 */
   viewport: OverlayViewport;
-  /** 当前 Excalidraw 工具类型 —— `arrow`/`line` 时进入连线模式。 */
+  /** 当前工具 id —— 决定创建 / 连线 / 橡皮擦模式。 */
   activeTool: string;
+  /** 切换当前工具 —— 创建图形后回到选择工具。 */
+  onActiveToolChange?: (tool: string) => void;
 }
 
 /** 可交互的内容元素（卡片类）—— 可拖拽 / 缩放 / 选中。 */
@@ -195,6 +203,41 @@ const CARD_MIN_H = 40;
 const REGION_CONTENT_MARGIN = 16;
 const REGION_HEADER_H = 48;
 
+/** 创建工具集 —— 选中其一时画布进入「创建」模式（左键拖拽即创建）。 */
+const CREATE_TOOLS: ReadonlySet<string> = new Set([
+  'rectangle',
+  'ellipse',
+  'diamond',
+  'arrow',
+  'freedraw',
+  'text',
+]);
+/** 点击（拖拽尺寸过小）时图形采用的默认尺寸。 */
+const DEFAULT_SHAPE_W = 140;
+const DEFAULT_SHAPE_H = 90;
+/** 新建文本卡的默认尺寸。 */
+const NEW_TEXT_W = 220;
+const NEW_TEXT_H = 96;
+/** 创建手势视为「有效拖拽」的最小尺寸 / 长度（画布单位）。 */
+const CREATE_MIN_DRAG = 8;
+
+/** 创建手势的瞬时状态。 */
+interface CreatingState {
+  /** 创建中的元素类型。 */
+  tool: 'rectangle' | 'ellipse' | 'diamond' | 'arrow' | 'freedraw';
+  /** 捕获的指针 id。 */
+  pointerId: number;
+  /** 起点（画布坐标）。 */
+  startX: number;
+  startY: number;
+  /** 当前点（画布坐标）。 */
+  curX: number;
+  curY: number;
+  /** freedraw 采样点（画布坐标）与逐点压感。 */
+  points: Array<[number, number]>;
+  pressures: number[];
+}
+
 /** 由两个对角点构造规范化矩形（画布坐标）。 */
 function normRect(x0: number, y0: number, x1: number, y1: number): RectLike {
   return {
@@ -307,10 +350,113 @@ function menuLabel(scope: MenuScope): string {
   return `整理选中的 ${scope.fileIds.length} 个文件`;
 }
 
+/**
+ * 创建手势的实时预览 —— 用与最终成品同款的渲染器（ShapeView / DrawView）
+ * 即时呈现拖拽中的图形 / 手绘；连线用虚线段预览。
+ */
+function CreationPreview({
+  state,
+  actorId,
+}: {
+  state: CreatingState;
+  actorId: ParticipantId;
+}): JSX.Element | null {
+  if (state.tool === 'arrow') {
+    const minX = Math.min(state.startX, state.curX);
+    const minY = Math.min(state.startY, state.curY);
+    const w = Math.abs(state.curX - state.startX);
+    const h = Math.abs(state.curY - state.startY);
+    const pad = 24;
+    return (
+      <svg
+        className="ov-create-preview"
+        style={{ left: `${minX - pad}px`, top: `${minY - pad}px` }}
+        width={w + pad * 2}
+        height={h + pad * 2}
+        aria-hidden="true"
+      >
+        <line
+          x1={state.startX - minX + pad}
+          y1={state.startY - minY + pad}
+          x2={state.curX - minX + pad}
+          y2={state.curY - minY + pad}
+          stroke="var(--c-accent)"
+          strokeWidth={2}
+          strokeDasharray="7 5"
+        />
+      </svg>
+    );
+  }
+  if (state.tool === 'freedraw') {
+    if (state.points.length < 2) return null;
+    const xs = state.points.map((p) => p[0]);
+    const ys = state.points.map((p) => p[1]);
+    const minX = Math.min(...xs);
+    const minY = Math.min(...ys);
+    const w = Math.max(1, Math.max(...xs) - minX);
+    const h = Math.max(1, Math.max(...ys) - minY);
+    const temp = {
+      ...createDrawElement({
+        x: minX,
+        y: minY,
+        width: w,
+        height: h,
+        createdBy: actorId,
+        points: state.points.map((p) => [p[0] - minX, p[1] - minY]),
+        pressures: state.pressures,
+      }),
+      id: '__creating__',
+    };
+    return (
+      <div
+        className="ov-slot ov-slot--drawing"
+        style={{
+          left: `${minX}px`,
+          top: `${minY}px`,
+          width: `${w}px`,
+          height: `${h}px`,
+        }}
+      >
+        <DrawView element={temp} />
+      </div>
+    );
+  }
+  // rectangle / ellipse / diamond
+  const x = Math.min(state.startX, state.curX);
+  const y = Math.min(state.startY, state.curY);
+  const w = Math.max(1, Math.abs(state.curX - state.startX));
+  const h = Math.max(1, Math.abs(state.curY - state.startY));
+  const temp = {
+    ...createShapeElement({
+      x,
+      y,
+      width: w,
+      height: h,
+      createdBy: actorId,
+      shape: state.tool,
+    }),
+    id: '__creating__',
+  };
+  return (
+    <div
+      className="ov-slot ov-slot--drawing"
+      style={{
+        left: `${x}px`,
+        top: `${y}px`,
+        width: `${w}px`,
+        height: `${h}px`,
+      }}
+    >
+      <ShapeView element={temp} />
+    </div>
+  );
+}
+
 export function OverlayLayer({
   scene,
   viewport,
   activeTool,
+  onActiveToolChange,
 }: OverlayLayerProps): JSX.Element {
   const { scrollX, scrollY, zoom } = viewport;
   const { actorId, connection, serverFiles, tasks, replaceScene } = useBoard();
@@ -341,12 +487,18 @@ export function OverlayLayer({
   } | null>(null);
   // 右键框选的虚线框（画布坐标矩形）；null = 无。
   const [marquee, setMarquee] = useState<RectLike | null>(null);
+  // 创建手势瞬时状态（拖拽创建图形 / 手绘 / 连线）；null = 未在创建。
+  const [creating, setCreating] = useState<CreatingState | null>(null);
 
   // 持有最新场景 / 视口，供事件回调（含挂在 window 上的）读取，避免闭包陈旧。
   const sceneRef = useRef(scene);
   sceneRef.current = scene;
   const viewportRef = useRef(viewport);
   viewportRef.current = viewport;
+  const activeToolRef = useRef(activeTool);
+  activeToolRef.current = activeTool;
+  // 创建状态的 ref 镜像 —— 供挂在 window 上的事件回调读取最新值。
+  const creatingRef = useRef<CreatingState | null>(null);
   // 覆盖层根节点 —— 用于换算屏幕↔画布坐标、定位 .board-canvas。
   const rootRef = useRef<HTMLDivElement | null>(null);
   // 右键框选的瞬时跟踪（不触发渲染）。
@@ -485,6 +637,49 @@ export function OverlayLayer({
       };
     };
 
+    // ── 创建手势（图形 / 手绘 / 连线的拖拽创建）────────────────────
+    const beginCreate = (
+      tool: CreatingState['tool'],
+      pointerId: number,
+      cx: number,
+      cy: number,
+      pressure: number,
+    ): void => {
+      const st: CreatingState = {
+        tool,
+        pointerId,
+        startX: cx,
+        startY: cy,
+        curX: cx,
+        curY: cy,
+        points: tool === 'freedraw' ? [[cx, cy]] : [],
+        pressures: tool === 'freedraw' ? [pressure || 0.5] : [],
+      };
+      creatingRef.current = st;
+      setCreating(st);
+    };
+    const onCreateMove = (e: PointerEvent): void => {
+      const st = creatingRef.current;
+      if (!st || e.pointerId !== st.pointerId) return;
+      const c = toCanvas(e.clientX, e.clientY);
+      const next: CreatingState = { ...st, curX: c.x, curY: c.y };
+      if (st.tool === 'freedraw') {
+        next.points = [...st.points, [c.x, c.y]];
+        next.pressures = [...st.pressures, e.pressure || 0.5];
+      }
+      creatingRef.current = next;
+      setCreating(next);
+    };
+    const onCreateUp = (): void => {
+      window.removeEventListener('pointermove', onCreateMove);
+      window.removeEventListener('pointerup', onCreateUp);
+      window.removeEventListener('pointercancel', onCreateUp);
+      const st = creatingRef.current;
+      creatingRef.current = null;
+      setCreating(null);
+      if (st) commitCreation(st);
+    };
+
     /** 画布坐标点落在哪个作用域：命中区域 → 该区域；否则 → 收件区。 */
     const scopeAt = (cx: number, cy: number): MenuScope => {
       let hit: RegionElement | null = null;
@@ -548,6 +743,28 @@ export function OverlayLayer({
     };
 
     const onDown = (e: PointerEvent): void => {
+      // 创建工具激活 + 左键 → 进入创建（优先于选中 / 卡片交互）。
+      const tool = activeToolRef.current;
+      if (e.button === 0 && CREATE_TOOLS.has(tool)) {
+        e.preventDefault();
+        e.stopPropagation();
+        const c = toCanvas(e.clientX, e.clientY);
+        if (tool === 'text') {
+          commitText(c.x, c.y);
+        } else {
+          beginCreate(
+            tool as CreatingState['tool'],
+            e.pointerId,
+            c.x,
+            c.y,
+            e.pressure,
+          );
+          window.addEventListener('pointermove', onCreateMove);
+          window.addEventListener('pointerup', onCreateUp);
+          window.addEventListener('pointercancel', onCreateUp);
+        }
+        return;
+      }
       if (e.button === 0) {
         // 左键：点在内容元素 / 连线 / 手柄 / 样式面板之外 → 取消选中。
         const t = e.target as HTMLElement | null;
@@ -597,6 +814,9 @@ export function OverlayLayer({
       host.removeEventListener('contextmenu', onContextMenu, true);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointermove', onCreateMove);
+      window.removeEventListener('pointerup', onCreateUp);
+      window.removeEventListener('pointercancel', onCreateUp);
     };
   }, []);
 
@@ -923,6 +1143,126 @@ export function OverlayLayer({
     if (d.kind === 'region') finishRegionDrag(d);
     else if (d.kind === 'text') finishTextDrag(d);
     else finishFileDrag(d);
+  }
+
+  /** 提交一次创建手势 —— 据创建状态造出元素并加入场景。 */
+  function commitCreation(st: CreatingState): void {
+    const cur = sceneRef.current;
+    const z = nextZ(cur.elements);
+    let el: Element | null = null;
+    if (
+      st.tool === 'rectangle' ||
+      st.tool === 'ellipse' ||
+      st.tool === 'diamond'
+    ) {
+      let x = Math.min(st.startX, st.curX);
+      let y = Math.min(st.startY, st.curY);
+      let w = Math.abs(st.curX - st.startX);
+      let h = Math.abs(st.curY - st.startY);
+      if (w < CREATE_MIN_DRAG && h < CREATE_MIN_DRAG) {
+        // 点击而非拖拽 —— 用默认尺寸，以落点为左上角。
+        x = st.startX;
+        y = st.startY;
+        w = DEFAULT_SHAPE_W;
+        h = DEFAULT_SHAPE_H;
+      }
+      el = createShapeElement({
+        x,
+        y,
+        width: Math.max(w, CREATE_MIN_DRAG),
+        height: Math.max(h, CREATE_MIN_DRAG),
+        createdBy: actorId,
+        z,
+        shape: st.tool,
+      });
+    } else if (st.tool === 'freedraw') {
+      if (st.points.length < 2) return; // 没画出笔迹
+      const xs = st.points.map((p) => p[0]);
+      const ys = st.points.map((p) => p[1]);
+      const minX = Math.min(...xs);
+      const minY = Math.min(...ys);
+      const w = Math.max(1, Math.max(...xs) - minX);
+      const h = Math.max(1, Math.max(...ys) - minY);
+      el = createDrawElement({
+        x: minX,
+        y: minY,
+        width: w,
+        height: h,
+        createdBy: actorId,
+        z,
+        points: st.points.map((p) => [p[0] - minX, p[1] - minY]),
+        pressures: st.pressures,
+      });
+    } else {
+      // arrow —— 连线；端点命中元素则绑定，否则自由端。
+      const dx = st.curX - st.startX;
+      const dy = st.curY - st.startY;
+      if (Math.hypot(dx, dy) < CREATE_MIN_DRAG) return; // 太短，不成线
+      const targets = cur.elements.filter(
+        (e) => e.type !== 'connector' && e.type !== 'suggestion',
+      );
+      let startHit = smallestHitAt(targets, st.startX, st.startY, CONNECT_TOL);
+      let endHit = smallestHitAt(targets, st.curX, st.curY, CONNECT_TOL);
+      // 两端命中同一元素 —— 多半误吸附，退化为自由连线。
+      if (startHit && startHit === endHit) {
+        startHit = null;
+        endHit = null;
+      }
+      const minX = Math.min(st.startX, st.curX);
+      const minY = Math.min(st.startY, st.curY);
+      const sp: [number, number] = [st.startX - minX, st.startY - minY];
+      const epPt: [number, number] = [st.curX - minX, st.curY - minY];
+      el = {
+        ...createConnectorElement({
+          x: minX,
+          y: minY,
+          width: Math.abs(dx),
+          height: Math.abs(dy),
+          createdBy: actorId,
+          z,
+          start: { elementId: startHit, anchor: 'auto', point: sp },
+          end: { elementId: endHit, anchor: 'auto', point: epPt },
+        }),
+        // 自由连线由 meta.ex.points 提供折线几何（见 ConnectorLayer）。
+        meta: { ex: { points: [sp, epPt] } },
+      };
+    }
+    if (!el) return;
+    replaceScene({ ...cur, elements: [...cur.elements, el] }, 'canvas');
+    setSelectedId(el.id);
+    onActiveToolChange?.('selection');
+  }
+
+  /** 文本工具点击 —— 在落点创建一张文本卡。 */
+  function commitText(cx: number, cy: number): void {
+    const cur = sceneRef.current;
+    const el = createTextElement({
+      x: cx,
+      y: cy,
+      width: NEW_TEXT_W,
+      height: NEW_TEXT_H,
+      createdBy: actorId,
+      z: nextZ(cur.elements),
+      markdown: '文本',
+    });
+    replaceScene({ ...cur, elements: [...cur.elements, el] }, 'canvas');
+    setSelectedId(el.id);
+    onActiveToolChange?.('selection');
+  }
+
+  /** 就地编辑提交文本卡正文。 */
+  function commitTextMarkdown(id: string, markdown: string): void {
+    const cur = sceneRef.current;
+    const ts = new Date().toISOString();
+    const next: BoardScene = {
+      ...cur,
+      elements: cur.elements.map((e): Element =>
+        e.id === id && e.type === 'text'
+          ? ({ ...e, markdown, updatedBy: actorId, updatedAt: ts } as Element)
+          : e,
+      ),
+    };
+    replaceScene(next, 'canvas');
   }
 
   /** 指针按下文件卡 / 区域头部 —— 捕获指针，记录起点，进入待拖拽状态。 */
@@ -1311,7 +1651,10 @@ export function OverlayLayer({
               ) : el.type === 'folder' ? (
                 <FolderCard element={el} />
               ) : el.type === 'text' ? (
-                <TextCard element={el} />
+                <TextCard
+                  element={el}
+                  onCommit={(md) => commitTextMarkdown(el.id, md)}
+                />
               ) : (
                 <FileCard element={el} missing={missingFileIds.has(el.id)} />
               )}
@@ -1417,6 +1760,11 @@ export function OverlayLayer({
               height: `${marquee.height}px`,
             }}
           />
+        ) : null}
+
+        {/* 创建预览 —— 拖拽创建图形 / 手绘 / 连线时的实时呈现 */}
+        {creating ? (
+          <CreationPreview state={creating} actorId={actorId} />
         ) : null}
       </div>
 

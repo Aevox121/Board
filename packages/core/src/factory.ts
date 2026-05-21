@@ -19,6 +19,7 @@ import {
   type FolderElement,
   type ShapeElement,
   type ShapeKind,
+  type DrawElement,
   type ConnectorElement,
   type Endpoint,
   type ArrowHead,
@@ -195,6 +196,24 @@ export function createShapeElement(
     type: 'shape',
     shape: init.shape,
     label: init.label ? { text: init.label } : null,
+  };
+}
+
+/**
+ * 创建手绘笔迹元素。
+ * `points` 为相对元素原点 (x,y) 的采样点；`pressures` 为各点压感（0–1，可选）。
+ */
+export function createDrawElement(
+  init: BaseElementInit & {
+    points: Array<[number, number]>;
+    pressures?: number[];
+  },
+): DrawElement {
+  return {
+    ...baseElement('draw', init),
+    type: 'draw',
+    points: init.points,
+    pressures: init.pressures,
   };
 }
 

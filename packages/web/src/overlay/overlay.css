@@ -603,6 +603,24 @@
   font-style: italic;
 }
 
+/* 文本卡就地编辑文本域（自研画布层增量4）—— 复用 .ov-text__body 的盒模型。 */
+.ov-text__editor {
+  resize: none;
+  border: none;
+  outline: none;
+  background: var(--c-surface-sunken);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--c-ink);
+}
+
+/* 连线创建的虚线预览（自研画布层增量4）。 */
+.ov-create-preview {
+  position: absolute;
+  pointer-events: none;
+  overflow: visible;
+}
+
 /* ── 右键上下文菜单 ─────────────────────────────────────────────
  * 干净的暖色 UI（同顶栏风格，非手绘）。屏幕定位，故为 .ov-root 的直接
  * 子元素、不进变换容器。.ov-root 自身 pointer-events:none，菜单单独开启。 */

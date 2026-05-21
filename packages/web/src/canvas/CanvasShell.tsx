@@ -78,7 +78,12 @@ export function CanvasShell(): JSX.Element {
     >
       <CanvasGrid viewport={viewport} />
       <div className="board-canvas">
-        <OverlayLayer scene={scene} viewport={viewport} activeTool={activeTool} />
+        <OverlayLayer
+          scene={scene}
+          viewport={viewport}
+          activeTool={activeTool}
+          onActiveToolChange={setActiveTool}
+        />
         <PresenceLayer viewport={viewport} />
       </div>
       <Toolbar activeTool={activeTool} onSelect={setActiveTool} />
