@@ -1,13 +1,11 @@
 /**
- * 自研画布层 —— 平移 / 缩放手势（增量2：画布外壳）。
+ * 自研画布层 —— 平移 / 缩放手势。
  *
- * Board 自有的视口手势，不依赖 Excalidraw：
  *  - 滚轮 → 平移；Ctrl/⌘ + 滚轮 → 以光标为锚缩放（含触控板捏合）。
  *  - 中键拖拽 → 平移。
  *
- * 事件在**捕获阶段**于画布外壳上拦截并 stopPropagation —— 下层 Excalidraw
- * 因此收不到滚轮 / 中键，不会再自行平移，平移权完全归 Board。左键不拦截，
- * 仍下穿给 Excalidraw 用于绘图 / 选择。
+ * 滚轮 / 中键在**捕获阶段**于画布外壳上拦截并 preventDefault；左键不拦截，
+ * 下穿给覆盖层用于创建 / 选择 / 拖拽。
  */
 import { useEffect, useRef, useState } from 'react';
 import { panBy, zoomAt, type CanvasViewport } from './viewport';
@@ -70,7 +68,7 @@ export function useViewportGestures({
     let lastY = 0;
 
     const onPointerDown = (e: PointerEvent): void => {
-      if (e.button !== 1) return; // 仅中键 —— 左键留给 Excalidraw 绘图
+      if (e.button !== 1) return; // 仅中键 —— 左键留给覆盖层创建 / 选择
       e.preventDefault();
       e.stopPropagation();
       panPointerId = e.pointerId;

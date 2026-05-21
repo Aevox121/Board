@@ -1,7 +1,7 @@
 /**
  * 应用根组件 —— Board Web「可运行的单人白板 + server 对接」。
  *
- * 结构：顶栏（应用外壳，干净暖色）+ 画布区（Excalidraw + DOM 覆盖层）。
+ * 结构：顶栏（应用外壳，干净暖色）+ 画布区（自研画布层 CanvasShell）。
  * 状态：BoardProvider 持有一份 @board/core 的 BoardScene 作为真相源。
  *
  * 启动流程（web ⇄ server 对接）：

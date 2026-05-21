@@ -10,7 +10,7 @@
  *  - `offline` —— server 不可达，保留空白板 + 导入/导出兜底。
  *  - `connected` —— 已载入 server 持有的真实 .board，「保存」按钮可用。
  *
- * 该层不直接依赖 Excalidraw 与网络层 —— 桥接与 server 交互由 App 层串联，
+ * 该层不直接依赖画布渲染与网络层 —— 渲染与 server 交互由上层串联，
  * 保持状态层纯净。
  */
 import {
@@ -66,7 +66,7 @@ export interface BoardContextValue {
   renameBoard: (name: string) => void;
   /**
    * 载入 server 持有的白板，进入「已连接」模式。
-   * 替换内存的 scene/meta，并触发一次 Excalidraw 重渲染（同 import）。
+   * 替换内存的 scene/meta 并触发重渲染（同 import）。
    * @param mode `initial` 首次连接（视图缩放到全部内容）；
    *             `refresh` SSE 后台刷新（保持当前视野不跳动）。
    */
@@ -84,8 +84,8 @@ export interface BoardContextValue {
   applyRemoteOps: (ops: BoardOp[]) => void;
   /**
    * 「导入版本号」——每次导入 board.json / 载入 server 数据 / 应用远端 ops 自增。
-   * App 层据此把场景推送进 Excalidraw（区别于画布自身的变更），并据此判定
-   * 本次场景变化非本地编辑、不回发 server。
+   * App 层据此判定本次场景变化非本地编辑、不回发 server；CanvasShell 据此
+   * 在导入 / 首次连接时把视口聚焦到内容。
    */
   importTick: number;
   /**
@@ -132,8 +132,8 @@ export function BoardProvider({
       ],
     }),
   );
-  // importState.tick 自增即触发把场景推进 Excalidraw；
-  // fit 表示该次是否应缩放到全部内容（区分用户导入与 SSE 后台刷新）。
+  // importState.tick 每次导入 / 载入 server 数据 / 应用远端 ops 自增；
+  // fit 表示该次是否应聚焦到全部内容（区分用户导入与 SSE 后台刷新）。
   const [importState, setImportState] = useState<{ tick: number; fit: boolean }>(
     { tick: 0, fit: false },
   );
@@ -197,7 +197,7 @@ export function BoardProvider({
     if (ops.length === 0) return;
     setScene((s) => applyOps(s, ops));
     setMeta((m) => ({ ...m, updatedAt: new Date().toISOString() }));
-    // 复用 importTick 机制把场景推进 Excalidraw；保持当前视野、不回发 server。
+    // importTick 自增 —— 标记为非本地编辑、不回发 server；保持当前视野。
     setImportState((s) => ({ tick: s.tick + 1, fit: false }));
   }, []);
 

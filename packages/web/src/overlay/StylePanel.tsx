@@ -1,19 +1,17 @@
 /**
- * 覆盖层元素的样式面板 —— 选中非原生元素（连线 / 文件卡 / 文本卡 / 文件夹 /
- * 区域）时浮出，对齐原生（Excalidraw）属性面板的能力与交互。
+ * 元素样式面板 —— 选中任意元素（图形 / 手绘 / 连线 / 文件卡 / 文本卡 /
+ * 文件夹 / 区域）时浮出，编辑统一样式。
  *
- * 原生图形 / 手绘由 Excalidraw 自带属性面板编辑；覆盖层元素此前只有 `board
- * style` CLI / MCP 能改、人无入口。本面板补上该入口，编辑 `board style` 的
- * 5 项统一样式：描边色 / 背景色 / 描边宽度 / 描边样式 / 不透明度。
- *
- * 与原生面板一致：色板行 + 分段按钮 + 不透明度滑杆。改动即 patch
- * `element.style`，由 OverlayLayer 写回内存场景并自动保存。
+ * 编辑 5 项统一样式：描边色 / 背景色 / 描边宽度 / 描边样式 / 不透明度
+ * （即 `board style` CLI / MCP 所改的字段）。布局为色板行 + 分段按钮 +
+ * 不透明度滑杆；改动即 patch `element.style`，由 OverlayLayer 写回内存场景
+ * 并自动保存。
  */
 import type { Element, Style, StrokeStyle } from '@board/core';
 
-/** 描边预设色 —— 取 Excalidraw 默认描边色板，与原生面板一致。 */
+/** 描边预设色 —— 经典手绘白板描边色板。 */
 const STROKE_PRESETS = ['#1e1e1e', '#e03131', '#2f9e44', '#1971c2', '#f08c00'];
-/** 背景预设色 —— 取 Excalidraw 默认背景色板（首项为透明）。 */
+/** 背景预设色 —— 经典手绘白板背景色板（首项为透明）。 */
 const BG_PRESETS = ['transparent', '#ffc9c9', '#b2f2bb', '#a5d8ff', '#ffec99'];
 /** 描边宽度三档 —— 与原生面板的 细 / 粗 / 特粗 对应。 */
 const WIDTHS: ReadonlyArray<{ label: string; value: number }> = [

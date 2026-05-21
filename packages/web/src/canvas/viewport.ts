@@ -1,11 +1,9 @@
 /**
- * 自研画布层 —— 视口模型与坐标换算（增量2：画布外壳）。
+ * 自研画布层 —— 视口模型与坐标换算。
  *
  * 视口把「画布坐标」映射到「屏幕坐标」，公式：
  *     screen = (canvas + scroll) * zoom
- * 与 Excalidraw appState 的 scrollX/scrollY/zoom 同构 —— 过渡期 Board 自有视口
- * 与 Excalidraw 视口可双向互通（见 BoardCanvas）。增量3 拆掉 Excalidraw 后，
- * 这套视口就是画布唯一的视口真相源。
+ * 字段 scrollX/scrollY/zoom 即画布唯一的视口真相源（CanvasShell 持有）。
  */
 
 /** 画布视口 —— 平移量（画布单位）+ 缩放。 */
@@ -33,24 +31,6 @@ export const INITIAL_VIEWPORT: CanvasViewport = {
 export function clampZoom(z: number): number {
   if (!Number.isFinite(z)) return 1;
   return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
-}
-
-/** 屏幕坐标 → 画布坐标（screen = (canvas + scroll) * zoom 的逆）。 */
-export function screenToCanvas(
-  vp: CanvasViewport,
-  sx: number,
-  sy: number,
-): { x: number; y: number } {
-  return { x: sx / vp.zoom - vp.scrollX, y: sy / vp.zoom - vp.scrollY };
-}
-
-/** 画布坐标 → 屏幕坐标。 */
-export function canvasToScreen(
-  vp: CanvasViewport,
-  cx: number,
-  cy: number,
-): { x: number; y: number } {
-  return { x: (cx + vp.scrollX) * vp.zoom, y: (cy + vp.scrollY) * vp.zoom };
 }
 
 /**
@@ -88,18 +68,6 @@ export function zoomAt(
     scrollY: sy / zoom - (sy / vp.zoom - vp.scrollY),
     zoom,
   };
-}
-
-/**
- * 两视口是否近似相等 —— 容差用于吸收浮点误差与 Excalidraw 回写抖动，
- * 避免 Board ⇄ Excalidraw 视口同步形成无意义的回环。
- */
-export function viewportsEqual(a: CanvasViewport, b: CanvasViewport): boolean {
-  return (
-    Math.abs(a.scrollX - b.scrollX) < 0.01 &&
-    Math.abs(a.scrollY - b.scrollY) < 0.01 &&
-    Math.abs(a.zoom - b.zoom) < 0.0001
-  );
 }
 
 /** fitToContent 关心的元素包围盒字段。 */

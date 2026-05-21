@@ -1,19 +1,21 @@
 /**
- * DOM 覆盖层 —— 叠在 Excalidraw 画布之上，与画布**共享坐标系**渲染内容元素。
+ * 画布渲染层（OverlayLayer）—— 自研画布层的主渲染器，渲染白板全部元素。
  *
- * 坐标系对齐原理（PRD §11「内容元素层」）：
- *  Excalidraw 把画布坐标 (x,y) 映射到屏幕的公式是
+ * 坐标系（PRD §11「内容元素层」）：画布坐标 (x,y) 映射到屏幕的公式是
  *      screen = (x + scrollX) * zoom
- *  覆盖层用一个变换容器复刻这条公式：
+ * 一个变换容器实现这条公式：
  *      transform: translate(scrollX*zoom, scrollY*zoom) scale(zoom)
  *
- * 渲染范围（M2）：只渲染 `file` / `folder` / `region` 三类内容元素。
+ * 渲染范围：图形 / 手绘（ShapeView / DrawView）、文件 / 文件夹 / 区域 / 文本
+ * 卡片、连线（ConnectorLayer）、建议卡、Agent 任务卡 —— 同处一棵渲染树、
+ * 按 z 统一排序。
  *
  * 交互：
- *  - 文件卡可拖拽：按卡片与区域的重叠面积判定落点，保留落点（类访达）。
- *  - 区域可拖拽（拖头部）与八向缩放（四角四边手柄）。
- *  - 右键：在区域 / 白板背景上弹出菜单，可「整理」该区域 / 收件区的文件；
- *    右键拖拽框出虚线框 → 菜单可整理框内选中的文件。整理 = 网格自动对齐。
+ *  - 创建：创建工具激活时左键拖拽即创建图形 / 手绘 / 文本 / 连线。
+ *  - 选择 / 变换：点选出现选择框 + 八向缩放手柄；拖拽移动、手柄缩放。
+ *  - 文件卡跨区域拖拽改文件归属（按卡片与区域的重叠面积判定落点）。
+ *  - 右键：区域 / 背景弹「整理」菜单；右键框选可整理选中文件。
+ *  - 橡皮擦删除、样式面板调样式。
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
@@ -62,13 +64,13 @@ import {
 } from './util';
 import './overlay.css';
 
-/** 覆盖层关心的视口状态 —— 取自 Excalidraw appState。 */
+/** 视口状态 —— 与 canvas/viewport.ts 的 CanvasViewport 同构。 */
 export interface OverlayViewport {
-  /** 画布平移 X（appState.scrollX）。 */
+  /** 画布平移 X。 */
   scrollX: number;
-  /** 画布平移 Y（appState.scrollY）。 */
+  /** 画布平移 Y。 */
   scrollY: number;
-  /** 缩放（appState.zoom.value）。 */
+  /** 缩放系数。 */
   zoom: number;
 }
 
@@ -465,9 +467,8 @@ export function OverlayLayer({
   // 从任意元素上画起 / 画到），并对可连接元素显示高亮。
   const connectMode = activeTool === 'arrow' || activeTool === 'line';
 
-  // 橡皮擦模式：选中橡皮擦工具时为 true —— 点覆盖层元素（连线 / 文件卡 /
-  // 文本卡）即删除。Excalidraw 自带橡皮擦只擦 Excalidraw 元素，覆盖层元素
-  // 需自行接管。
+  // 橡皮擦模式：选中橡皮擦工具时为 true —— 点画布元素（图形 / 手绘 / 连线 /
+  // 文件卡 / 文本卡）即删除。
   const eraserMode = activeTool === 'eraser';
 
   // 拖拽 / 缩放瞬时状态；null = 未在进行。
@@ -619,8 +620,8 @@ export function OverlayLayer({
     return () => window.removeEventListener('keydown', onKey);
   }, [menu]);
 
-  // 右键交互（菜单 + 框选）。在 .board-canvas 上以捕获阶段拦截右键，
-  // 既能盖到空白画布（Excalidraw 区域），又能抢在 Excalidraw 之前阻止其原生菜单。
+  // 右键交互（菜单 + 框选）+ 创建手势。在 .board-canvas 上以捕获阶段拦截，
+  // 既能盖到整块画布（含空白处），又能抢在浏览器原生右键菜单之前。
   useEffect(() => {
     const host = rootRef.current?.parentElement; // .board-canvas
     if (!host) return;
@@ -802,7 +803,7 @@ export function OverlayLayer({
     };
 
     const onContextMenu = (e: MouseEvent): void => {
-      // 抑制浏览器 / Excalidraw 的原生右键菜单 —— Board 用自己的菜单。
+      // 抑制浏览器原生右键菜单 —— Board 用自己的菜单。
       e.preventDefault();
       e.stopPropagation();
     };
@@ -875,10 +876,9 @@ export function OverlayLayer({
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedId]);
 
-  // 橡皮擦模式：在 .board-canvas 上以捕获阶段拦截左键按下 —— 命中覆盖层
-  // 元素（连线 / 文件卡 / 文本卡）即删除并吞掉事件（不触发卡片拖拽 / 不让
-  // Excalidraw 介入）；命中区域 / 文件夹不删（背后是真实文件夹）；点空白
-  // 处放行，交给 Excalidraw 自带橡皮擦擦 Excalidraw 元素。
+  // 橡皮擦模式：在 .board-canvas 上以捕获阶段拦截左键按下 —— 命中画布元素
+  // （图形 / 手绘 / 连线 / 文件卡 / 文本卡）即删除并吞掉事件（不触发拖拽）；
+  // 命中区域 / 文件夹不删（背后是真实文件夹）；点空白处不拦截。
   useEffect(() => {
     if (!eraserMode) return;
     const host = rootRef.current?.parentElement; // .board-canvas
@@ -887,7 +887,7 @@ export function OverlayLayer({
       if (e.button !== 0) return;
       const t = e.target as HTMLElement | null;
       const hit = t?.closest('[data-element-id],[data-connector-id]');
-      if (!hit) return; // 空白 / Excalidraw 元素 —— 不拦截
+      if (!hit) return; // 空白处 —— 不拦截
       const id =
         hit.getAttribute('data-element-id') ??
         hit.getAttribute('data-connector-id');
@@ -1525,7 +1525,7 @@ export function OverlayLayer({
       ) ?? null)
     : null;
 
-  // 变换容器样式 —— 复刻 Excalidraw 的 screen = (canvas + scroll) * zoom。
+  // 变换容器样式 —— 实现 screen = (canvas + scroll) * zoom 的视口变换。
   const transformStyle: React.CSSProperties = {
     transform: `translate(${scrollX * zoom}px, ${scrollY * zoom}px) scale(${zoom})`,
     transformOrigin: '0 0',

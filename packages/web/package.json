@@ -10,7 +10,6 @@
   },
   "dependencies": {
     "@board/core": "workspace:*",
-    "@excalidraw/excalidraw": "^0.17.6",
     "marked": "^12.0.2",
     "perfect-freehand": "^1.2.3",
     "react": "^18.3.1",

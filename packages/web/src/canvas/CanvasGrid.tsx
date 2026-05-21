@@ -1,10 +1,9 @@
 /**
  * 自研画布层 —— 无限网格背景（增量2：画布外壳）。
  *
- * 一张随视口平移 / 缩放的点阵，铺在画布最底层（Excalidraw 之下，故 Excalidraw
- * 背景须设为 transparent 方能透出）。点阵用 CSS radial-gradient 平铺实现 ——
- * `background-size` 跟 zoom，`background-position` 跟 scroll，浏览器自动取模平铺，
- * 无需逐点渲染，平移缩放零成本。
+ * 一张随视口平移 / 缩放的点阵，铺在画布最底层（覆盖层之下）。点阵用 CSS
+ * radial-gradient 平铺实现 —— `background-size` 跟 zoom、`background-position`
+ * 跟 scroll，浏览器自动取模平铺，无需逐点渲染，平移缩放零成本。
  */
 import type { CanvasViewport } from './viewport';
 import './canvas.css';

@@ -1,11 +1,11 @@
 /**
- * 自研画布层 —— 画布工具栏（增量2：画布外壳）。
+ * 自研画布层 —— 画布工具栏。
  *
- * Board 自有的工具栏，浮在画布左缘。增量2 它驱动 Excalidraw 的当前工具
- * （Board 选工具 → 经 BoardCanvas 调 setActiveTool），Excalidraw 自身工具栏
- * 由 CSS 隐藏。增量4 起绘制 / 选择改由 Board 自有逻辑接管，工具栏不动。
+ * Board 自有的工具栏，浮在画布顶部居中。选中创建工具（矩形 / 椭圆 / 菱形 /
+ * 箭头 / 画笔 / 文本）后在画布上拖拽即创建对应元素；选择 / 橡皮擦为操作工具。
  *
- * 工具 id 直接采用 Excalidraw 的工具类型字符串，省去映射层。
+ * 工具 id 沿用 Excalidraw 的工具类型命名（rectangle / freedraw 等）—— 仅是
+ * 历史命名约定。
  */
 import './canvas.css';
 
