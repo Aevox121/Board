@@ -44,6 +44,7 @@ import { SuggestionCard } from './SuggestionCard';
 import { RegionCard, type PointerHandlers } from './RegionCard';
 import { ConnectorLayer } from './ConnectorLayer';
 import { ResizeHandles, type ResizeApi } from './ResizeHandles';
+import { StylePanel } from './StylePanel';
 import {
   fileBaseName,
   intersectionArea,
@@ -533,9 +534,12 @@ export function OverlayLayer({
 
     const onDown = (e: PointerEvent): void => {
       if (e.button === 0) {
-        // 左键：点在内容元素 / 连线 / 手柄之外 → 取消选中。
+        // 左键：点在内容元素 / 连线 / 手柄 / 样式面板之外 → 取消选中。
         const t = e.target as HTMLElement | null;
-        if (!t || !t.closest('[data-element-id],[data-connector-id]')) {
+        if (
+          !t ||
+          !t.closest('[data-element-id],[data-connector-id],.ov-style-panel')
+        ) {
           setSelectedId(null);
         }
         return;
@@ -756,6 +760,29 @@ export function OverlayLayer({
     const { scene: next } = removeElement(cur, id);
     replaceScene(next, 'canvas');
     persist(next, '删除元素');
+  }
+
+  /**
+   * 改选中覆盖层元素的统一样式（描边色 / 背景色 / 线宽 / 线型 / 不透明度）。
+   * 仅改内存场景 —— 防抖自动保存负责落盘，故拖动不透明度滑杆不会逐次打 server。
+   */
+  function applyStyle(id: string, patch: Partial<Style>): void {
+    const cur = sceneRef.current;
+    const ts = new Date().toISOString();
+    const next: BoardScene = {
+      ...cur,
+      elements: cur.elements.map((e): Element =>
+        e.id === id
+          ? ({
+              ...e,
+              style: { ...e.style, ...patch },
+              updatedBy: actorId,
+              updatedAt: ts,
+            } as Element)
+          : e,
+      ),
+    };
+    replaceScene(next, 'canvas');
   }
 
   /** 同区域 / 收件区内拖拽文件卡 —— 仅就地重新定位（手动放置），不动文件归属。 */
@@ -1081,6 +1108,20 @@ export function OverlayLayer({
         ) ?? null)
       : null;
 
+  // 选中的覆盖层元素 —— 决定是否浮出样式面板。原生图形 / 手绘由 Excalidraw
+  // 自带属性面板编辑（也不会成为 selectedId），故不在此。
+  const styleEl = selectedId
+    ? (scene.elements.find(
+        (e) =>
+          e.id === selectedId &&
+          (e.type === 'connector' ||
+            e.type === 'file' ||
+            e.type === 'folder' ||
+            e.type === 'region' ||
+            e.type === 'text'),
+      ) ?? null)
+    : null;
+
   // 变换容器样式 —— 复刻 Excalidraw 的 screen = (canvas + scroll) * zoom。
   const transformStyle: React.CSSProperties = {
     transform: `translate(${scrollX * zoom}px, ${scrollY * zoom}px) scale(${zoom})`,
@@ -1262,22 +1303,31 @@ export function OverlayLayer({
           interactive={!connectMode}
         />
 
-        {/* 建议卡片（PRD §7.3）—— 承载 Agent 提议，含同意/拒绝/描述操作 */}
-        {suggestions.map((s) => (
-          <div
-            key={s.id}
-            className="ov-slot ov-slot--suggestion"
-            data-suggestion-id={s.id}
-            style={{
-              left: `${s.x}px`,
-              top: `${s.y}px`,
-              width: `${s.width}px`,
-              height: `${s.height}px`,
-            }}
-          >
-            <SuggestionCard element={s} />
-          </div>
-        ))}
+        {/* 建议卡片（PRD §7.3）—— 承载 Agent 提议，含同意/拒绝/描述操作。
+            与内容卡一致：按 element.style 反映描边色 / 线宽 / 填充 / 不透明度
+            （线型固定虚线，是建议卡的身份标识，见 .ov-suggestion）。 */}
+        {suggestions.map((s) => {
+          const sStyle: React.CSSProperties = {
+            left: `${s.x}px`,
+            top: `${s.y}px`,
+            width: `${s.width}px`,
+            height: `${s.height}px`,
+          };
+          Object.assign(sStyle, styleVars(s.style));
+          if (s.style.opacity !== DEFAULT_STYLE.opacity) {
+            sStyle.opacity = s.style.opacity / 100;
+          }
+          return (
+            <div
+              key={s.id}
+              className="ov-slot ov-slot--suggestion"
+              data-suggestion-id={s.id}
+              style={sStyle}
+            >
+              <SuggestionCard element={s} />
+            </div>
+          );
+        })}
 
         {/* Pencil 式过程可视化：Agent 任务占位卡（运行时态，不可拖拽） */}
         {tasks.map((task) => (
@@ -1323,6 +1373,15 @@ export function OverlayLayer({
           />
         ) : null}
       </div>
+
+      {/* 样式面板 —— 选中覆盖层元素（连线 / 文件卡 / 文本卡 / 文件夹 / 区域）
+          时浮在画布左上角，与原生属性面板对齐。屏幕定位，不进变换容器。 */}
+      {styleEl ? (
+        <StylePanel
+          element={styleEl}
+          onChange={(patch) => applyStyle(styleEl.id, patch)}
+        />
+      ) : null}
 
       {/* 右键上下文菜单 ——「整理」（作用域由右键位置 / 框选决定）+ 右键
           命中连线 / 文件卡 / 文本卡时附「删除」项 */}

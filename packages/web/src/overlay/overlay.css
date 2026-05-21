@@ -863,8 +863,11 @@
 .ov-suggestion {
   display: flex;
   flex-direction: column;
-  background: var(--c-accent-tint);
-  border: 1.5px dashed var(--c-accent);
+  /* 描边色 / 线宽 / 填充 / 不透明度按 element.style 反映（slot 经 styleVars
+     注入 --ov-* 变量，子元素自动继承）；线型固定 dashed —— 虚线边是「这是
+     一条建议」的身份标识，不随样式改（PRD §7.3，与实线的正式内容卡区分）。 */
+  background: var(--ov-fill, var(--c-accent-tint));
+  border: var(--ov-stroke-w, 1.5px) dashed var(--ov-stroke, var(--c-accent));
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md, 0 6px 18px rgba(60, 40, 30, 0.2));
   overflow: hidden;
@@ -1150,4 +1153,137 @@
   border-radius: var(--radius-md);
   opacity: 0.3;
   pointer-events: none;
+}
+
+/* ── 覆盖层元素样式面板（StylePanel）──────────────────────────────
+ * 选中连线 / 文件卡 / 文本卡 / 文件夹 / 区域时浮在画布左上角，对齐原生
+ * （Excalidraw）属性面板的能力与交互：色板行 + 分段按钮 + 不透明度滑杆。 */
+.ov-style-panel {
+  position: absolute;
+  left: 16px;
+  top: 16px;
+  z-index: 40;
+  width: 208px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md, 0 6px 18px rgba(60, 40, 30, 0.2));
+  font-family: var(--font-ui);
+  pointer-events: auto;
+}
+
+.ov-style-panel__title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--c-ink);
+}
+
+.ov-style-sec {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.ov-style-sec__label {
+  font-size: var(--text-xs);
+  color: var(--c-ink);
+  opacity: 0.55;
+}
+
+.ov-swatches {
+  display: flex;
+  gap: 6px;
+}
+
+.ov-swatch {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  padding: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.ov-swatch--on {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 1px;
+}
+
+/* 透明背景 —— 红色斜杠示意「无填充」。 */
+.ov-swatch--none {
+  background: var(--c-surface);
+  background-image: linear-gradient(
+    45deg,
+    transparent 45%,
+    #e03131 45%,
+    #e03131 55%,
+    transparent 55%
+  );
+}
+
+/* 自定义色 —— 内嵌原生取色器，铺满色块。 */
+.ov-swatch--custom {
+  position: relative;
+  overflow: hidden;
+}
+.ov-swatch--custom input[type='color'] {
+  position: absolute;
+  inset: -6px;
+  width: 34px;
+  height: 34px;
+  border: none;
+  padding: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.ov-seg {
+  display: flex;
+  gap: 4px;
+}
+
+.ov-seg__btn {
+  flex: 1;
+  padding: 5px 0;
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  color: var(--c-ink);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.ov-seg__btn:hover {
+  background: var(--c-surface-sunken);
+}
+.ov-seg__btn--on,
+.ov-seg__btn--on:hover {
+  color: var(--c-on-accent);
+  background: var(--c-accent);
+  border-color: var(--c-accent);
+}
+
+.ov-style-opacity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.ov-style-opacity input[type='range'] {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--c-accent);
+  cursor: pointer;
+}
+.ov-style-opacity__val {
+  flex: 0 0 auto;
+  min-width: 26px;
+  text-align: right;
+  font-size: var(--text-xs);
+  color: var(--c-ink);
 }
