@@ -8,6 +8,7 @@
  *  - GET  /api/board            → { meta, scene, files }（M1）
  *  - PUT  /api/board            → 请求体 { scene } → saveBoard 落盘（M1）
  *  - POST /api/ops              → 元素级操作合并入 board.json（M4：实时同步）
+ *  - POST /api/presence         → 在场光标上报 / 离开（M4：拟人化光标）
  *  - GET  /api/files/<相对路径>  → files/ 下文件原始内容（M2，含防目录穿越）
  *  - POST /api/files/move       → 移动 files/ 内文件（M2 增量2：画布→文件系统）
  *  - POST /api/tasks            → 新建 Agent 任务（M3：Pencil 式过程可视化）
@@ -50,6 +51,7 @@ import {
 } from '@board/core';
 import { loadBoard, saveBoard } from '@board/core/node';
 import type { EventLog } from './events.js';
+import type { PresenceHub } from './presence.js';
 import type { SseHub } from './sse.js';
 import type { TaskStore } from './tasks.js';
 
@@ -70,6 +72,8 @@ export interface HttpDeps {
   sse: SseHub;
   /** Agent 任务运行时存储（Pencil 式过程可视化，PRD §7.4） */
   tasks: TaskStore;
+  /** 在场参与者注册表（M4：拟人化光标，PRD §8.2） */
+  presence: PresenceHub;
   /**
    * 立即执行一次 reconcile（文件系统 → 画布）。
    * 文件移动等服务端写操作后调用，使 board.json 即时同步并广播 board-changed，
@@ -725,6 +729,20 @@ async function handleRefresh(
   } catch {
     // refresh 允许空请求体 —— 用默认 actor。
   }
+  // 外部写入（CLI / MCP）可能往区域里加了元素（如 Agent 在区域内画流程图）——
+  // 自动增长区域以包住内容。growRegions 是 grow-only、幂等的，安全可常跑。
+  try {
+    const handle = await loadBoard(deps.dir);
+    const grown = growRegions(handle.scene.elements);
+    if (grown.changed) {
+      await saveBoard(deps.dir, handle.meta, {
+        ...handle.scene,
+        elements: grown.elements,
+      });
+    }
+  } catch (err) {
+    console.error('[board-server] refresh 增长区域失败:', errMsg(err));
+  }
   await deps.recordChange(actor);
   ok(res, { refreshed: true });
 }
@@ -907,8 +925,67 @@ async function handleDeleteElement(
 }
 
 /**
- * GET /api/events —— SSE 长连接。两类帧共享此通道：
+ * POST /api/presence —— 上报在场光标 / 显式离开（M4：拟人化光标，PRD §8.2）。
+ *
+ * 请求体 `{ clientId, name?, color?, cursor?, leaving? }`：
+ *  - `leaving: true` —— 显式离开（tab 关闭，多经 sendBeacon）→ 移除并广播
+ *    `presence-leave`；
+ *  - 否则 —— 登记 / 刷新该客户端，广播 `presence` 帧。`cursor` 为画布坐标
+ *    `{x,y}`，省略 / 非法时记为 null（在场但光标未知）。
+ *
+ * Presence 是纯瞬时态：不落 board.json、不进事件日志、不触发 recordChange。
+ */
+function handlePresence(
+  deps: HttpDeps,
+  body: unknown,
+  res: ServerResponse,
+): void {
+  if (typeof body !== 'object' || body === null) {
+    fail(res, 400, '请求体必须为 JSON 对象');
+    return;
+  }
+  const rec = body as Record<string, unknown>;
+  const clientId = typeof rec['clientId'] === 'string' ? rec['clientId'] : '';
+  if (!clientId) {
+    fail(res, 400, '缺少 clientId');
+    return;
+  }
+  if (rec['leaving'] === true) {
+    if (deps.presence.remove(clientId)) {
+      const leaveFrame = { type: 'presence-leave', clientId };
+      deps.sse.broadcast(leaveFrame);
+    }
+    ok(res, { left: clientId });
+    return;
+  }
+  const name =
+    typeof rec['name'] === 'string' && rec['name'] ? rec['name'] : '协作者';
+  const color =
+    typeof rec['color'] === 'string' && rec['color'] ? rec['color'] : '#868e96';
+  const rawCursor = rec['cursor'];
+  let cursor: { x: number; y: number } | null = null;
+  if (typeof rawCursor === 'object' && rawCursor !== null) {
+    const c = rawCursor as Record<string, unknown>;
+    if (
+      typeof c['x'] === 'number' &&
+      typeof c['y'] === 'number' &&
+      Number.isFinite(c['x']) &&
+      Number.isFinite(c['y'])
+    ) {
+      cursor = { x: c['x'], y: c['y'] };
+    }
+  }
+  const entry = deps.presence.update({ clientId, name, color, cursor });
+  const frame = { type: 'presence', client: entry };
+  deps.sse.broadcast(frame);
+  ok(res, { ok: true });
+}
+
+/**
+ * GET /api/events —— SSE 长连接。多类帧共享此通道：
  *  - `board-changed` —— Web 据此整板刷新；
+ *  - `ops` —— Web 据此增量合并（M4 实时同步）；
+ *  - `presence` / `presence-leave` —— 在场光标更新 / 离开（M4）；
  *  - 结构化 `BoardEvent`（带 `seq`）—— `board watch` 据此输出事件流。
  */
 function handleEvents(deps: HttpDeps, req: IncomingMessage, res: ServerResponse): void {
@@ -1000,6 +1077,18 @@ async function route(
   // POST /api/ops —— 操作级实时同步（M4）
   if (path === '/api/ops' && method === 'POST') {
     await handleApplyOps(deps, req, res);
+    return;
+  }
+  // POST /api/presence —— 在场光标上报（M4）
+  if (path === '/api/presence' && method === 'POST') {
+    let presenceBody: unknown;
+    try {
+      presenceBody = await readJsonBody(req);
+    } catch (err) {
+      fail(res, 400, errMsg(err));
+      return;
+    }
+    handlePresence(deps, presenceBody, res);
     return;
   }
   // GET /api/events/log —— 事件增量拉取；须先于 /api/events 判断

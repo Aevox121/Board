@@ -28,6 +28,7 @@ import {
   type ExViewportState,
 } from '../bridge';
 import { OverlayLayer, type OverlayViewport } from '../overlay/OverlayLayer';
+import { PresenceLayer } from '../presence/PresenceLayer';
 import './BoardCanvas.css';
 
 /** 覆盖层初始视口 —— 与 createBoardScene 的默认 viewport 对齐。 */
@@ -53,7 +54,8 @@ const EXCALIDRAW_UI_OPTIONS = {
 };
 
 export function BoardCanvas(): JSX.Element {
-  const { scene, actorId, replaceScene, importTick, importFit } = useBoard();
+  const { scene, actorId, replaceScene, importTick, importFit, syncTick } =
+    useBoard();
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
 
   // 始终持有最新场景，供 onChange 闭包做 id 对齐（保留 z/parentId 等）。
@@ -217,6 +219,17 @@ export function BoardCanvas(): JSX.Element {
     // importFit 与 importTick 在同一次 setState 中更新，读取的即为本次值。
   }, [importTick]);
 
+  // 覆盖层动了 Excalidraw 原生元素（如拖区域带动其内图形）→ syncTick 自增。
+  // 把场景重推进 Excalidraw 让图形跟随；只更新元素、不动视口。
+  useEffect(() => {
+    if (syncTick === 0) return;
+    const api = apiRef.current;
+    if (!api) return;
+    const { elements } = sceneToExcalidraw(sceneRef.current);
+    suppressNextChange.current = true;
+    api.updateScene({ elements });
+  }, [syncTick]);
+
   return (
     <div className="board-canvas">
       <Excalidraw
@@ -230,6 +243,8 @@ export function BoardCanvas(): JSX.Element {
         viewport={overlayViewport}
         activeTool={activeTool}
       />
+      {/* 在场光标层（M4）—— 叠在最上层，纯展示对端光标 */}
+      <PresenceLayer viewport={overlayViewport} />
     </div>
   );
 }

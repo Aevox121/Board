@@ -24,6 +24,7 @@ import {
 import { listBoardFiles, loadBoard } from '@board/core/node';
 import { createEventLog } from './events.js';
 import { createHttpServer, HOST, type HttpDeps } from './http.js';
+import { createPresenceHub } from './presence.js';
 import { runReconcile } from './reconcile.js';
 import { createSseHub } from './sse.js';
 import { createTaskStore } from './tasks.js';
@@ -93,6 +94,16 @@ async function main(): Promise<void> {
 
   // 事件日志：编号 + 留存最近事件，供 board watch / board_subscribe_events 订阅
   const events = createEventLog();
+
+  // 在场参与者注册表（拟人化光标）。定时清理超时未上报的离线条目并广播离开。
+  const presence = createPresenceHub();
+  const presencePrune = setInterval(() => {
+    for (const id of presence.prune()) {
+      const leaveFrame = { type: 'presence-leave', clientId: id };
+      sse.broadcast(leaveFrame);
+    }
+  }, 5000);
+  presencePrune.unref();
 
   // 服务启动时先做一次初始 reconcile，让 files/ 里已有文件生成 file 元素。
   // 启动 reconcile 不产事件 —— 已有文件不是「新增」。
@@ -220,6 +231,7 @@ async function main(): Promise<void> {
     tasks,
     reconcileNow: reconcileOnce,
     events,
+    presence,
     recordChange,
     recordOps,
     emitEvent,
@@ -246,6 +258,7 @@ async function main(): Promise<void> {
     shuttingDown = true;
     console.log(`\n[board-server] 收到 ${signal}，正在关闭...`);
     if (debounceTimer) clearTimeout(debounceTimer);
+    clearInterval(presencePrune);
     sse.closeAll();
     server.close();
     void watcher.close().finally(() => process.exit(0));

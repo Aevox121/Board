@@ -168,6 +168,29 @@ export function excalidrawToScene(
       )
     : [];
 
+  // 安全网（数据安全）：图形 / 手绘是 Excalidraw 原生元素，正常只活在 Excalidraw
+  // 的元素表里。但 Excalidraw 偶发会把它们整个从表里丢掉 —— 那样 drawn 里没有、
+  // preserved 又按类型排除了 DRAWING_TYPES，图形便被当成「已删除」静默同步掉
+  // （曾导致演示板 18 个图形全部蒸发）。
+  // 判据：用户**真删**元素时 Excalidraw 会保留该元素并打 isDeleted 标记 —— 即仍
+  // 在 exElements 里。凡 prevScene 有、而 exElements 里**完全不存在**（连 isDeleted
+  // 记录都没有）的图形 / 手绘 = Excalidraw 丢了它，从 prevScene 兜底保留，绝不
+  // 静默删除。（被真删的元素下一轮就不在 prevScene 里，不会因此复活。）
+  const exIds = new Set(exElements.map((e) => e.id));
+  const rescued: Element[] = prevScene
+    ? prevScene.elements.filter(
+        (el) =>
+          DRAWING_TYPES.has(el.type) &&
+          !drawnIds.has(el.id) &&
+          !exIds.has(el.id),
+      )
+    : [];
+  if (rescued.length > 0) {
+    console.warn(
+      `[board-web] 安全网：Excalidraw 丢失了 ${rescued.length} 个图形/手绘元素，已从上一份场景兜底保留。`,
+    );
+  }
+
   const base = createBoardScene();
   return {
     ...base,
@@ -176,7 +199,7 @@ export function excalidrawToScene(
       y: viewport.scrollY,
       zoom: clampZoom(viewport.zoom.value),
     },
-    elements: [...preserved, ...drawn],
+    elements: [...preserved, ...rescued, ...drawn],
   };
 }
 

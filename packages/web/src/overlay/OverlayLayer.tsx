@@ -870,7 +870,12 @@ export function OverlayLayer({
       if (e.parentId === region.id) ids.add(e.id);
     }
     const next = moveElementsBy(curScene, ids, d.offsetX, d.offsetY);
-    replaceScene(next, 'canvas');
+    // 区域内若含 Excalidraw 原生元素（图形 / 手绘），用 canvas-sync 让 BoardCanvas
+    // 把它们重推进 Excalidraw —— 否则核心场景动了、画布上的图形却不跟随。
+    const movedNative = curScene.elements.some(
+      (e) => ids.has(e.id) && (e.type === 'shape' || e.type === 'draw'),
+    );
+    replaceScene(next, movedNative ? 'canvas-sync' : 'canvas');
   }
 
   /** 文本卡拖拽结束 —— 重新定位并按落点重设所属区域（文本无文件系统对应物）。 */

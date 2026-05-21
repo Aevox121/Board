@@ -290,8 +290,12 @@
 .ov-region {
   display: flex;
   flex-direction: column;
-  /* 浅底 + 半透明，让叠在其上的文件卡仍可读 */
-  background: var(--ov-fill, var(--c-accent-tint));
+  /*
+   * 区域是「最底层的圈地背景」。底色用半透明陶土橙 —— 既能叠文件卡，又能让
+   * 落在区域内的 Excalidraw 原生图形（画在更下层的画布上）透出来不被挡死。
+   * 不可用不透明色（如 --c-accent-tint）：会把区域内的图形完全遮住。
+   */
+  background: var(--ov-fill, rgba(217, 119, 87, 0.16));
   border: var(--ov-stroke-w, 1.5px) var(--ov-stroke-style, solid)
     var(--ov-stroke, var(--c-accent));
   border-radius: var(--radius-md);

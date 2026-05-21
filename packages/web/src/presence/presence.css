@@ -1,0 +1,38 @@
+/* 在场光标层（M4：拟人化光标）。纯展示，不拦截画布交互。 */
+
+.presence-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  /* 浮在覆盖层与画布之上，但低于菜单 / 面板 */
+  z-index: 50;
+}
+
+.presence-cursor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  /* transform 把光标定位到对端位置；过渡让节流上报的步进更顺滑 */
+  transition: transform 90ms linear;
+  will-change: transform;
+}
+
+.presence-arrow {
+  display: block;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35));
+}
+
+.presence-name {
+  position: absolute;
+  left: 15px;
+  top: 16px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
+}

@@ -203,6 +203,33 @@ export async function sendOps(ops: BoardOp[], origin: string): Promise<void> {
   await readEnvelope<{ applied: number }>(res, 'POST /api/ops');
 }
 
+/** 在场光标上报载荷（M4：拟人化光标）。 */
+export interface PresencePayload {
+  clientId: string;
+  name: string;
+  color: string;
+  /** 画布坐标的光标位置；null = 在场但光标未知 */
+  cursor: { x: number; y: number } | null;
+}
+
+/**
+ * 上报本端在场光标（POST /api/presence）—— M4 拟人化光标。
+ *
+ * 高频、可丢：失败静默吞掉，不抛 ServerError、不走带超时的 fetch ——
+ * presence 是瞬时态，丢一两帧无所谓，不该打断 UI。
+ */
+export async function sendPresence(p: PresencePayload): Promise<void> {
+  try {
+    await fetch(`${API_BASE}/presence`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(p),
+    });
+  } catch {
+    // presence 可丢，忽略网络错误。
+  }
+}
+
 /**
  * 移除一个任务（DELETE /api/tasks/<id>）—— 完成态任务卡的「× 关闭」与
  * 「超时自动淡出」清理。server 移除后经 SSE 广播，各端据此刷新。

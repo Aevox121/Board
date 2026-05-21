@@ -26,6 +26,8 @@ import { downloadBoardJSON, pickAndParseBoardJSON } from './board/boardFile';
 import { BoardParseError, diffToOps, type BoardOp, type BoardScene } from '@board/core';
 import { checkHealth, fetchBoard, sendOps, ServerError } from './server/client';
 import { subscribeBoardEvents } from './server/events';
+import { SESSION } from './session';
+import { presenceStore, type RemotePresence } from './presence/presenceStore';
 import './App.css';
 
 /** 外壳布局 —— 顶栏 + 画布区，纵向铺满视口。 */
@@ -60,9 +62,8 @@ function BoardApp(): JSX.Element {
   // 与「导入 / server 载入 / 远端 ops」—— 后者会自增 importTick，不应被回发）。
   const saveTimerRef = useRef<number | undefined>(undefined);
   const lastTickRef = useRef(0);
-  // 本端会话 id —— 随 ops 发往 server，使本端能忽略自己回声的 ops 帧。
-  const clientIdRef = useRef<string>(crypto.randomUUID());
   // 「已与 server 同步」的场景基线 —— 自动同步据此 diff 出本端的增量 ops。
+  // 本端会话 id 取自 SESSION（与在场光标共用一套身份）。
   const lastSyncedRef = useRef<BoardScene>(scene);
 
   // ── 启动时探测 board-server（整个生命周期仅一次）──────────────
@@ -115,17 +116,23 @@ function BoardApp(): JSX.Element {
       })();
     };
 
-    // 收到 ops 帧（M4 实时同步）→ 按元素 id 增量合并进本地场景。
-    // origin 为本端会话 id 时是自己的回声，忽略。
-    const handleOps = (frame: { ops: unknown; origin: string }): void => {
-      if (frame.origin === clientIdRef.current) return;
-      if (!Array.isArray(frame.ops)) return;
-      applyRemoteOpsRef.current(frame.ops as BoardOp[]);
-    };
-
-    const unsubscribe = subscribeBoardEvents({
-      onBoardChanged: handleBoardChanged,
-      onOps: handleOps,
+    // 按帧类型路由 SSE 事件。
+    const unsubscribe = subscribeBoardEvents((frame) => {
+      if (frame.type === 'board-changed') {
+        handleBoardChanged();
+      } else if (frame.type === 'ops' && Array.isArray(frame.ops)) {
+        // origin 为本端会话 id 时是自己的回声，忽略。
+        if (frame.origin === SESSION.clientId) return;
+        applyRemoteOpsRef.current(frame.ops as BoardOp[]);
+      } else if (frame.type === 'presence' && frame.client) {
+        // 在场光标更新 → 灌进 presenceStore（PresenceLayer 据此渲染）。
+        presenceStore.applyUpdate(frame.client as RemotePresence);
+      } else if (
+        frame.type === 'presence-leave' &&
+        typeof frame.clientId === 'string'
+      ) {
+        presenceStore.applyLeave(frame.clientId);
+      }
     });
     return unsubscribe;
   }, [connection]);
@@ -152,7 +159,7 @@ function BoardApp(): JSX.Element {
       if (ops.length === 0) return;
       const synced = scene;
       setSaveState('saving');
-      void sendOps(ops, clientIdRef.current)
+      void sendOps(ops, SESSION.clientId)
         .then(() => {
           lastSyncedRef.current = synced;
           setSaveState('saved');
@@ -200,7 +207,7 @@ function BoardApp(): JSX.Element {
     const synced = scene;
     setSaveState('saving');
     try {
-      await sendOps(ops, clientIdRef.current);
+      await sendOps(ops, SESSION.clientId);
       lastSyncedRef.current = synced;
       setSaveState('saved');
       window.setTimeout(() => setSaveState('idle'), 2000);
