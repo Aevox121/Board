@@ -37,6 +37,7 @@ import {
   growRegions,
   removeElement,
   nextZ,
+  newElementId,
   createShapeElement,
   createDrawElement,
   createTextElement,
@@ -373,6 +374,15 @@ const NEW_TEXT_W = 220;
 const NEW_TEXT_H = 96;
 /** 创建手势视为「有效拖拽」的最小尺寸 / 长度（画布单位）。 */
 const CREATE_MIN_DRAG = 8;
+/** 粘贴 / 原地复制时相对源元素的偏移（画布单位）—— 连续粘贴逐次叠加错开。 */
+const PASTE_OFFSET = 24;
+/** 可被复制 / 粘贴的元素类型 —— 文件 / 文件夹 / 区域背后是真实文件系统条目，不复制。 */
+const COPYABLE_TYPES: ReadonlySet<string> = new Set([
+  'shape',
+  'draw',
+  'text',
+  'connector',
+]);
 
 /** 创建手势的瞬时状态。 */
 interface CreatingState {
@@ -667,6 +677,12 @@ export function OverlayLayer({
   // 选区的 ref 镜像 —— 供挂在 window 上的框选回调读取最新值。
   const selectedIdsRef = useRef<ReadonlySet<string>>(selectedIds);
   selectedIdsRef.current = selectedIds;
+  // 应用内剪贴板 —— 持有复制 / 剪切的元素快照（深拷贝）。pasteCount 记连续
+  // 粘贴次数，使每次粘贴相对源逐级错开；新一次复制时归零。
+  const clipboardRef = useRef<{ elements: Element[]; pasteCount: number }>({
+    elements: [],
+    pasteCount: 0,
+  });
 
   /** 选中单个元素（替换当前选区）。 */
   function selectOnly(id: string): void {
@@ -1112,6 +1128,33 @@ export function OverlayLayer({
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedIds]);
 
+  // 复制 / 剪切 / 粘贴 / 原地复制（Ctrl/⌘+C/X/V/D）—— 始终挂载（粘贴无需选区）。
+  // 依赖 connection：剪切含文件元素时 deleteSelectedSet 需读最新连接态。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      const k = e.key.toLowerCase();
+      if (k !== 'c' && k !== 'x' && k !== 'v' && k !== 'd') return;
+      // 输入框 / 文本域 / 可编辑区聚焦时让位给原生复制粘贴。
+      const ae = document.activeElement as HTMLElement | null;
+      if (
+        ae &&
+        (ae.tagName === 'INPUT' ||
+          ae.tagName === 'TEXTAREA' ||
+          ae.isContentEditable)
+      ) {
+        return;
+      }
+      e.preventDefault();
+      if (k === 'c') copySelection();
+      else if (k === 'x') cutSelection();
+      else if (k === 'v') pasteClipboard();
+      else duplicateSelection();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [connection]);
+
   // 橡皮擦模式：在 .board-canvas 上以捕获阶段拦截左键按下 —— 命中画布元素
   // （图形 / 手绘 / 连线 / 文件卡 / 文本卡）即删除并吞掉事件（不触发拖拽）；
   // 命中区域 / 文件夹不删（背后是真实文件夹）；点空白处不拦截。
@@ -1267,6 +1310,99 @@ export function OverlayLayer({
         window.alert(`删除文件「${fileBaseName(f.path)}」失败：${msg}`);
       }
     }
+  }
+
+  /**
+   * 把一组元素克隆为可加入场景的新元素 —— 赋新 id、按 (dx,dy) 偏移、叠到顶层。
+   *
+   *  - 连线端点 / parentId 中的元素引用：指向被一同克隆的元素则改指其新 id，
+   *    否则置空（不让粘贴出的连线连回原件、不误挂到原区域）。
+   *  - 按源 z 升序克隆，保持粘贴元素之间的相对层级。
+   */
+  function cloneElements(sources: Element[], dx: number, dy: number): Element[] {
+    const cur = sceneRef.current;
+    const ordered = [...sources].sort((a, b) =>
+      a.z < b.z ? -1 : a.z > b.z ? 1 : 0,
+    );
+    const idMap = new Map<string, string>();
+    for (const s of ordered) idMap.set(s.id, newElementId());
+    let zBase = parseInt(nextZ(cur.elements), 36);
+    if (Number.isNaN(zBase)) zBase = 0;
+    const ts = new Date().toISOString();
+    return ordered.map((s, i): Element => {
+      const cloned = JSON.parse(JSON.stringify(s)) as Element;
+      cloned.id = idMap.get(s.id)!;
+      cloned.x = s.x + dx;
+      cloned.y = s.y + dy;
+      cloned.z = (zBase + i).toString(36).padStart(8, '0');
+      cloned.parentId =
+        s.parentId && idMap.has(s.parentId) ? idMap.get(s.parentId)! : null;
+      cloned.autoPlaced = false;
+      cloned.createdBy = actorId;
+      cloned.updatedBy = actorId;
+      cloned.createdAt = ts;
+      cloned.updatedAt = ts;
+      if (cloned.type === 'connector') {
+        const remapEp = (
+          ep: ConnectorElement['start'],
+        ): ConnectorElement['start'] => ({
+          ...ep,
+          elementId:
+            ep.elementId && idMap.has(ep.elementId)
+              ? idMap.get(ep.elementId)!
+              : null,
+        });
+        cloned.start = remapEp(cloned.start);
+        cloned.end = remapEp(cloned.end);
+      }
+      return cloned;
+    });
+  }
+
+  /** 选区中可复制的元素 —— 文件 / 文件夹 / 区域背后是真实文件系统条目，不复制。 */
+  function copyableSelection(): Element[] {
+    const cur = sceneRef.current;
+    return [...selectedIdsRef.current]
+      .map((id) => cur.elements.find((e) => e.id === id))
+      .filter((e): e is Element => !!e && COPYABLE_TYPES.has(e.type));
+  }
+
+  /** Ctrl/⌘+C —— 把选区中可复制元素的快照存入剪贴板。 */
+  function copySelection(): void {
+    const picked = copyableSelection();
+    if (picked.length === 0) return;
+    clipboardRef.current = {
+      elements: picked.map((e) => JSON.parse(JSON.stringify(e)) as Element),
+      pasteCount: 0,
+    };
+  }
+
+  /** Ctrl/⌘+X —— 复制选区后删除选区。 */
+  function cutSelection(): void {
+    copySelection();
+    void deleteSelectedSet(selectedIdsRef.current);
+  }
+
+  /** Ctrl/⌘+V —— 把剪贴板内容克隆进场景（连续粘贴逐级错开），选中粘贴结果。 */
+  function pasteClipboard(): void {
+    const clip = clipboardRef.current;
+    if (clip.elements.length === 0) return;
+    clip.pasteCount += 1;
+    const off = PASTE_OFFSET * clip.pasteCount;
+    const clones = cloneElements(clip.elements, off, off);
+    const cur = sceneRef.current;
+    replaceScene({ ...cur, elements: [...cur.elements, ...clones] }, 'canvas');
+    setSelectedIds(new Set(clones.map((c) => c.id)));
+  }
+
+  /** Ctrl/⌘+D —— 原地复制选区（相对源偏移一档），不经剪贴板。 */
+  function duplicateSelection(): void {
+    const picked = copyableSelection();
+    if (picked.length === 0) return;
+    const clones = cloneElements(picked, PASTE_OFFSET, PASTE_OFFSET);
+    const cur = sceneRef.current;
+    replaceScene({ ...cur, elements: [...cur.elements, ...clones] }, 'canvas');
+    setSelectedIds(new Set(clones.map((c) => c.id)));
   }
 
   /**
