@@ -40,6 +40,15 @@ export interface ConnectorLayerProps {
    * 其余元素直接读场景坐标。
    */
   liveRects: ReadonlyMap<string, RectLike>;
+  /** 当前选中的连线 id —— 选中态在线下垫一道高亮光晕。 */
+  selectedId?: string | null;
+  /** 点击连线时回调其 id（用于选中该连线，配合 Delete 删除）。 */
+  onSelect?: (id: string) => void;
+  /**
+   * 是否启用连线点选命中区。连线模式（箭头工具）下传 false —— 否则连线的
+   * 透明命中描边会挡住「从连线上画起 / 画到」。
+   */
+  interactive?: boolean;
 }
 
 /** 一条连线渲染所需的几何 + 样式。 */
@@ -153,6 +162,9 @@ function arrowPath(tip: Pt, dir: Pt): string {
 export function ConnectorLayer({
   scene,
   liveRects,
+  selectedId,
+  onSelect,
+  interactive = true,
 }: ConnectorLayerProps): JSX.Element | null {
   const geoms = useMemo<ConnGeom[]>(() => {
     // 按 id 去重（保留最后一次出现）—— 防御性兜底：即便上游意外塞进重复
@@ -247,6 +259,7 @@ export function ConnectorLayer({
         const last = lpts[lpts.length - 1]!;
         const endDir = unit(lpts[lpts.length - 2]!, last);
         const startDir = unit(lpts[1]!, first);
+        const pointStr = lpts.map((p) => `${p.x},${p.y}`).join(' ');
         return (
           <svg
             key={g.id}
@@ -258,9 +271,18 @@ export function ConnectorLayer({
             aria-hidden="true"
           >
             <g opacity={g.opacity}>
+              {/* 选中态：可见线之下垫一道半透明光晕。 */}
+              {g.id === selectedId ? (
+                <polyline
+                  className="ov-connector-sel"
+                  points={pointStr}
+                  fill="none"
+                  strokeWidth={g.strokeWidth + 8}
+                />
+              ) : null}
               <polyline
                 className="ov-connector-line"
-                points={lpts.map((p) => `${p.x},${p.y}`).join(' ')}
+                points={pointStr}
                 fill="none"
                 stroke={g.stroke}
                 strokeWidth={g.strokeWidth}
@@ -274,6 +296,21 @@ export function ConnectorLayer({
                 g.stroke,
                 g.strokeWidth,
               )}
+              {/* 点选命中区 —— 透明粗描边，比可见线宽得多，方便点中细线。
+                  连线模式下不渲染，避免挡住画箭头。 */}
+              {interactive && onSelect ? (
+                <polyline
+                  className="ov-connector-hit"
+                  points={pointStr}
+                  fill="none"
+                  stroke="transparent"
+                  strokeWidth={Math.max(g.strokeWidth + 10, 14)}
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    onSelect(g.id);
+                  }}
+                />
+              ) : null}
             </g>
           </svg>
         );

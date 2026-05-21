@@ -17,12 +17,13 @@
  *  - POST /api/suggestions/accept  → 同意建议（M3：建议机制，PRD §7.3）
  *  - POST /api/suggestions/reject  → 拒绝建议
  *  - POST /api/suggestions/describe → 向建议追加反馈
+ *  - POST /api/elements/delete  → 删除元素（file 移入回收站、连带清引用）
  *  - GET  /api/events           → SSE，board 变化时推送 board-changed（M2）
  */
 import { createReadStream } from 'node:fs';
 import { mkdir, rename, stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { dirname, resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import {
   acceptSuggestion,
   clampPercent,
@@ -35,6 +36,7 @@ import {
   regionForFile,
   regionsOf,
   rejectSuggestion,
+  removeElement,
   SCHEMA_VERSION,
   type BoardScene,
   type BoardTask,
@@ -681,6 +683,94 @@ async function handleSuggestionOp(
   ok(res, { suggestionId, op });
 }
 
+/**
+ * POST /api/elements/delete —— 删除一个元素。
+ *
+ * 请求体 `{ elementId }`。与 CLI `board rm` 同语义（specs §2.2）：
+ *  - `file` 元素：真实文件移入回收站 `.runtime/trash/`（可恢复）。
+ *  - 连带清理引用它的连线 / 建议（避免悬空，经 core `removeElement`）。
+ *  - `region` / `folder` 背后是真实文件夹，拒绝删除。
+ *
+ * Web 画布删除 file 元素必须经此端点 —— 仅改内存场景的话，文件仍在磁盘上，
+ * 下次 reconcile 会按磁盘文件把它复活。
+ */
+async function handleDeleteElement(
+  deps: HttpDeps,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch (err) {
+    fail(res, 400, errMsg(err));
+    return;
+  }
+  if (typeof body !== 'object' || body === null) {
+    fail(res, 400, '请求体必须为 { elementId }');
+    return;
+  }
+  const rawId = (body as Record<string, unknown>)['elementId'];
+  const elementId = typeof rawId === 'string' ? rawId : '';
+  if (!elementId) {
+    fail(res, 400, '缺少 elementId');
+    return;
+  }
+
+  let handle;
+  try {
+    handle = await loadBoard(deps.dir);
+  } catch (err) {
+    fail(res, 404, `读取白板失败: ${errMsg(err)}`);
+    return;
+  }
+  const target = handle.scene.elements.find((e) => e.id === elementId);
+  if (!target) {
+    fail(res, 404, `未找到元素：${elementId}`);
+    return;
+  }
+  if (target.type === 'region' || target.type === 'folder') {
+    fail(
+      res,
+      400,
+      `不支持删除 ${target.type} 元素（其背后是真实文件夹，请直接操作文件夹）`,
+    );
+    return;
+  }
+
+  // 移除元素 + 连带清理引用（与 board rm 同源逻辑），先落盘。
+  // 顺序要点：必须**先**存好「不含该元素」的 board.json，**再**动真实文件。
+  // 若先 trash 文件，watcher 会在文件消失瞬间 reconcile —— 那时 board.json
+  // 还留着这个 file 元素、磁盘文件却没了，reconcile 会把它当 R6 缺失态保留
+  // 并回写，反过来覆盖掉本次删除。先存后删，reconcile 随后只会看到「无元素、
+  // 无文件」的一致状态，不再复活。
+  const { scene: next, removedRefs } = removeElement(handle.scene, elementId);
+  try {
+    await saveBoard(deps.dir, handle.meta, next);
+  } catch (err) {
+    fail(res, 500, `保存白板失败: ${errMsg(err)}`);
+    return;
+  }
+
+  // file 元素：真实文件移入回收站 .runtime/trash/（可恢复）。
+  let trashedFile: string | null = null;
+  if (target.type === 'file') {
+    const src = join(deps.dir, 'files', target.path);
+    try {
+      await stat(src);
+      const trashDir = join(deps.dir, '.runtime', 'trash');
+      await mkdir(trashDir, { recursive: true });
+      await rename(src, join(trashDir, `${Date.now()}-${basename(target.path)}`));
+      trashedFile = target.path;
+    } catch {
+      // 文件已不在磁盘上 —— 只删元素即可。
+    }
+  }
+
+  deps.sse.broadcast({ type: 'board-changed' });
+  ok(res, { removed: elementId, type: target.type, trashedFile, removedRefs });
+}
+
 /** GET /api/events —— SSE 长连接，board 变化时推送 board-changed。 */
 function handleEvents(deps: HttpDeps, req: IncomingMessage, res: ServerResponse): void {
   deps.sse.handle(req, res);
@@ -791,6 +881,11 @@ async function route(
   }
   if (path === '/api/suggestions/describe' && method === 'POST') {
     await handleSuggestionOp(deps, req, res, 'describe');
+    return;
+  }
+  // POST /api/elements/delete —— 删除元素（含 file 移入回收站、连带清引用）
+  if (path === '/api/elements/delete' && method === 'POST') {
+    await handleDeleteElement(deps, req, res);
     return;
   }
   // GET /api/files/<相对路径> —— 注意用未折叠斜杠的原始 pathname 取子路径

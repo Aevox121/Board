@@ -196,6 +196,36 @@ export async function dismissTask(taskId: string): Promise<void> {
   await readEnvelope<{ removed: string }>(res, `DELETE /api/tasks/${taskId}`);
 }
 
+/** POST /api/elements/delete 的 data 形状（server handleDeleteElement）。 */
+export interface DeleteElementResult {
+  removed: string;
+  type: string;
+  /** file 元素被移入回收站的原相对路径；非 file 为 null。 */
+  trashedFile: string | null;
+  /** 连带清理掉的引用元素 id（指向被删元素的连线 / 建议）。 */
+  removedRefs: string[];
+}
+
+/**
+ * 删除一个元素（POST /api/elements/delete）—— `file` 元素的真实文件移入回收站，
+ * 引用它的连线 / 建议连带清理。server 落盘后经 SSE 广播 board-changed。
+ *
+ * 画布删除 `file` 元素必须经此端点：file 背后是真实文件，仅改内存场景会被
+ * 下次 reconcile 复活。连线 / 文本卡等无文件系统对应物的元素可直接改内存场景。
+ *
+ * @throws ServerError —— 服务不可达 / HTTP 错误。
+ */
+export async function deleteElement(
+  elementId: string,
+): Promise<DeleteElementResult> {
+  const res = await fetchWithTimeout('/elements/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ elementId }),
+  });
+  return readEnvelope<DeleteElementResult>(res, 'POST /api/elements/delete');
+}
+
 /**
  * 处理一条建议（建议机制，PRD §7.3）—— POST /api/suggestions/<op>。
  * server 落盘后经 SSE 广播 board-changed，各端据此刷新。

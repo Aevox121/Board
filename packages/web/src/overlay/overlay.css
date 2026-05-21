@@ -639,6 +639,15 @@
   background: var(--c-surface-sunken);
 }
 
+/* 「删除」等危险菜单项 —— 用红调与「整理」区分。 */
+.ov-menu__item--danger {
+  color: #c0392b;
+}
+
+.ov-menu__item--danger:hover {
+  background: #fdecea;
+}
+
 .ov-menu__icon {
   flex: 0 0 auto;
   font-size: var(--text-md);
@@ -1086,6 +1095,22 @@
 .ov-connector-line {
   stroke-linejoin: round;
   stroke-linecap: round;
+}
+
+/* 连线点选命中区 —— 透明粗描边，仅在描边上响应指针（线宽容差更大、好点中）。
+   父级 .ov-connector 是 pointer-events:none，本元素显式开启即可被点中。 */
+.ov-connector-hit {
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+/* 连线选中态 —— 可见线之下垫一道半透明陶土橙光晕。 */
+.ov-connector-sel {
+  stroke: var(--c-accent);
+  opacity: 0.4;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  pointer-events: none;
 }
 
 /* 连线标签 —— 贴在折线中点，浅底描边保证压在线上仍可读。 */

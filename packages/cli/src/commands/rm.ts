@@ -8,6 +8,7 @@
 import { mkdir, rename } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { basename, join } from 'node:path';
+import { removeElement } from '@board/core';
 import { loadBoard, saveBoard } from '@board/core/node';
 import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
@@ -38,6 +39,13 @@ export async function cmdRm(args: ParsedArgs): Promise<CmdResult> {
     );
   }
 
+  // 移除目标，并连带清理引用它的连线 / 建议（避免悬空引用），先落盘。
+  // 顺序要点：先存「不含该元素」的 board.json、再动真实文件 —— 否则正在
+  // 监听该白板的 board-server 会在文件消失瞬间 reconcile，把仍在 board.json
+  // 里的该 file 元素当缺失态保留并回写，覆盖掉本次删除。
+  const { scene: next, removedRefs } = removeElement(scene, elementId);
+  await saveBoard(dir, handle.meta, next);
+
   // file 元素：真实文件移入回收站 .runtime/trash/（可恢复）。
   let trashed: string | null = null;
   if (target.type === 'file') {
@@ -49,26 +57,6 @@ export async function cmdRm(args: ParsedArgs): Promise<CmdResult> {
       trashed = target.path;
     }
   }
-
-  // 移除目标，并连带清理引用它的连线 / 建议（避免悬空引用）。
-  const removedRefs: string[] = [];
-  const next = scene.elements.filter((e) => {
-    if (e.id === elementId) return false;
-    if (
-      e.type === 'connector' &&
-      (e.start.elementId === elementId || e.end.elementId === elementId)
-    ) {
-      removedRefs.push(e.id);
-      return false;
-    }
-    if (e.type === 'suggestion' && e.targetId === elementId) {
-      removedRefs.push(e.id);
-      return false;
-    }
-    return true;
-  });
-
-  await saveBoard(dir, handle.meta, { ...scene, elements: next });
 
   return {
     code: EXIT.OK,

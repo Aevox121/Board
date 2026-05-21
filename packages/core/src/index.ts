@@ -12,5 +12,6 @@ export * from './factory.js';
 export * from './serialize.js';
 export * from './mime.js';
 export * from './reconcile.js';
+export * from './mutate.js';
 export * from './task.js';
 export * from './suggestion.js';

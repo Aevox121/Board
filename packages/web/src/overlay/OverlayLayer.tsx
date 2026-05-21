@@ -30,11 +30,12 @@ import {
   regionForFile,
   arrangeScene,
   growRegions,
+  removeElement,
   DEFAULT_STYLE,
 } from '@board/core';
 import { useBoard } from '../board/BoardContext';
 import { moveFile } from '../server/files';
-import { putScene } from '../server/client';
+import { putScene, deleteElement } from '../server/client';
 import { FileCard } from './FileCard';
 import { FolderCard } from './FolderCard';
 import { TextCard } from './TextCard';
@@ -156,6 +157,8 @@ interface RightPress {
   startCY: number;
   /** 是否已越过阈值（成为框选）。 */
   moved: boolean;
+  /** 右键命中的覆盖层元素 / 连线 id（用于菜单「删除」项）；空白处为 null。 */
+  targetId: string | null;
 }
 
 /** 启动拖拽 / 框选的位移阈值（屏幕像素）。 */
@@ -273,6 +276,14 @@ function styleVars(style: Style): Record<string, string> {
   return vars;
 }
 
+/** 菜单项「删除」的文案，随元素类型而变。 */
+function delMenuLabel(el: Element): string {
+  if (el.type === 'connector') return '删除连线';
+  if (el.type === 'text') return '删除文本卡';
+  if (el.type === 'file') return `删除文件「${fileBaseName(el.path)}」`;
+  return '删除元素';
+}
+
 /** 菜单项「整理」的文案，随作用域而变。 */
 function menuLabel(scope: MenuScope): string {
   if (scope.kind === 'region') return `整理「${scope.label}」`;
@@ -292,6 +303,11 @@ export function OverlayLayer({
   // 从任意元素上画起 / 画到），并对可连接元素显示高亮。
   const connectMode = activeTool === 'arrow' || activeTool === 'line';
 
+  // 橡皮擦模式：选中橡皮擦工具时为 true —— 点覆盖层元素（连线 / 文件卡 /
+  // 文本卡）即删除。Excalidraw 自带橡皮擦只擦 Excalidraw 元素，覆盖层元素
+  // 需自行接管。
+  const eraserMode = activeTool === 'eraser';
+
   // 拖拽 / 缩放瞬时状态；null = 未在进行。
   const [drag, setDrag] = useState<DragState | null>(null);
   const [resize, setResize] = useState<ResizeState | null>(null);
@@ -300,9 +316,13 @@ export function OverlayLayer({
   // 当前选中的内容元素 id —— 选中时显示选择框 + 八向缩放手柄；null = 未选中。
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // 右键上下文菜单（屏幕坐标 + 作用域）；null = 未显示。
-  const [menu, setMenu] = useState<{ x: number; y: number; scope: MenuScope } | null>(
-    null,
-  );
+  const [menu, setMenu] = useState<{
+    x: number;
+    y: number;
+    scope: MenuScope;
+    /** 右键命中的可删除元素 id（连线 / 文件卡 / 文本卡）；无则 null。 */
+    delTargetId: string | null;
+  } | null>(null);
   // 右键框选的虚线框（画布坐标矩形）；null = 无。
   const [marquee, setMarquee] = useState<RectLike | null>(null);
 
@@ -497,6 +517,7 @@ export function OverlayLayer({
           x: e.clientX,
           y: e.clientY,
           scope: { kind: 'selection', fileIds: ids },
+          delTargetId: null,
         });
       } else {
         // 单击 —— 按落点决定作用域（区域 / 收件区）
@@ -505,15 +526,16 @@ export function OverlayLayer({
           x: e.clientX,
           y: e.clientY,
           scope: scopeAt(p.startCX, p.startCY),
+          delTargetId: p.targetId,
         });
       }
     };
 
     const onDown = (e: PointerEvent): void => {
       if (e.button === 0) {
-        // 左键：点在内容元素 / 手柄之外 → 取消选中。
+        // 左键：点在内容元素 / 连线 / 手柄之外 → 取消选中。
         const t = e.target as HTMLElement | null;
-        if (!t || !t.closest('[data-element-id]')) {
+        if (!t || !t.closest('[data-element-id],[data-connector-id]')) {
           setSelectedId(null);
         }
         return;
@@ -524,12 +546,20 @@ export function OverlayLayer({
       setMenu(null);
       setMarquee(null);
       const c = toCanvas(e.clientX, e.clientY);
+      // 右键命中的覆盖层元素 / 连线 —— 供菜单「删除」项使用。
+      const rt = e.target as HTMLElement | null;
+      const rhit = rt?.closest('[data-element-id],[data-connector-id]') ?? null;
+      const targetId = rhit
+        ? (rhit.getAttribute('data-element-id') ??
+          rhit.getAttribute('data-connector-id'))
+        : null;
       rightPressRef.current = {
         startX: e.clientX,
         startY: e.clientY,
         startCX: c.x,
         startCY: c.y,
         moved: false,
+        targetId,
       };
       window.addEventListener('pointermove', onMove);
       window.addEventListener('pointerup', onUp);
@@ -579,15 +609,57 @@ export function OverlayLayer({
     if (connectMode) setSelectedId(null);
   }, [connectMode]);
 
-  // 选中态下按 Esc 取消选中。
+  // 选中态键盘操作：Esc 取消选中；Delete / Backspace 删除选中元素。
   useEffect(() => {
     if (!selectedId) return;
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setSelectedId(null);
+      if (e.key === 'Escape') {
+        setSelectedId(null);
+        return;
+      }
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        // 焦点在输入框 / 可编辑区时不拦截 —— 避免删字符误删元素。
+        const ae = document.activeElement as HTMLElement | null;
+        if (
+          ae &&
+          (ae.tagName === 'INPUT' ||
+            ae.tagName === 'TEXTAREA' ||
+            ae.isContentEditable)
+        ) {
+          return;
+        }
+        e.preventDefault();
+        void deleteSelected(selectedId);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedId]);
+
+  // 橡皮擦模式：在 .board-canvas 上以捕获阶段拦截左键按下 —— 命中覆盖层
+  // 元素（连线 / 文件卡 / 文本卡）即删除并吞掉事件（不触发卡片拖拽 / 不让
+  // Excalidraw 介入）；命中区域 / 文件夹不删（背后是真实文件夹）；点空白
+  // 处放行，交给 Excalidraw 自带橡皮擦擦 Excalidraw 元素。
+  useEffect(() => {
+    if (!eraserMode) return;
+    const host = rootRef.current?.parentElement; // .board-canvas
+    if (!host) return;
+    const onErase = (e: PointerEvent): void => {
+      if (e.button !== 0) return;
+      const t = e.target as HTMLElement | null;
+      const hit = t?.closest('[data-element-id],[data-connector-id]');
+      if (!hit) return; // 空白 / Excalidraw 元素 —— 不拦截
+      const id =
+        hit.getAttribute('data-element-id') ??
+        hit.getAttribute('data-connector-id');
+      if (!id) return;
+      e.preventDefault();
+      e.stopPropagation();
+      void deleteSelected(id);
+    };
+    host.addEventListener('pointerdown', onErase, true);
+    return () => host.removeEventListener('pointerdown', onErase, true);
+  }, [eraserMode]);
 
   /** 把场景中某元素的若干 envelope 字段打补丁，返回新场景。 */
   function patchElement(
@@ -638,6 +710,52 @@ export function OverlayLayer({
     void putScene(next).catch((err: unknown) => {
       console.warn(`[board-web] 保存${what}失败（可稍后手动保存）：`, err);
     });
+  }
+
+  /**
+   * 删除选中的覆盖层元素（连线 / 文本卡 / 文件卡），连带清理悬空引用。
+   *
+   *  - `file`：背后是真实文件，必须经 server 移入回收站 —— 仅改内存场景会被
+   *    下次 reconcile 按磁盘文件复活。
+   *  - `connector` / `text`：无文件系统对应物 —— 直接改内存场景并落盘。
+   *  - `region` / `folder`：背后是真实文件夹，不在画布删除范围（与 board rm 一致）。
+   */
+  async function deleteSelected(id: string): Promise<void> {
+    const cur = sceneRef.current;
+    const el = cur.elements.find((e) => e.id === id);
+    if (!el) {
+      setSelectedId(null);
+      return;
+    }
+    if (el.type === 'region' || el.type === 'folder') return;
+    setSelectedId(null);
+
+    if (el.type === 'file') {
+      if (connection !== 'connected') {
+        window.alert('未连接 board-server，无法删除文件元素。');
+        return;
+      }
+      // 乐观更新：先本地移除 —— UI 即时反馈，且本地场景不再残留该元素，
+      // 否则防抖自动保存会把它写回、覆盖掉 server 的删除。再经 server 端点
+      // 把真实文件移入回收站（仅改内存场景不够：文件还在磁盘上，会被下次
+      // reconcile 复活）。失败则回滚到删除前场景。
+      const { scene: optimistic } = removeElement(cur, id);
+      replaceScene(optimistic, 'canvas');
+      try {
+        await deleteElement(id);
+        // server 已落盘并广播 board-changed，SSE 会刷回权威场景。
+      } catch (err) {
+        replaceScene(cur, 'canvas');
+        const msg = err instanceof Error ? err.message : String(err);
+        window.alert(`删除失败：${msg}`);
+      }
+      return;
+    }
+
+    // connector / text 等无文件系统对应物 —— 直接改内存场景并落盘。
+    const { scene: next } = removeElement(cur, id);
+    replaceScene(next, 'canvas');
+    persist(next, '删除元素');
   }
 
   /** 同区域 / 收件区内拖拽文件卡 —— 仅就地重新定位（手动放置），不动文件归属。 */
@@ -949,6 +1067,20 @@ export function OverlayLayer({
       ? (connectTargets.find((e) => e.id === hoverConnId) ?? null)
       : null;
 
+  // 右键菜单的删除目标 —— 右键落在连线 / 文件卡 / 文本卡上时可删。区域 /
+  // 文件夹背后是真实文件夹，不在画布删除范围（与 board rm / Delete 键一致），
+  // 故不纳入。
+  const menuDelEl =
+    menu && menu.delTargetId
+      ? (scene.elements.find(
+          (e) =>
+            e.id === menu.delTargetId &&
+            (e.type === 'connector' ||
+              e.type === 'text' ||
+              e.type === 'file'),
+        ) ?? null)
+      : null;
+
   // 变换容器样式 —— 复刻 Excalidraw 的 screen = (canvas + scroll) * zoom。
   const transformStyle: React.CSSProperties = {
     transform: `translate(${scrollX * zoom}px, ${scrollY * zoom}px) scale(${zoom})`,
@@ -1120,8 +1252,15 @@ export function OverlayLayer({
         })}
 
         {/* 连线层 —— SVG 渲染 connector。置于内容卡之上，否则区域内的连线
-            会被区域卡的底色遮住而看不见。 */}
-        <ConnectorLayer scene={scene} liveRects={liveRects} />
+            会被区域卡的底色遮住而看不见。连线可点选（选中后 Delete 删除）；
+            连线模式下关掉命中区，避免挡住画箭头。 */}
+        <ConnectorLayer
+          scene={scene}
+          liveRects={liveRects}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+          interactive={!connectMode}
+        />
 
         {/* 建议卡片（PRD §7.3）—— 承载 Agent 提议，含同意/拒绝/描述操作 */}
         {suggestions.map((s) => (
@@ -1185,7 +1324,8 @@ export function OverlayLayer({
         ) : null}
       </div>
 
-      {/* 右键上下文菜单 —— 唯一项「整理」，作用域由右键位置 / 框选决定 */}
+      {/* 右键上下文菜单 ——「整理」（作用域由右键位置 / 框选决定）+ 右键
+          命中连线 / 文件卡 / 文本卡时附「删除」项 */}
       {menu ? (
         <>
           <div
@@ -1196,7 +1336,7 @@ export function OverlayLayer({
             className="ov-menu"
             style={{
               left: `${Math.min(menu.x, window.innerWidth - 220)}px`,
-              top: `${Math.min(menu.y, window.innerHeight - 56)}px`,
+              top: `${Math.min(menu.y, window.innerHeight - 96)}px`,
             }}
           >
             <button
@@ -1209,6 +1349,21 @@ export function OverlayLayer({
               </span>
               {menuLabel(menu.scope)}
             </button>
+            {menuDelEl ? (
+              <button
+                type="button"
+                className="ov-menu__item ov-menu__item--danger"
+                onClick={() => {
+                  void deleteSelected(menuDelEl.id);
+                  closeMenu();
+                }}
+              >
+                <span className="ov-menu__icon" aria-hidden="true">
+                  🗑
+                </span>
+                {delMenuLabel(menuDelEl)}
+              </button>
+            ) : null}
           </div>
         </>
       ) : null}
