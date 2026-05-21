@@ -1,21 +1,21 @@
 /**
- * 画布区 —— 挂载 Excalidraw，并把它与白板状态层（useBoard）双向桥接。
+ * 画布渲染器 —— 挂载 Excalidraw，并把它与白板状态层（useBoard）双向桥接。
  *
- * 数据流：
+ * 自研画布层（增量2）后，本组件退居为「外壳内的被动渲染器」：
+ *  - 视口 / 当前工具不再由本组件持有 —— 改由 CanvasShell 经 props 下发。
+ *  - Board 自有手势改变视口 → `viewport` prop 变化 → 本组件推进 Excalidraw。
+ *  - Excalidraw 自身仍可能改视口（抓手工具 / 导入聚焦）→ `onChange` 取得后
+ *    经 `onViewportChange` 上报外壳。两端经同一份外壳 state 调和，靠近似相等
+ *    判定（viewportsEqual）掐断回环。
+ *
+ * 数据流（场景）：
  *  - 用户在画布上操作 → Excalidraw `onChange` → 桥接为 core 场景 → `replaceScene(...,'canvas')`。
  *  - 导入 board.json → `importTick` 自增 → 本组件用 `updateScene` 把 core 场景推进 Excalidraw。
  *
  * 防回环：`updateScene` 会再次触发 `onChange`，用 `suppressNextChange` 标志吞掉
  * 紧随程序化更新之后的那次回调，避免「导入 → onChange → 再写回」的多余循环。
- *
- * DOM 覆盖层（M2）：
- *  - 在 Excalidraw 之上叠一层 `OverlayLayer`，渲染 file/folder/region 内容元素。
- *  - 覆盖层与画布共享坐标系 —— 其视口 (scrollX/scrollY/zoom) 取自同一份
- *    Excalidraw `onChange` 的 appState，平移/缩放时实时跟随。
- *  - 视口存为本组件 state，每次 onChange 重算；suppressNextChange 吞掉的那次
- *    （程序化 updateScene 引发）也照常更新视口，保证导入后覆盖层立即对齐。
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { Excalidraw } from '@excalidraw/excalidraw';
 import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types/types';
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/types/element/types';
@@ -27,12 +27,10 @@ import {
   bindDrawnConnectors,
   type ExViewportState,
 } from '../bridge';
-import { OverlayLayer, type OverlayViewport } from '../overlay/OverlayLayer';
+import { OverlayLayer } from '../overlay/OverlayLayer';
 import { PresenceLayer } from '../presence/PresenceLayer';
+import { viewportsEqual, type CanvasViewport } from '../canvas/viewport';
 import './BoardCanvas.css';
-
-/** 覆盖层初始视口 —— 与 createBoardScene 的默认 viewport 对齐。 */
-const INITIAL_VIEWPORT: OverlayViewport = { scrollX: 0, scrollY: 0, zoom: 1 };
 
 /**
  * 精简 Excalidraw 自带 UI —— Board 只保留绘图必需项，去掉与 Board 无关的部分。
@@ -53,7 +51,31 @@ const EXCALIDRAW_UI_OPTIONS = {
   },
 };
 
-export function BoardCanvas(): JSX.Element {
+/**
+ * Excalidraw 初始数据 —— 背景设为透明，使 Board 的暖色底与网格能透出。
+ * 模块常量，引用稳定。
+ */
+const EXCALIDRAW_INITIAL_DATA = {
+  appState: { viewBackgroundColor: 'transparent' },
+};
+
+export interface BoardCanvasProps {
+  /** 当前视口 —— 由 CanvasShell 持有并下发。 */
+  viewport: CanvasViewport;
+  /** Excalidraw 自身改了视口（抓手 / 聚焦）时上报外壳。 */
+  onViewportChange: (viewport: CanvasViewport) => void;
+  /** 当前工具 id（Excalidraw 工具类型字符串）。 */
+  activeTool: string;
+  /** Excalidraw 自身切换了工具（如画完自动回到选择）时上报外壳。 */
+  onActiveToolChange: (tool: string) => void;
+}
+
+export function BoardCanvas({
+  viewport,
+  onViewportChange,
+  activeTool,
+  onActiveToolChange,
+}: BoardCanvasProps): JSX.Element {
   const { scene, actorId, replaceScene, importTick, importFit, syncTick } =
     useBoard();
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
@@ -62,8 +84,15 @@ export function BoardCanvas(): JSX.Element {
   const sceneRef = useRef(scene);
   sceneRef.current = scene;
 
+  // 始终持有最新视口 / 工具 —— onChange 闭包据此判定 Excalidraw 的变化是否
+  // 只是 Board 下发值的回声（相等则不再上报，掐断回环）。
+  const viewportRef = useRef(viewport);
+  viewportRef.current = viewport;
+  const activeToolRef = useRef(activeTool);
+  activeToolRef.current = activeTool;
+
   // true 时吞掉下一次 onChange 对场景的写回（它由程序化 updateScene 引发）。
-  // 注意：视口仍照常更新 —— 程序化更新也会改 scrollX/scrollY/zoom。
+  // 注意：视口仍照常处理 —— 程序化更新也会改 scrollX/scrollY/zoom。
   const suppressNextChange = useRef(false);
 
   // 任意指针是否按下中。用来判断「绘制手势是否结束」—— 用户拖画箭头 / 文本
@@ -71,13 +100,6 @@ export function BoardCanvas(): JSX.Element {
   // appState.cursorButton 在部分 Excalidraw 版本里不可靠，故自行用捕获阶段
   // 的 window pointer 事件跟踪（早于 Excalidraw 自身处理 → onChange 时已最新）。
   const pointerDownRef = useRef(false);
-
-  // 覆盖层视口 —— 与画布共享坐标系，每次 onChange 从 appState 重算。
-  const [overlayViewport, setOverlayViewport] =
-    useState<OverlayViewport>(INITIAL_VIEWPORT);
-
-  // 当前 Excalidraw 工具类型 —— 选中箭头 / 线条工具时覆盖层进入「连线模式」。
-  const [activeTool, setActiveTool] = useState<string>('selection');
 
   /**
    * 稳定的 Excalidraw API 回调。必须 useCallback：
@@ -88,45 +110,41 @@ export function BoardCanvas(): JSX.Element {
     apiRef.current = api;
   }, []);
 
-  /** Excalidraw 元素 / 视口变化 → 写回 core 场景 + 同步覆盖层视口。 */
+  /** Excalidraw 元素 / 视口变化 → 写回 core 场景 + 上报视口 / 工具变化。 */
   const handleChange = useCallback(
     (elements: readonly ExcalidrawElement[], appState: AppState) => {
-      // 视口始终跟随：即便本次 onChange 由程序化更新引发，也要让覆盖层对齐。
-      setOverlayViewport((prev) => {
-        const next: OverlayViewport = {
-          scrollX: appState.scrollX,
-          scrollY: appState.scrollY,
-          zoom: appState.zoom.value,
-        };
-        // 视口未变则复用旧对象，避免无谓重渲染。
-        if (
-          prev.scrollX === next.scrollX &&
-          prev.scrollY === next.scrollY &&
-          prev.zoom === next.zoom
-        ) {
-          return prev;
-        }
-        return next;
-      });
+      // 视口：Excalidraw 自身改了视口（抓手平移 / 聚焦）才上报外壳；若与外壳
+      // 当前下发值近似相等，本次 onChange 只是 Board 推进 Excalidraw 的回声，
+      // 不上报 —— 否则 外壳→Excalidraw→外壳 回环。
+      const exVp: CanvasViewport = {
+        scrollX: appState.scrollX,
+        scrollY: appState.scrollY,
+        zoom: appState.zoom.value,
+      };
+      if (!viewportsEqual(exVp, viewportRef.current)) {
+        onViewportChange(exVp);
+      }
 
-      // 当前工具始终跟随（即便本次 onChange 被抑制）—— 决定是否进连线模式。
+      // 当前工具：Excalidraw 自身切了工具（画完自动回到选择等）才上报。
       const tool =
         (appState as { activeTool?: { type?: string } }).activeTool?.type ??
         'selection';
-      setActiveTool((prev) => (prev === tool ? prev : tool));
+      if (tool !== activeToolRef.current) {
+        onActiveToolChange(tool);
+      }
 
       if (suppressNextChange.current) {
         suppressNextChange.current = false;
         return;
       }
-      const viewport: ExViewportState = {
+      const exViewport: ExViewportState = {
         scrollX: appState.scrollX,
         scrollY: appState.scrollY,
         zoom: { value: appState.zoom.value },
       };
       const next = excalidrawToScene(
         elements,
-        viewport,
+        exViewport,
         actorId,
         sceneRef.current,
       );
@@ -169,7 +187,7 @@ export function BoardCanvas(): JSX.Element {
         });
       }
     },
-    [actorId, replaceScene],
+    [actorId, replaceScene, onViewportChange, onActiveToolChange],
   );
 
   // 捕获阶段跟踪全局指针按下状态 —— 见 pointerDownRef 注释。
@@ -189,6 +207,39 @@ export function BoardCanvas(): JSX.Element {
       window.removeEventListener('pointercancel', up, true);
     };
   }, []);
+
+  // 外壳视口变化 → 推进 Excalidraw。仅当与 Excalidraw 现值不同才推 ——
+  // 若相同（本次 viewport 变化本就是 Excalidraw 自身改的、经 onChange 上报
+  // 回来的），跳过，不形成回环。
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    const st = api.getAppState();
+    const cur: CanvasViewport = {
+      scrollX: st.scrollX,
+      scrollY: st.scrollY,
+      zoom: st.zoom.value,
+    };
+    if (viewportsEqual(cur, viewport)) return;
+    api.updateScene({
+      appState: {
+        scrollX: viewport.scrollX,
+        scrollY: viewport.scrollY,
+        zoom: { value: viewport.zoom as AppState['zoom']['value'] },
+      },
+    });
+  }, [viewport]);
+
+  // 外壳选了工具 → 同步给 Excalidraw。仅当与现值不同才设，避免回环。
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    const cur = api.getAppState().activeTool?.type;
+    if (cur === activeTool) return;
+    api.setActiveTool({
+      type: activeTool,
+    } as Parameters<ExcalidrawImperativeAPI['setActiveTool']>[0]);
+  }, [activeTool]);
 
   // 导入 / 刷新发生时（importTick 变化）：把内存场景推进 Excalidraw。
   useEffect(() => {
@@ -236,15 +287,12 @@ export function BoardCanvas(): JSX.Element {
         excalidrawAPI={handleApi}
         onChange={handleChange}
         UIOptions={EXCALIDRAW_UI_OPTIONS}
+        initialData={EXCALIDRAW_INITIAL_DATA}
       />
       {/* DOM 覆盖层 —— 叠在 Excalidraw 之上，渲染 file/folder/region 内容元素 */}
-      <OverlayLayer
-        scene={scene}
-        viewport={overlayViewport}
-        activeTool={activeTool}
-      />
+      <OverlayLayer scene={scene} viewport={viewport} activeTool={activeTool} />
       {/* 在场光标层（M4）—— 叠在最上层，纯展示对端光标 */}
-      <PresenceLayer viewport={overlayViewport} />
+      <PresenceLayer viewport={viewport} />
     </div>
   );
 }

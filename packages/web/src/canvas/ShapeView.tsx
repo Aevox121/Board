@@ -1,0 +1,111 @@
+/**
+ * 图形渲染 —— 把一个 ShapeElement（矩形 / 椭圆 / 菱形）渲染为手绘风 SVG。
+ *
+ * 自研画布层 增量1：用 roughjs（Excalidraw 内部同款手绘几何库）直接生成
+ * SVG，不再经 Excalidraw。用 `rough.svg()` 命令式生成 `<g>` 节点 —— roughjs
+ * 自己处理描边 / 填充 / 线型，最稳妥。
+ *
+ * seed 由元素 id 派生并固定 —— 同一图形每次渲染的手绘抖动一致，不会跳动。
+ */
+import { useEffect, useRef } from 'react';
+import rough from 'roughjs';
+import type { Options } from 'roughjs/bin/core';
+import type { ShapeElement, Style } from '@board/core';
+import './canvas.css';
+
+/** 由元素 id 派生稳定数值 seed（djb2 变体），使手绘抖动每次一致。 */
+function seedOf(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  return (Math.abs(h) % 2147483646) + 1;
+}
+
+/** core 统一样式 → roughjs 选项。 */
+function roughOptions(style: Style, id: string): Options {
+  const opts: Options = {
+    seed: seedOf(id),
+    stroke: style.strokeColor,
+    strokeWidth: style.strokeWidth,
+    roughness: style.roughness,
+  };
+  if (style.backgroundColor && style.backgroundColor !== 'transparent') {
+    opts.fill = style.backgroundColor;
+    opts.fillStyle = style.fillStyle === 'none' ? 'solid' : style.fillStyle;
+  }
+  if (style.strokeStyle === 'dashed') opts.strokeLineDash = [10, 8];
+  else if (style.strokeStyle === 'dotted') {
+    opts.strokeLineDash = [2, 7];
+    opts.strokeLineDashOffset = 0;
+  }
+  return opts;
+}
+
+/** fontFamily 枚举 → CSS 字体栈。 */
+function fontStack(family: Style['fontFamily']): string {
+  if (family === 'code') return 'var(--font-code, ui-monospace, monospace)';
+  if (family === 'normal') return 'var(--font-ui, system-ui, sans-serif)';
+  return 'var(--font-hand, "Comic Sans MS", cursive)';
+}
+
+export interface ShapeViewProps {
+  element: ShapeElement;
+}
+
+/**
+ * 把一个 ShapeElement 渲染为手绘风 SVG + 居中标签（局部坐标 0..w / 0..h）。
+ * 调用方负责把它定位到画布坐标 (element.x, element.y)。
+ */
+export function ShapeView({ element }: ShapeViewProps): JSX.Element {
+  const { width: w, height: h, shape, style, label } = element;
+  const svgRef = useRef<SVGSVGElement>(null);
+
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    svg.replaceChildren();
+    const rs = rough.svg(svg);
+    const opts = roughOptions(style, element.id);
+    let node: SVGGElement;
+    if (shape === 'ellipse') {
+      node = rs.ellipse(w / 2, h / 2, w, h, opts);
+    } else if (shape === 'diamond') {
+      node = rs.polygon(
+        [
+          [w / 2, 0],
+          [w, h / 2],
+          [w / 2, h],
+          [0, h / 2],
+        ],
+        opts,
+      );
+    } else {
+      node = rs.rectangle(0, 0, w, h, opts);
+    }
+    svg.appendChild(node);
+  }, [shape, w, h, style, element.id]);
+
+  return (
+    <div className="cv-shape" style={{ width: w, height: h }}>
+      <svg
+        ref={svgRef}
+        className="cv-shape__svg"
+        width={w}
+        height={h}
+        viewBox={`0 0 ${w} ${h}`}
+        aria-hidden="true"
+      />
+      {label && label.text ? (
+        <div
+          className="cv-shape__label"
+          style={{
+            fontSize: `${label.fontSize ?? style.fontSize}px`,
+            fontFamily: fontStack(style.fontFamily),
+            color: style.strokeColor,
+          }}
+        >
+          {label.text}
+        </div>
+      ) : null}
+    </div>
+  );
+}

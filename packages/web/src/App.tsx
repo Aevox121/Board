@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BoardProvider, useBoard } from './board/BoardContext';
 import { TopBar, type SaveState } from './components/TopBar';
-import { BoardCanvas } from './components/BoardCanvas';
+import { CanvasShell } from './canvas/CanvasShell';
 import { FolderPanel } from './components/FolderPanel';
 import { downloadBoardJSON, pickAndParseBoardJSON } from './board/boardFile';
 import { BoardParseError, diffToOps, type BoardOp, type BoardScene } from '@board/core';
@@ -236,7 +236,7 @@ function BoardApp(): JSX.Element {
       />
       <div className="app-body">
         {folderViewOpen && <FolderPanel />}
-        <BoardCanvas />
+        <CanvasShell />
       </div>
     </div>
   );
