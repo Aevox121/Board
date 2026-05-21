@@ -18,5 +18,6 @@ export type { ExStyleFields } from './style';
 export {
   sceneToExcalidraw,
   excalidrawToScene,
+  bindDrawnConnectors,
 } from './scene';
 export type { ExcalidrawSceneData, ExViewportState } from './scene';

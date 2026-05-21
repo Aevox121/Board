@@ -53,6 +53,37 @@ export function pointInRect(px: number, py: number, rect: RectLike): boolean {
 }
 
 /**
+ * 命中 (px,py) 的「最小面积」元素 id —— 用于连线吸附与连线目标高亮。
+ *
+ * 取最小面积而非最高 z：点同时落在小卡片与其所在大区域内时，取卡片
+ * （用户多半瞄的是卡片）；也不依赖易冲突的 z 值。`tol` 为命中容差。
+ */
+export function smallestHitAt(
+  rects: ReadonlyArray<{ id: string } & RectLike>,
+  px: number,
+  py: number,
+  tol = 0,
+): string | null {
+  let found: string | null = null;
+  let bestArea = Infinity;
+  for (const r of rects) {
+    if (
+      px >= r.x - tol &&
+      px <= r.x + r.width + tol &&
+      py >= r.y - tol &&
+      py <= r.y + r.height + tol
+    ) {
+      const area = r.width * r.height;
+      if (area < bestArea) {
+        bestArea = area;
+        found = r.id;
+      }
+    }
+  }
+  return found;
+}
+
+/**
  * 两矩形的相交面积（无相交为 0）。
  *
  * 用于拖拽落点的区域命中测试 —— 看文件卡与哪个区域重叠最多即落入哪个区域。

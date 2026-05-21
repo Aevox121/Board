@@ -21,6 +21,7 @@ import type {
   Element,
   FileElement,
   RegionElement,
+  Style,
   SuggestionElement,
   TextElement,
 } from '@board/core';
@@ -29,6 +30,7 @@ import {
   regionForFile,
   arrangeScene,
   growRegions,
+  DEFAULT_STYLE,
 } from '@board/core';
 import { useBoard } from '../board/BoardContext';
 import { moveFile } from '../server/files';
@@ -38,15 +40,14 @@ import { FolderCard } from './FolderCard';
 import { TextCard } from './TextCard';
 import { TaskCard } from './TaskCard';
 import { SuggestionCard } from './SuggestionCard';
-import {
-  RegionCard,
-  type PointerHandlers,
-  type RegionResizeApi,
-} from './RegionCard';
+import { RegionCard, type PointerHandlers } from './RegionCard';
+import { ConnectorLayer } from './ConnectorLayer';
+import { ResizeHandles, type ResizeApi } from './ResizeHandles';
 import {
   fileBaseName,
   intersectionArea,
   pointInRect,
+  smallestHitAt,
   type RectLike,
 } from './util';
 import './overlay.css';
@@ -66,6 +67,8 @@ export interface OverlayLayerProps {
   scene: BoardScene;
   /** 当前视口 —— 由 BoardCanvas 从 Excalidraw onChange 取得并下传。 */
   viewport: OverlayViewport;
+  /** 当前 Excalidraw 工具类型 —— `arrow`/`line` 时进入连线模式。 */
+  activeTool: string;
 }
 
 /** 本覆盖层负责渲染的内容元素类型。 */
@@ -127,6 +130,9 @@ interface ResizeState {
   y: number;
   w: number;
   h: number;
+  /** 绝对最小尺寸（按元素类型：区域更大，文件 / 文本 / 文件夹卡更小）。 */
+  minW: number;
+  minH: number;
   /** 缩放边界约束（由子元素包围盒推出；无子元素时为 ±Infinity 使约束失效）。 */
   maxRight: number;
   minLeft: number;
@@ -154,9 +160,18 @@ interface RightPress {
 
 /** 启动拖拽 / 框选的位移阈值（屏幕像素）。 */
 const DRAG_THRESHOLD_PX = 4;
+/**
+ * 连线自动吸附的识别宽度（画布单位）—— 也是连线模式下 hover 外包围高亮的
+ * 圈宽。须与 bridge `bindDrawnConnectors` 的 TOL、CSS `.ov-connect-target`
+ * 的 border-width 三者保持一致。
+ */
+const CONNECT_TOL = 12;
 /** 区域可缩放到的绝对最小尺寸（画布单位）。 */
 const REGION_MIN_W = 240;
 const REGION_MIN_H = 140;
+/** 文件 / 文本 / 文件夹卡的绝对最小尺寸 —— 取得比所有默认卡尺寸更小。 */
+const CARD_MIN_W = 100;
+const CARD_MIN_H = 40;
 /** 区域边缘到内容的留白下限；头部高度 —— 缩放时区域不能压到内容上。 */
 const REGION_CONTENT_MARGIN = 16;
 const REGION_HEADER_H = 48;
@@ -196,7 +211,7 @@ function regionForCard(
   return best;
 }
 
-/** 按手柄方向与指针位移算出区域缩放后的矩形（含边界 clamp）。 */
+/** 按手柄方向与指针位移算出缩放后的矩形（含最小尺寸 / 内容边界 clamp）。 */
 function computeResize(
   r: ResizeState,
   dx: number,
@@ -211,12 +226,12 @@ function computeResize(
   let w = r.w0;
   if (r.hx === 1) {
     // 拖右边：右边界右移，不得越过内容右界、不得小于最小宽度。
-    const right = Math.max(right0 + dx, r.maxRight, left0 + REGION_MIN_W);
+    const right = Math.max(right0 + dx, r.maxRight, left0 + r.minW);
     x = left0;
     w = right - left0;
   } else if (r.hx === -1) {
     // 拖左边：左边界右移上限为内容左界 / 最小宽度。
-    const left = Math.min(left0 + dx, r.minLeft, right0 - REGION_MIN_W);
+    const left = Math.min(left0 + dx, r.minLeft, right0 - r.minW);
     x = left;
     w = right0 - left;
   }
@@ -224,15 +239,38 @@ function computeResize(
   let y = r.y0;
   let h = r.h0;
   if (r.hy === 1) {
-    const bottom = Math.max(bottom0 + dy, r.maxBottom, top0 + REGION_MIN_H);
+    const bottom = Math.max(bottom0 + dy, r.maxBottom, top0 + r.minH);
     y = top0;
     h = bottom - top0;
   } else if (r.hy === -1) {
-    const top = Math.min(top0 + dy, r.minTop, bottom0 - REGION_MIN_H);
+    const top = Math.min(top0 + dy, r.minTop, bottom0 - r.minH);
     y = top;
     h = bottom0 - top;
   }
   return { x, y, w, h };
+}
+
+/**
+ * 元素样式 → 卡槽 CSS 变量覆写。
+ *
+ * 仅当字段偏离默认值时写入对应变量；未偏离则不写 —— 卡片 CSS 用
+ * `var(--ov-xxx, <设计默认>)` 兜底，保证未调样式的卡片保持设计系统原貌。
+ */
+function styleVars(style: Style): Record<string, string> {
+  const vars: Record<string, string> = {};
+  if (style.strokeColor !== DEFAULT_STYLE.strokeColor) {
+    vars['--ov-stroke'] = style.strokeColor;
+  }
+  if (style.backgroundColor !== DEFAULT_STYLE.backgroundColor) {
+    vars['--ov-fill'] = style.backgroundColor;
+  }
+  if (style.strokeWidth !== DEFAULT_STYLE.strokeWidth) {
+    vars['--ov-stroke-w'] = `${style.strokeWidth}px`;
+  }
+  if (style.strokeStyle !== DEFAULT_STYLE.strokeStyle) {
+    vars['--ov-stroke-style'] = style.strokeStyle;
+  }
+  return vars;
 }
 
 /** 菜单项「整理」的文案，随作用域而变。 */
@@ -245,13 +283,22 @@ function menuLabel(scope: MenuScope): string {
 export function OverlayLayer({
   scene,
   viewport,
+  activeTool,
 }: OverlayLayerProps): JSX.Element {
   const { scrollX, scrollY, zoom } = viewport;
   const { actorId, connection, serverFiles, tasks, replaceScene } = useBoard();
 
+  // 连线模式：选中箭头 / 线条工具时为 true —— 卡片停止截获指针（好让箭头能
+  // 从任意元素上画起 / 画到），并对可连接元素显示高亮。
+  const connectMode = activeTool === 'arrow' || activeTool === 'line';
+
   // 拖拽 / 缩放瞬时状态；null = 未在进行。
   const [drag, setDrag] = useState<DragState | null>(null);
   const [resize, setResize] = useState<ResizeState | null>(null);
+  // 连线模式下鼠标悬停的可连接元素 id —— 高亮加强提示落点。
+  const [hoverConnId, setHoverConnId] = useState<string | null>(null);
+  // 当前选中的内容元素 id —— 选中时显示选择框 + 八向缩放手柄；null = 未选中。
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   // 右键上下文菜单（屏幕坐标 + 作用域）；null = 未显示。
   const [menu, setMenu] = useState<{ x: number; y: number; scope: MenuScope } | null>(
     null,
@@ -275,6 +322,15 @@ export function OverlayLayer({
       .filter(isContentElement)
       .sort((a, b) => (a.z < b.z ? -1 : a.z > b.z ? 1 : 0));
   }, [scene.elements]);
+
+  // 连线模式下高亮的「可连接目标」—— 连线 / 建议外的全部元素（含图形）。
+  const connectTargets = useMemo(
+    () =>
+      scene.elements.filter(
+        (e) => e.type !== 'connector' && e.type !== 'suggestion',
+      ),
+    [scene.elements],
+  );
 
   // 建议元素 —— 单独渲染（非可拖拽），并与各自目标元素连线（PRD §7.3）。
   const suggestions = useMemo<SuggestionElement[]>(
@@ -316,6 +372,36 @@ export function OverlayLayer({
     }
     return ids;
   }, [scene.elements, serverFiles, connection]);
+
+  // 拖拽 / 缩放进行中的元素的实时矩形 —— 供连线层即时跟随端点：连线随被拖的
+  // 卡片、被缩放的区域实时重算。仅含正在变动的元素，其余端点读场景坐标。
+  const liveRects = useMemo<Map<string, RectLike>>(() => {
+    const m = new Map<string, RectLike>();
+    if (drag?.moved) {
+      for (const el of scene.elements) {
+        if (
+          el.id === drag.elementId ||
+          (drag.kind === 'region' && el.parentId === drag.elementId)
+        ) {
+          m.set(el.id, {
+            x: el.x + drag.offsetX,
+            y: el.y + drag.offsetY,
+            width: el.width,
+            height: el.height,
+          });
+        }
+      }
+    }
+    if (resize) {
+      m.set(resize.elementId, {
+        x: resize.x,
+        y: resize.y,
+        width: resize.w,
+        height: resize.h,
+      });
+    }
+    return m;
+  }, [drag, resize, scene.elements]);
 
   // 拖拽文件 / 文本卡时实时算出落点所在区域 —— 用于高亮提示（区域拖拽不需要）。
   const dropRegionId = useMemo<string | null>(() => {
@@ -424,7 +510,15 @@ export function OverlayLayer({
     };
 
     const onDown = (e: PointerEvent): void => {
-      if (e.button !== 2) return; // 仅右键
+      if (e.button === 0) {
+        // 左键：点在内容元素 / 手柄之外 → 取消选中。
+        const t = e.target as HTMLElement | null;
+        if (!t || !t.closest('[data-element-id]')) {
+          setSelectedId(null);
+        }
+        return;
+      }
+      if (e.button !== 2) return; // 其余仅处理右键
       e.preventDefault();
       e.stopPropagation();
       setMenu(null);
@@ -456,6 +550,44 @@ export function OverlayLayer({
       window.removeEventListener('pointerup', onUp);
     };
   }, []);
+
+  // 连线模式下跟踪鼠标悬停在哪个可连接元素上 —— 高亮加强其落点提示。
+  useEffect(() => {
+    if (!connectMode) {
+      setHoverConnId(null);
+      return;
+    }
+    const onMove = (e: PointerEvent): void => {
+      const root = rootRef.current;
+      if (!root) return;
+      const vp = viewportRef.current;
+      const rect = root.getBoundingClientRect();
+      const cx = (e.clientX - rect.left) / vp.zoom - vp.scrollX;
+      const cy = (e.clientY - rect.top) / vp.zoom - vp.scrollY;
+      const targets = sceneRef.current.elements.filter(
+        (el) => el.type !== 'connector' && el.type !== 'suggestion',
+      );
+      const id = smallestHitAt(targets, cx, cy, CONNECT_TOL);
+      setHoverConnId((prev) => (prev === id ? prev : id));
+    };
+    window.addEventListener('pointermove', onMove);
+    return () => window.removeEventListener('pointermove', onMove);
+  }, [connectMode]);
+
+  // 进连线模式时清掉选中态 —— 连线模式不显示选择框 / 手柄。
+  useEffect(() => {
+    if (connectMode) setSelectedId(null);
+  }, [connectMode]);
+
+  // 选中态下按 Esc 取消选中。
+  useEffect(() => {
+    if (!selectedId) return;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setSelectedId(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedId]);
 
   /** 把场景中某元素的若干 envelope 字段打补丁，返回新场景。 */
   function patchElement(
@@ -697,19 +829,24 @@ export function OverlayLayer({
     setDrag((d) => (d && d.pointerId === e.pointerId ? null : d));
   }
 
-  /** 指针按下区域缩放手柄 —— 记录起始矩形与由内容包围盒推出的缩放边界。 */
+  /**
+   * 指针按下缩放手柄 —— 记录起始矩形、最小尺寸与（区域）内容包围盒边界。
+   * 文件 / 文本 / 文件夹卡同样可缩放：它们无子元素，内容边界 clamp 自动失效，
+   * 仅受最小尺寸约束。
+   */
   function beginResize(
     e: React.PointerEvent<HTMLDivElement>,
-    region: RegionElement,
+    el: ContentElement,
     hx: -1 | 0 | 1,
     hy: -1 | 0 | 1,
   ): void {
     if (e.button !== 0) return;
+    // 阻止冒泡 —— 否则文件 / 文本卡槽的 onPointerDown 会同时触发拖拽。
+    e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
-    // 子元素内容包围盒 → 缩放边界（区域不能缩到压住内容）。
-    const kids = sceneRef.current.elements.filter(
-      (x) => x.parentId === region.id,
-    );
+    // 子元素内容包围盒 → 缩放下界（容器不能缩到压住内容）。文件 / 文本 /
+    // 文件夹卡无子元素 → cl/cr/ct/cb 保持 ±Infinity，对应 clamp 自然失效。
+    const kids = sceneRef.current.elements.filter((x) => x.parentId === el.id);
     let cl = Infinity;
     let cr = -Infinity;
     let ct = Infinity;
@@ -720,21 +857,24 @@ export function OverlayLayer({
       ct = Math.min(ct, k.y);
       cb = Math.max(cb, k.y + k.height);
     }
+    const isRegion = el.type === 'region';
     setResize({
-      elementId: region.id,
+      elementId: el.id,
       pointerId: e.pointerId,
       hx,
       hy,
       startScreenX: e.clientX,
       startScreenY: e.clientY,
-      x0: region.x,
-      y0: region.y,
-      w0: region.width,
-      h0: region.height,
-      x: region.x,
-      y: region.y,
-      w: region.width,
-      h: region.height,
+      x0: el.x,
+      y0: el.y,
+      w0: el.width,
+      h0: el.height,
+      x: el.x,
+      y: el.y,
+      w: el.width,
+      h: el.height,
+      minW: isRegion ? REGION_MIN_W : CARD_MIN_W,
+      minH: isRegion ? REGION_MIN_H : CARD_MIN_H,
       // 无子元素时 cl/cr/ct/cb 为 ±Infinity，对应的 clamp 自然失效。
       maxRight: cr + REGION_CONTENT_MARGIN,
       minLeft: cl - REGION_CONTENT_MARGIN,
@@ -772,7 +912,7 @@ export function OverlayLayer({
         autoPlaced: false,
       });
       replaceScene(next, 'canvas');
-      persist(next, '区域缩放');
+      persist(next, '缩放');
     }
   }
 
@@ -803,6 +943,12 @@ export function OverlayLayer({
     closeMenu();
   }
 
+  // 连线模式下鼠标悬停的那个可连接元素 —— 仅给它画外包围高亮（其余不变）。
+  const hoverConnEl =
+    connectMode && hoverConnId
+      ? (connectTargets.find((e) => e.id === hoverConnId) ?? null)
+      : null;
+
   // 变换容器样式 —— 复刻 Excalidraw 的 screen = (canvas + scroll) * zoom。
   const transformStyle: React.CSSProperties = {
     transform: `translate(${scrollX * zoom}px, ${scrollY * zoom}px) scale(${zoom})`,
@@ -811,7 +957,7 @@ export function OverlayLayer({
 
   return (
     <div
-      className="ov-root"
+      className={'ov-root' + (connectMode ? ' ov-root--connect' : '')}
       ref={rootRef}
       aria-hidden={
         contentElements.length === 0 &&
@@ -839,8 +985,6 @@ export function OverlayLayer({
         {contentElements.map((el) => {
           const isFile = el.type === 'file';
           const isText = el.type === 'text';
-          // 文件卡与文本卡可拖拽（重定位 / 改归属）；文件夹、区域另有交互。
-          const draggable = isFile || isText;
 
           // 拖拽偏移：被拖元素自身，或被拖区域的子元素（随区域一起动）。
           let dx = 0;
@@ -876,6 +1020,11 @@ export function OverlayLayer({
           if (offset) {
             slotStyle.transform = `translate(${dx}px, ${dy}px)`;
           }
+          // 元素样式 → 卡槽 CSS 变量 + 不透明度（仅偏离默认值的字段才覆写）。
+          Object.assign(slotStyle, styleVars(el.style));
+          if (el.style.opacity !== DEFAULT_STYLE.opacity) {
+            slotStyle.opacity = el.style.opacity / 100;
+          }
 
           const className =
             'ov-slot' +
@@ -884,24 +1033,27 @@ export function OverlayLayer({
             (el.state === 'draft' ? ' ov-slot--draft' : '') +
             (offset ? ' ov-slot--dragging' : '');
 
-          // 区域的拖拽手柄 / 八向缩放 API
+          // 区域头部拖拽手柄（仅区域）—— 兼作区域的点选入口。
           let headerHandlers: PointerHandlers | undefined;
-          let resizeApi: RegionResizeApi | undefined;
           if (el.type === 'region') {
             const region = el;
             headerHandlers = {
-              onPointerDown: (e) => beginDrag(e, region, 'region'),
+              onPointerDown: (e) => {
+                if (e.button === 0) setSelectedId(region.id);
+                beginDrag(e, region, 'region');
+              },
               onPointerMove: handlePointerMove,
               onPointerUp: handlePointerUp,
               onPointerCancel: handlePointerCancel,
             };
-            resizeApi = {
-              onStart: (e, hx, hy) => beginResize(e, region, hx, hy),
-              onMove: handleResizeMove,
-              onUp: handleResizeUp,
-              onCancel: handleResizeCancel,
-            };
           }
+          // 八向缩放 API —— 文件 / 文本 / 文件夹 / 区域所有内容卡通用。
+          const resizeApi: ResizeApi = {
+            onStart: (e, hx, hy) => beginResize(e, el, hx, hy),
+            onMove: handleResizeMove,
+            onUp: handleResizeUp,
+            onCancel: handleResizeCancel,
+          };
 
           return (
             <div
@@ -910,13 +1062,25 @@ export function OverlayLayer({
               style={slotStyle}
               data-element-id={el.id}
               onPointerDown={
-                draggable
-                  ? (e) => beginDrag(e, el, isFile ? 'file' : 'text')
-                  : undefined
+                el.type === 'region'
+                  ? undefined
+                  : (e) => {
+                      // 点选该元素（显示选择框 / 手柄）；文件 / 文本卡同时
+                      // 进入待拖拽态。区域走头部手柄，不在此。
+                      if (e.button !== 0) return;
+                      setSelectedId(el.id);
+                      if (isFile || isText) {
+                        beginDrag(e, el, isFile ? 'file' : 'text');
+                      }
+                    }
               }
-              onPointerMove={draggable ? handlePointerMove : undefined}
-              onPointerUp={draggable ? handlePointerUp : undefined}
-              onPointerCancel={draggable ? handlePointerCancel : undefined}
+              onPointerMove={
+                el.type === 'region' ? undefined : handlePointerMove
+              }
+              onPointerUp={el.type === 'region' ? undefined : handlePointerUp}
+              onPointerCancel={
+                el.type === 'region' ? undefined : handlePointerCancel
+              }
             >
               {el.type === 'region' ? (
                 <RegionCard
@@ -924,7 +1088,6 @@ export function OverlayLayer({
                   highlighted={el.id === dropRegionId}
                   active={regionActive}
                   headerHandlers={headerHandlers}
-                  resize={resizeApi}
                 />
               ) : el.type === 'folder' ? (
                 <FolderCard element={el} />
@@ -933,6 +1096,14 @@ export function OverlayLayer({
               ) : (
                 <FileCard element={el} missing={missingFileIds.has(el.id)} />
               )}
+              {/* 选中态：选择框 + 八向缩放手柄（圆点）—— 像 Excalidraw 原生
+                  元素那样，选中后才出现包围框与可拖拽的圆点。 */}
+              {el.id === selectedId ? (
+                <>
+                  <div className="ov-select-frame" aria-hidden="true" />
+                  <ResizeHandles api={resizeApi} />
+                </>
+              ) : null}
               {/* 评论角标（PRD §8.4）—— 元素有评论时显示条数 */}
               {(el.comments?.length ?? 0) > 0 ? (
                 <div
@@ -947,6 +1118,10 @@ export function OverlayLayer({
             </div>
           );
         })}
+
+        {/* 连线层 —— SVG 渲染 connector。置于内容卡之上，否则区域内的连线
+            会被区域卡的底色遮住而看不见。 */}
+        <ConnectorLayer scene={scene} liveRects={liveRects} />
 
         {/* 建议卡片（PRD §7.3）—— 承载 Agent 提议，含同意/拒绝/描述操作 */}
         {suggestions.map((s) => (
@@ -980,6 +1155,21 @@ export function OverlayLayer({
             <TaskCard task={task} />
           </div>
         ))}
+
+        {/* 连线模式：仅给鼠标悬停的元素画一圈外包围高亮，圈宽 = 自动连接
+            识别宽度（CONNECT_TOL）。未悬停任何元素时界面不变。 */}
+        {hoverConnEl ? (
+          <div
+            className="ov-connect-target"
+            style={{
+              left: `${hoverConnEl.x - CONNECT_TOL}px`,
+              top: `${hoverConnEl.y - CONNECT_TOL}px`,
+              width: `${hoverConnEl.width + CONNECT_TOL * 2}px`,
+              height: `${hoverConnEl.height + CONNECT_TOL * 2}px`,
+            }}
+            aria-hidden="true"
+          />
+        ) : null}
 
         {/* 右键框选的虚线框 */}
         {marquee ? (

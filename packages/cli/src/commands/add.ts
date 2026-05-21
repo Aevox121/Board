@@ -21,13 +21,12 @@ import {
   defaultSizeFor,
   regionsOf,
   reconcileFiles,
+  INBOX_RECT,
 } from '@board/core';
 import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
-
-/** 自动错开布局的步进量（避免新文本元素完全重叠）。 */
-const AUTO_PLACE_STEP = 40;
+import { autoPlace } from '../util/layout.js';
 
 /** M1/M2 默认参与者 id —— 无 `--actor` 时归属于此。 */
 const DEFAULT_ACTOR = 'u_local';
@@ -81,11 +80,13 @@ async function addText(args: ParsedArgs): Promise<CmdResult> {
   const z = nextZ(scene.elements);
   const actor = args.options.get('actor') ?? DEFAULT_ACTOR;
 
-  // --at "x,y" 显式定位；否则按现有元素数量阶梯式错开（autoPlaced）。
+  // --at "x,y" 显式定位；否则在收件区碰撞规避落位（不与现有元素重叠）。
   const at = parseAtOption(args.options.get('at'));
-  const offset = scene.elements.length * AUTO_PLACE_STEP;
-  const x = at ? at[0] : offset;
-  const y = at ? at[1] : offset;
+  const pos = at
+    ? { x: at[0], y: at[1] }
+    : autoPlace(scene.elements, null, INBOX_RECT, size);
+  const x = pos.x;
+  const y = pos.y;
 
   const element = createTextElement({
     x,

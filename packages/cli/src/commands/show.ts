@@ -18,6 +18,7 @@ import {
   regionsOf,
   type Element,
   type RegionElement,
+  type ThreadMsg,
 } from '@board/core';
 import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
@@ -91,6 +92,22 @@ function elementSummary(el: Element): string {
     default:
       return el.type;
   }
+}
+
+/**
+ * depth 2：建议 payload 的内容视图 —— 让 Agent 看清「提议的内容」本身。
+ * payload 是同意后会并入白板的纯内容（text 卡 / 图形等）。
+ */
+function suggestionPayloadView(payload: Element): Record<string, unknown> {
+  const view: Record<string, unknown> = { type: payload.type };
+  if (payload.type === 'text') {
+    view['markdown'] = payload.markdown;
+  } else if (payload.type === 'shape') {
+    view['label'] = payload.label?.text ?? null;
+  } else {
+    view['summary'] = elementSummary(payload);
+  }
+  return view;
 }
 
 /** 该路径是否为可内联的文本类文件。 */
@@ -229,19 +246,26 @@ export async function cmdShow(args: ParsedArgs): Promise<CmdResult> {
             }
           : null,
       );
-      data['suggestions'] = suggestions.map((s) =>
-        s.type === 'suggestion'
-          ? {
-              id: s.id,
-              targetId: s.targetId,
-              suggestionType: s.suggestionType,
-              status: s.status,
-              author: s.authorId,
-              reason: s.reason ?? '',
-              threadLength: s.thread.length,
-            }
-          : null,
-      );
+      data['suggestions'] = suggestions.map((s) => {
+        if (s.type !== 'suggestion') return null;
+        const view: Record<string, unknown> = {
+          id: s.id,
+          targetId: s.targetId,
+          suggestionType: s.suggestionType,
+          status: s.status,
+          author: s.authorId,
+          reason: s.reason ?? '',
+          threadLength: s.thread.length,
+        };
+        // depth 2：连同提议正文（payload）与「描述」反馈回路的全部对话
+        // （thread）一并给出 —— Agent 据此读回人的修改意见并修订建议
+        // （PRD §7.3 反馈回路）。depth 0/1 只给 threadLength 计数。
+        if (depth === 2) {
+          view['payload'] = suggestionPayloadView(s.payload);
+          view['thread'] = s.thread;
+        }
+        return view;
+      });
     }
   }
 
@@ -282,7 +306,33 @@ function renderText(
       `连线: ${String(data['connectorCount'])} · 建议: ${String(data['suggestionCount'])}`,
     );
   }
+  appendSuggestions(lines, data['suggestions'], depth);
   return lines.join('\n');
+}
+
+/** depth ≥ 1 时在文本输出里追加建议明细（depth 2 连「描述」反馈回路对话）。 */
+function appendSuggestions(lines: string[], raw: unknown, depth: Depth): void {
+  if (!Array.isArray(raw) || raw.length === 0) return;
+  lines.push('建议:');
+  for (const s of raw as Array<Record<string, unknown> | null>) {
+    if (!s) continue;
+    const reason = String(s['reason'] ?? '');
+    lines.push(
+      `  ◍ ${String(s['id'])} (${String(s['suggestionType'])} → ${String(s['targetId'])}) ` +
+        `[${String(s['status'])}]` +
+        (reason ? `  理由: ${truncate(reason, 60)}` : ''),
+    );
+    const thread = s['thread'] as ThreadMsg[] | undefined;
+    if (depth === 2 && thread) {
+      for (const m of thread) {
+        const who = m.role === 'human' ? '👤 人' : '🤖 Agent';
+        lines.push(`      ${who}: ${truncate(m.text, 80)}`);
+      }
+    } else {
+      const n = Number(s['threadLength'] ?? 0);
+      if (n > 0) lines.push(`      （${n} 条反馈，--depth 2 查看正文）`);
+    }
+  }
 }
 
 /** 在文本中追加一组元素简报（depth ≥ 1 才有；depth 2 含正文片段）。 */

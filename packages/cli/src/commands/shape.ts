@@ -8,17 +8,22 @@
  * 手绘（freedraw）不开放给 Agent（PRD §7.2 决策点 10）。
  */
 import { loadBoard, saveBoard } from '@board/core/node';
-import { createShapeElement, nextZ, regionsOf, type ShapeKind } from '@board/core';
+import {
+  createShapeElement,
+  nextZ,
+  regionsOf,
+  INBOX_RECT,
+  type ShapeKind,
+} from '@board/core';
 import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
+import { autoPlace } from '../util/layout.js';
 
 /** 无 `--actor`/`--agent` 时归属的默认参与者 id。 */
 const DEFAULT_ACTOR = 'u_local';
 /** 流程图方框默认尺寸。 */
 const DEFAULT_SHAPE_SIZE = { width: 160, height: 72 };
-/** 自动错开布局的步进量。 */
-const AUTO_PLACE_STEP = 40;
 /** 支持的图形类型。 */
 const VALID_KINDS: ReadonlySet<string> = new Set([
   'rectangle',
@@ -88,15 +93,24 @@ async function shapeAdd(args: ParsedArgs): Promise<CmdResult> {
       throw new CliError(`未找到区域：${regionName}`, EXIT.NOT_FOUND);
     }
     parentId = region.id;
-    x = at ? at[0] : region.x + 24;
-    y = at ? at[1] : region.y + 56;
+    if (at) {
+      [x, y] = at;
+    } else {
+      // 无 --at：区域内碰撞规避落位（不与同区域元素重叠）。
+      const pos = autoPlace(scene.elements, region.id, region, {
+        width,
+        height,
+      });
+      x = pos.x;
+      y = pos.y;
+    }
   } else if (at) {
-    x = at[0];
-    y = at[1];
+    [x, y] = at;
   } else {
-    const offset = scene.elements.length * AUTO_PLACE_STEP;
-    x = offset;
-    y = offset;
+    // 无 --at：收件区内碰撞规避落位。
+    const pos = autoPlace(scene.elements, null, INBOX_RECT, { width, height });
+    x = pos.x;
+    y = pos.y;
   }
 
   const label = args.options.get('label');

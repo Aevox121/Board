@@ -24,6 +24,7 @@ import { useBoard } from '../board/BoardContext';
 import {
   excalidrawToScene,
   sceneToExcalidraw,
+  bindDrawnConnectors,
   type ExViewportState,
 } from '../bridge';
 import { OverlayLayer, type OverlayViewport } from '../overlay/OverlayLayer';
@@ -63,9 +64,18 @@ export function BoardCanvas(): JSX.Element {
   // 注意：视口仍照常更新 —— 程序化更新也会改 scrollX/scrollY/zoom。
   const suppressNextChange = useRef(false);
 
+  // 任意指针是否按下中。用来判断「绘制手势是否结束」—— 用户拖画箭头 / 文本
+  // 期间不回推 Excalidraw，否则会打断手势、连线还没画完就被收走。
+  // appState.cursorButton 在部分 Excalidraw 版本里不可靠，故自行用捕获阶段
+  // 的 window pointer 事件跟踪（早于 Excalidraw 自身处理 → onChange 时已最新）。
+  const pointerDownRef = useRef(false);
+
   // 覆盖层视口 —— 与画布共享坐标系，每次 onChange 从 appState 重算。
   const [overlayViewport, setOverlayViewport] =
     useState<OverlayViewport>(INITIAL_VIEWPORT);
+
+  // 当前 Excalidraw 工具类型 —— 选中箭头 / 线条工具时覆盖层进入「连线模式」。
+  const [activeTool, setActiveTool] = useState<string>('selection');
 
   /**
    * 稳定的 Excalidraw API 回调。必须 useCallback：
@@ -97,6 +107,12 @@ export function BoardCanvas(): JSX.Element {
         return next;
       });
 
+      // 当前工具始终跟随（即便本次 onChange 被抑制）—— 决定是否进连线模式。
+      const tool =
+        (appState as { activeTool?: { type?: string } }).activeTool?.type ??
+        'selection';
+      setActiveTool((prev) => (prev === tool ? prev : tool));
+
       if (suppressNextChange.current) {
         suppressNextChange.current = false;
         return;
@@ -112,30 +128,65 @@ export function BoardCanvas(): JSX.Element {
         actorId,
         sceneRef.current,
       );
-      replaceScene(next, 'canvas');
 
-      // text 元素归 DOM 覆盖层渲染为 Markdown 卡片，不应留在 Excalidraw 内
-      // （否则与覆盖层卡片重影）。用户用文本工具画完、退出编辑后，把不含
-      // text 的场景回推 Excalidraw，使其丢弃原生 text 元素，交由覆盖层接管。
-      // 仍在编辑（editingElement 非空）时不回推，以免打断文本输入框。
+      // text 元素归 DOM 覆盖层渲染为 Markdown 卡片；连线（arrow/line）归覆盖层
+      // SVG 渲染（见 ConnectorLayer）—— 两者都不应留在 Excalidraw 内，否则与
+      // 覆盖层重影。用户用文本 / 箭头 / 线条工具画完后，把不含这些类型的场景
+      // 回推 Excalidraw，使其丢弃原生元素、交由覆盖层接管。
+      // 回推时机：仍在编辑文本（editingElement 非空）或指针仍按下（绘制手势
+      // 未结束）时不回推 —— 以免打断输入框 / 中断绘制手势。
       const editing = (appState as { editingElement?: unknown }).editingElement;
-      // 只为「自由文本」（用户用文本工具新建、无 containerId）回推 —— 图形 /
-      // 连线的绑定标签文本（containerId 非空）不算，否则每次 onChange 都会多余
-      // 回推一次。
-      const hasFreeText = elements.some(
+      const drawing = pointerDownRef.current;
+      // 自由文本（用户用文本工具新建、无 containerId）与连线（arrow/line）
+      // 都要回收给覆盖层；图形的绑定标签文本（containerId 非空）不算。
+      const hasOverlayDrawn = elements.some(
         (e) =>
-          e.type === 'text' &&
-          !(e as { containerId?: unknown }).containerId,
+          e.type === 'arrow' ||
+          e.type === 'line' ||
+          (e.type === 'text' && !(e as { containerId?: unknown }).containerId),
       );
-      if (!editing && apiRef.current && hasFreeText) {
+      const finalize = !editing && !drawing && hasOverlayDrawn;
+
+      // 画完一条连线（指针抬起）时：把它的自由端点吸附到落在其上的元素，
+      // 使「画箭头」也能连接图形 / 文件 / 区域等覆盖层元素。
+      let committed = next;
+      if (finalize) {
+        const arrowIds = new Set(
+          elements
+            .filter((e) => e.type === 'arrow' || e.type === 'line')
+            .map((e) => e.id),
+        );
+        committed = bindDrawnConnectors(next, arrowIds);
+      }
+      replaceScene(committed, 'canvas');
+
+      if (finalize && apiRef.current) {
         suppressNextChange.current = true;
         apiRef.current.updateScene({
-          elements: sceneToExcalidraw(next).elements,
+          elements: sceneToExcalidraw(committed).elements,
         });
       }
     },
     [actorId, replaceScene],
   );
+
+  // 捕获阶段跟踪全局指针按下状态 —— 见 pointerDownRef 注释。
+  useEffect(() => {
+    const down = (): void => {
+      pointerDownRef.current = true;
+    };
+    const up = (): void => {
+      pointerDownRef.current = false;
+    };
+    window.addEventListener('pointerdown', down, true);
+    window.addEventListener('pointerup', up, true);
+    window.addEventListener('pointercancel', up, true);
+    return () => {
+      window.removeEventListener('pointerdown', down, true);
+      window.removeEventListener('pointerup', up, true);
+      window.removeEventListener('pointercancel', up, true);
+    };
+  }, []);
 
   // 导入 / 刷新发生时（importTick 变化）：把内存场景推进 Excalidraw。
   useEffect(() => {
@@ -174,7 +225,11 @@ export function BoardCanvas(): JSX.Element {
         UIOptions={EXCALIDRAW_UI_OPTIONS}
       />
       {/* DOM 覆盖层 —— 叠在 Excalidraw 之上，渲染 file/folder/region 内容元素 */}
-      <OverlayLayer scene={scene} viewport={overlayViewport} />
+      <OverlayLayer
+        scene={scene}
+        viewport={overlayViewport}
+        activeTool={activeTool}
+      />
     </div>
   );
 }

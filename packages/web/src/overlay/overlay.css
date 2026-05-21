@@ -91,12 +91,21 @@
   -webkit-user-select: none;
 }
 
+/* ── 内容卡片样式覆写约定（element.style ⇄ 卡片外观）──────────────
+ * 文件 / 文本 / 文件夹 / 区域卡的描边与填充走 CSS 变量，由 OverlayLayer
+ * 按 element.style 注入到卡槽（见 styleVars）：
+ *   --ov-stroke        描边色      --ov-stroke-w  描边宽
+ *   --ov-stroke-style  描边线型    --ov-fill      填充色
+ * 仅当样式偏离默认值时注入；未注入时各 var() 回退到设计系统默认值，
+ * 保证未调样式的卡片保持原貌。 */
+
 /* ── 文件卡片（手绘质感）────────────────────────────────────── */
 .ov-file {
   display: flex;
   flex-direction: column;
-  background: var(--c-surface);
-  border: 1.5px solid var(--c-ink);
+  background: var(--ov-fill, var(--c-surface));
+  border: var(--ov-stroke-w, 1.5px) var(--ov-stroke-style, solid)
+    var(--ov-stroke, var(--c-ink));
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-sm);
   overflow: hidden;
@@ -253,8 +262,9 @@
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
-  background: var(--c-surface);
-  border: 1.5px solid var(--c-ink);
+  background: var(--ov-fill, var(--c-surface));
+  border: var(--ov-stroke-w, 1.5px) var(--ov-stroke-style, solid)
+    var(--ov-stroke, var(--c-ink));
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-sm);
 }
@@ -281,8 +291,9 @@
   display: flex;
   flex-direction: column;
   /* 浅底 + 半透明，让叠在其上的文件卡仍可读 */
-  background: var(--c-accent-tint);
-  border: 1.5px solid var(--c-accent);
+  background: var(--ov-fill, var(--c-accent-tint));
+  border: var(--ov-stroke-w, 1.5px) var(--ov-stroke-style, solid)
+    var(--ov-stroke, var(--c-accent));
   border-radius: var(--radius-md);
   /* 区域是「圈地」容器，事件应穿透到画布（仅头部需要可交互时再开） */
   pointer-events: none;
@@ -303,7 +314,7 @@
   gap: 2px;
   padding: var(--space-2) var(--space-3);
   background: var(--c-surface);
-  border-bottom: 1.5px solid var(--c-accent);
+  border-bottom: 1.5px solid var(--ov-stroke, var(--c-accent));
   border-radius: var(--radius-md) var(--radius-md) 0 0;
   /* 头部需可交互（兼作拖拽手柄），单独开启 */
   pointer-events: auto;
@@ -342,89 +353,79 @@
   min-height: 0;
 }
 
-/* ── 区域缩放手柄（八向：四角 + 四边）──────────────────────────
- * 区域主体 pointer-events:none，手柄单独开启 auto。手柄默认透明，靠
- * 光标提示方向；右下角额外画一个可见斜抓纹作为「可缩放」的视觉入口。
- * 手柄在 RegionCard 中渲染于头部之后 —— 顶边手柄因此叠在头部之上。 */
-.ov-region__rz {
+/* ── 选择框 + 八向缩放手柄 ──────────────────────────────────────
+ * 内容卡（文件 / 文本 / 文件夹 / 区域）选中后，像 Excalidraw 原生元素一样
+ * 显示一圈包围框与四角四边的圆点手柄；由 OverlayLayer 在卡槽层级渲染
+ * （仅选中元素渲染，见 ResizeHandles）。 */
+
+/* 选择框 —— 比元素略大一圈的描边。 */
+.ov-select-frame {
   position: absolute;
+  inset: -4px;
+  border: 1.5px solid var(--c-accent);
+  border-radius: var(--radius-md);
+  pointer-events: none;
+}
+
+/* 八向缩放手柄 —— 可见圆点，落在选择框的四角与四边中点上。 */
+.ov-rz {
+  position: absolute;
+  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--c-surface);
+  border: 1.5px solid var(--c-accent);
+  box-shadow: 0 1px 3px rgba(60, 40, 30, 0.3);
   pointer-events: auto;
 }
 
-/* 四条边手柄 —— 沿边细条，两端各留 16px 给角手柄 */
-.ov-region__rz--n,
-.ov-region__rz--s {
-  left: 16px;
-  right: 16px;
-  height: 10px;
+/* 四角 */
+.ov-rz--nw {
+  top: -10px;
+  left: -10px;
+  cursor: nwse-resize;
+}
+.ov-rz--ne {
+  top: -10px;
+  right: -10px;
+  cursor: nesw-resize;
+}
+.ov-rz--se {
+  bottom: -10px;
+  right: -10px;
+  cursor: nwse-resize;
+}
+.ov-rz--sw {
+  bottom: -10px;
+  left: -10px;
+  cursor: nesw-resize;
+}
+
+/* 四边中点 */
+.ov-rz--n {
+  top: -10px;
+  left: 50%;
+  transform: translateX(-50%);
   cursor: ns-resize;
 }
-.ov-region__rz--n {
-  top: -5px;
+.ov-rz--s {
+  bottom: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+  cursor: ns-resize;
 }
-.ov-region__rz--s {
-  bottom: -5px;
-}
-
-.ov-region__rz--e,
-.ov-region__rz--w {
-  top: 16px;
-  bottom: 16px;
-  width: 10px;
+.ov-rz--e {
+  right: -10px;
+  top: 50%;
+  transform: translateY(-50%);
   cursor: ew-resize;
 }
-.ov-region__rz--e {
-  right: -5px;
-}
-.ov-region__rz--w {
-  left: -5px;
-}
-
-/* 四个角手柄 */
-.ov-region__rz--nw,
-.ov-region__rz--ne,
-.ov-region__rz--se,
-.ov-region__rz--sw {
-  width: 18px;
-  height: 18px;
-}
-.ov-region__rz--nw {
-  top: -6px;
-  left: -6px;
-  cursor: nwse-resize;
-}
-.ov-region__rz--ne {
-  top: -6px;
-  right: -6px;
-  cursor: nesw-resize;
-}
-.ov-region__rz--se {
-  bottom: -6px;
-  right: -6px;
-  cursor: nwse-resize;
-}
-.ov-region__rz--sw {
-  bottom: -6px;
-  left: -6px;
-  cursor: nesw-resize;
-}
-
-/* 右下角可见斜抓纹 —— 缩放功能的视觉入口 */
-.ov-region__rz--se::after {
-  content: '';
-  position: absolute;
-  right: 6px;
-  bottom: 6px;
-  width: 9px;
-  height: 9px;
-  border-right: 2px solid var(--c-accent);
-  border-bottom: 2px solid var(--c-accent);
-  border-bottom-right-radius: var(--radius-sm);
-  opacity: 0.55;
-  transition: opacity var(--dur-micro) var(--ease);
-}
-.ov-region__rz--se:hover::after {
-  opacity: 1;
+.ov-rz--w {
+  left: -10px;
+  top: 50%;
+  transform: translateY(-50%);
+  cursor: ew-resize;
 }
 
 /* ── 文件卡片 · PDF 预览态 ─────────────────────────────────── */
@@ -530,8 +531,9 @@
 .ov-text {
   display: flex;
   flex-direction: column;
-  background: var(--c-surface);
-  border: 1.5px solid var(--c-ink);
+  background: var(--ov-fill, var(--c-surface));
+  border: var(--ov-stroke-w, 1.5px) var(--ov-stroke-style, solid)
+    var(--ov-stroke, var(--c-ink));
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-sm);
   overflow: hidden;
@@ -1069,4 +1071,58 @@
   stroke-width: 2;
   stroke-dasharray: 6 4;
   opacity: 0.7;
+}
+
+/* ── 连线层（connector）──────────────────────────────────────────
+ * 由覆盖层 SVG 渲染（脱离 Excalidraw），可连接任意元素并随端点实时跟随。
+ * 每条连线一个独立 svg —— 尺寸贴合其包围盒、按画布坐标定位（在 .ov-transform
+ * 内随画布缩放 / 平移）。overflow:visible 兜底箭头 / 线宽的细微外溢。 */
+.ov-connector {
+  position: absolute;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.ov-connector-line {
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+/* 连线标签 —— 贴在折线中点，浅底描边保证压在线上仍可读。 */
+.ov-connector-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  padding: 1px var(--space-2);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--c-ink);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* ── 连线模式（箭头 / 线条工具激活）──────────────────────────────
+ * 卡片 / 缩放手柄 / 区域头部停止截获指针 —— 让箭头能从任意元素上画起、
+ * 画到任意元素（否则 pointerdown 会被卡片抢去触发拖拽，区域内的元素也
+ * 因此连不上）。 */
+.ov-root--connect .ov-slot,
+.ov-root--connect .ov-card,
+.ov-root--connect .ov-rz,
+.ov-root--connect .ov-region__head {
+  pointer-events: none;
+}
+
+/* 连线目标外包围高亮 —— 连线模式下，鼠标悬停某元素时仅给它套一圈半透明
+ * 陶土橙。圈宽 = 自动连接的识别宽度（与 OverlayLayer 的 CONNECT_TOL 一致，
+ * 12px）。靠 12px 边框形成「外包围环」，中心透明、不挡元素内容。 */
+.ov-connect-target {
+  position: absolute;
+  box-sizing: border-box;
+  border: 12px solid var(--c-accent);
+  border-radius: var(--radius-md);
+  opacity: 0.3;
+  pointer-events: none;
 }

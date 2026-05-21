@@ -13,11 +13,19 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
+import { readFile, writeFile, stat, mkdtemp, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join, resolve, sep } from 'node:path';
+import { tmpdir } from 'node:os';
+import { loadBoard } from '@board/core/node';
+import { guessMime } from '@board/core';
 import type { ParsedArgs } from '../util/args.js';
 import { CliError, type CmdResult } from '../util/io.js';
+import { resolveBoardDir } from '../util/board.js';
 import { cmdShow } from './show.js';
 import { cmdTree } from './tree.js';
 import { cmdAdd } from './add.js';
+import { cmdMv } from './mv.js';
 import { cmdRegion } from './region.js';
 import { cmdTask } from './task.js';
 import { cmdSuggest } from './suggest.js';
@@ -86,6 +94,76 @@ async function runCmd(
           : String(err);
     return textResult(`${label}失败：${msg}`, true);
   }
+}
+
+/**
+ * 包装一个「直接处理器」（不经 cmd 函数的 MCP 工具），统一捕获异常转为错误结果。
+ * board_read_file / board_get_element 等 MCP 专属工具用。
+ */
+async function safeHandler(
+  label: string,
+  fn: () => Promise<CallToolResult>,
+): Promise<CallToolResult> {
+  try {
+    return await fn();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return textResult(`${label}失败：${msg}`, true);
+  }
+}
+
+/**
+ * board_read_file 实现 —— 读 files/ 下某文件正文。MCP 专属（规格 §4 无对应
+ * CLI 命令），故直接处理：目录穿越防护 + 仅文本类内联、二进制只给元信息。
+ */
+async function readBoardFile(
+  boardPath: string,
+  relPath: string,
+): Promise<CallToolResult> {
+  const rel = relPath.replace(/^[/\\]+/, '');
+  if (rel === '' || rel.split(/[/\\]+/).includes('..')) {
+    return textResult('board_read_file 失败：相对路径非法（为空或含 ".."）', true);
+  }
+  const dir = resolveBoardDir(boardPath, undefined);
+  const filesRoot = join(dir, 'files');
+  const abs = resolve(filesRoot, rel);
+  const rootPrefix = filesRoot.endsWith(sep) ? filesRoot : filesRoot + sep;
+  if (!abs.startsWith(rootPrefix)) {
+    return textResult('board_read_file 失败：路径越出 files/ 范围', true);
+  }
+  if (!existsSync(abs)) {
+    return textResult(`board_read_file 失败：文件不存在 files/${rel}`, true);
+  }
+  const mime = guessMime(rel);
+  if (!(mime.startsWith('text/') || mime === 'application/json')) {
+    const { size } = await stat(abs);
+    return textResult(`（files/${rel} —— ${mime}，${size} 字节，二进制不内联）`);
+  }
+  const raw = await readFile(abs, 'utf8');
+  const CAP = 20_000;
+  return textResult(
+    raw.length > CAP
+      ? `${raw.slice(0, CAP)}\n…（已截断，原文共 ${raw.length} 字符）`
+      : raw,
+  );
+}
+
+/**
+ * board_get_element 实现 —— 取单个元素的完整 JSON。MCP 专属（规格 §4 无对应
+ * CLI 命令）。关键用途：取 suggestion 元素时连 `thread`（「描述」反馈回路里人
+ * 留下的修改意见）一并返回，Agent 据此读回意见并修订建议（PRD §7.3）。
+ */
+async function getBoardElement(
+  boardPath: string,
+  elementId: string,
+): Promise<CallToolResult> {
+  const dir = resolveBoardDir(boardPath, undefined);
+  const handle = await loadBoard(dir);
+  const el = handle.scene.elements.find((e) => e.id === elementId);
+  if (!el) {
+    return textResult(`board_get_element 失败：未找到元素 ${elementId}`, true);
+  }
+  return textResult(JSON.stringify(el, null, 2));
 }
 
 /**
@@ -173,7 +251,10 @@ export async function runMcpServer(
         at: z
           .string()
           .optional()
-          .describe('画布坐标 "x,y"；省略则自动排版'),
+          .describe(
+            '画布坐标 "x,y"（元素左上角）；省略则自动避让落位（不与现有元素' +
+              '重叠）。手工指定时务必为相邻元素留足间距，避免方框 / 连线 / 文字重叠',
+          ),
         draft: z.boolean().optional().describe('是否为 draft 草稿态'),
         agent: z.string().optional().describe('执行的 Agent id（写入 createdBy）'),
       },
@@ -303,7 +384,10 @@ export async function runMcpServer(
     {
       description:
         '添加一个几何图形（rectangle / ellipse / diamond）。Agent 画流程图用 —— ' +
-        '配合 board_connect 连线即可表达方框 + 箭头的流程图。手绘不开放。',
+        '配合 board_connect 连线即可表达方框 + 箭头的流程图。手绘不开放。' +
+        '排版建议：画流程图务必为各节点留足间距 —— 节点默认约 160x72，相邻节点' +
+        '纵向中心间隔 ≥200、横向 ≥240，否则方框 / 连线 / 文字会挤成一团。' +
+        '省略 at 则自动避让落位（不与现有元素重叠）。',
       inputSchema: {
         kind: z
           .enum(['rectangle', 'ellipse', 'diamond'])
@@ -312,7 +396,10 @@ export async function runMcpServer(
         at: z
           .string()
           .optional()
-          .describe('画布坐标 "x,y"；省略则自动排版'),
+          .describe(
+            '画布坐标 "x,y"（元素左上角）；省略则自动避让落位（不与现有元素' +
+              '重叠）。手工指定时务必为相邻元素留足间距，避免方框 / 连线 / 文字重叠',
+          ),
         size: z
           .string()
           .optional()
@@ -341,8 +428,9 @@ export async function runMcpServer(
     'board_connect',
     {
       description:
-        '在两个元素之间连一条线 / 箭头。两端若都是图形（board_add_shape 建的），' +
-        '图形移动时连线自动跟随。画流程图：先 board_add_shape 建节点，再用本工具连。',
+        '在两个元素之间连一条线 / 箭头。可连接任意元素 —— 图形 / 文件卡 / ' +
+        '文本卡 / 区域；连线自动贴元素边缘、随元素移动与缩放实时跟随，不会戳进' +
+        '卡片内部。画流程图：先 board_add_shape 建节点，再用本工具连。',
       inputSchema: {
         from: z.string().describe('源元素 id'),
         to: z.string().describe('目标元素 id'),
@@ -502,6 +590,143 @@ export async function runMcpServer(
           actor: a.agent,
         }),
         port,
+      ),
+  );
+
+  // ── 写：添加本地文件 ────────────────────────────────────────
+  server.registerTool(
+    'board_add_file',
+    {
+      description:
+        '把一个文件添加进白板（复制进 files/，可指定区域）。两种来源二选一：' +
+        'source = 本地文件的绝对路径；或 content + filename = 由文本内容直接生成文件。',
+      inputSchema: {
+        source: z
+          .string()
+          .optional()
+          .describe('本地文件的绝对路径（与 content 二选一）'),
+        content: z
+          .string()
+          .optional()
+          .describe('文件文本内容（与 source 二选一，需同时给 filename）'),
+        filename: z
+          .string()
+          .optional()
+          .describe('content 模式下生成的文件名（含扩展名）'),
+        region: z.string().optional().describe('放入的区域名；省略 = 收件区'),
+        agent: z.string().optional().describe('执行的 Agent id'),
+      },
+    },
+    async (a): Promise<CallToolResult> =>
+      safeHandler('board_add_file', async () => {
+        let src = a.source;
+        let tmpDir: string | undefined;
+        if (!src) {
+          if (a.content === undefined || !a.filename) {
+            return textResult(
+              'board_add_file 失败：需要 source，或同时给出 content + filename',
+              true,
+            );
+          }
+          // content 模式：在临时目录里以目标文件名落盘，再走与 source 相同的
+          // 复制路径（cmdAdd 取 basename 作 files/ 内的文件名）。
+          tmpDir = await mkdtemp(join(tmpdir(), 'board-add-'));
+          src = join(tmpDir, a.filename);
+          await writeFile(src, a.content, 'utf8');
+        }
+        try {
+          return await runCmd(
+            'board_add_file',
+            cmdAdd,
+            mkArgs(['file', boardPath, src], {
+              region: a.region,
+              actor: a.agent,
+            }),
+            port,
+          );
+        } finally {
+          if (tmpDir) await rm(tmpDir, { recursive: true, force: true });
+        }
+      }),
+  );
+
+  // ── 写：添加本地目录 ────────────────────────────────────────
+  server.registerTool(
+    'board_add_folder',
+    {
+      description: '把一个本地目录（连同内部文件）整体添加进白板的 files/。',
+      inputSchema: {
+        source: z.string().describe('本地目录的绝对路径'),
+        region: z.string().optional().describe('放入的区域名；省略 = 收件区'),
+        agent: z.string().optional().describe('执行的 Agent id'),
+      },
+    },
+    async (a) =>
+      runCmd(
+        'board_add_folder',
+        cmdAdd,
+        mkArgs(['folder', boardPath, a.source], {
+          region: a.region,
+          actor: a.agent,
+        }),
+        port,
+      ),
+  );
+
+  // ── 写：移动 files/ 内的文件（改归属 / 改名）─────────────────
+  server.registerTool(
+    'board_move_file',
+    {
+      description:
+        '移动 / 重命名 files/ 内的一个文件，用相对 files/ 的路径表达。把文件移进' +
+        '某区域文件夹即「改归属」（与 Web 端拖拽文件卡改归属等价）。文件的相对' +
+        '路径可从 board_list_files 或 board_read_context 获得。',
+      inputSchema: {
+        from: z.string().describe('源文件相对 files/ 的路径，如 "tickets.pdf"'),
+        to: z
+          .string()
+          .describe('目标相对路径，如 "路线/tickets.pdf"（即移进「路线」区域）'),
+        agent: z.string().optional().describe('执行的 Agent id'),
+      },
+    },
+    async (a) =>
+      runCmd(
+        'board_move_file',
+        cmdMv,
+        mkArgs([boardPath, a.from, a.to], { actor: a.agent }),
+        port,
+      ),
+  );
+
+  // ── 读：读取 files/ 内某文件正文 ─────────────────────────────
+  server.registerTool(
+    'board_read_file',
+    {
+      description:
+        '读取白板 files/ 下某个文件的正文。文本类文件内联返回内容（过长截断），' +
+        '二进制文件只返回类型与大小。相对路径可从 board_list_files 获得。',
+      inputSchema: {
+        path: z.string().describe('相对 files/ 的文件路径，如 "路线/day1.md"'),
+      },
+    },
+    async (a) =>
+      safeHandler('board_read_file', () => readBoardFile(boardPath, a.path)),
+  );
+
+  // ── 读：取单个元素的完整详情 ────────────────────────────────
+  server.registerTool(
+    'board_get_element',
+    {
+      description:
+        '取单个元素的完整详情（JSON）。对 suggestion 元素会连同 `thread` —— ' +
+        '即「描述」反馈回路里人留下的修改意见 —— 一并返回，Agent 据此修订建议。',
+      inputSchema: {
+        elementId: z.string().describe('元素 id'),
+      },
+    },
+    async (a) =>
+      safeHandler('board_get_element', () =>
+        getBoardElement(boardPath, a.elementId),
       ),
   );
 

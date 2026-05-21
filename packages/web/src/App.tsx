@@ -30,8 +30,15 @@ import './App.css';
 
 /** 外壳布局 —— 顶栏 + 画布区，纵向铺满视口。 */
 function BoardApp(): JSX.Element {
-  const { scene, meta, connection, renameBoard, replaceScene, loadFromServer } =
-    useBoard();
+  const {
+    scene,
+    meta,
+    connection,
+    renameBoard,
+    replaceScene,
+    loadFromServer,
+    importTick,
+  } = useBoard();
 
   // 「保存」按钮状态机：idle → saving → saved/error。
   const [saveState, setSaveState] = useState<SaveState>('idle');
@@ -45,6 +52,11 @@ function BoardApp(): JSX.Element {
   // 用 ref 持有最新的 loadFromServer，供 SSE 回调闭包稳定引用。
   const loadFromServerRef = useRef(loadFromServer);
   loadFromServerRef.current = loadFromServer;
+
+  // 自动保存：防抖计时器 + 上次见到的 importTick（用于区分「本地画布编辑」
+  // 与「导入 / server 载入」—— 后者会自增 importTick，不应被回存）。
+  const saveTimerRef = useRef<number | undefined>(undefined);
+  const lastTickRef = useRef(0);
 
   // ── 启动时探测 board-server（整个生命周期仅一次）──────────────
   // probedRef 保证只探测一次（含 StrictMode 二次挂载）。
@@ -99,6 +111,35 @@ function BoardApp(): JSX.Element {
     const unsubscribe = subscribeBoardEvents(handleBoardChanged);
     return unsubscribe;
   }, [connection]);
+
+  // ── 本地画布编辑自动保存 ─────────────────────────────────────────
+  // 画布上画的图形 / 连线 / 文本等只更新内存场景，不经 server reconcile
+  // 持久化 —— 不自动保存的话刷新就丢。这里在场景变化后防抖 800ms putScene。
+  // 仅本地编辑触发：导入 / server 载入会自增 importTick，据此跳过，避免把
+  // server 刚下发的数据又原样回存（回声）。
+  useEffect(() => {
+    if (connection !== 'connected') return;
+    if (importTick !== lastTickRef.current) {
+      // 本次场景变化来自导入 / server 载入 —— 不回存。
+      lastTickRef.current = importTick;
+      return;
+    }
+    window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = window.setTimeout(() => {
+      setSaveState('saving');
+      void putScene(scene)
+        .then(() => {
+          setSaveState('saved');
+          window.setTimeout(() => setSaveState('idle'), 1500);
+        })
+        .catch((err) => {
+          setSaveState('error');
+          console.warn('[board-web] 自动保存失败（可手动点保存）：', err);
+          window.setTimeout(() => setSaveState('idle'), 2000);
+        });
+    }, 800);
+    return () => window.clearTimeout(saveTimerRef.current);
+  }, [scene, importTick, connection]);
 
   const handleExport = useCallback(() => {
     // 文件名取白板名，非法字符替换为 `-`。

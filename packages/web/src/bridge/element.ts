@@ -29,12 +29,7 @@ import {
   type ElementId,
   newElementId,
 } from '@board/core';
-import type {
-  ExElement,
-  ExElementSkeleton,
-  ExPoint,
-  ExArrowheadValue,
-} from './types';
+import type { ExElement, ExElementSkeleton, ExPoint } from './types';
 import type { ExcalidrawElementSkeleton } from '@excalidraw/excalidraw/types/data/transform';
 import { styleToExcalidraw, styleFromExcalidraw } from './style';
 
@@ -51,17 +46,6 @@ function toCoreFontFamily(f: number): Style['fontFamily'] {
 }
 
 // ───────────────────────── core → Excalidraw ─────────────────────────
-
-/** connector 元素 meta.ex 里保存的 Excalidraw 形状信息。 */
-interface ConnectorExMeta {
-  points?: ExPoint[];
-}
-
-/** 从 connector 元素 meta 中取回上次保存的 Excalidraw 形状信息（若有）。 */
-function connectorExMetaOf(el: Element): ConnectorExMeta | null {
-  const raw = el.meta?.['ex'];
-  return raw && typeof raw === 'object' ? (raw as ConnectorExMeta) : null;
-}
 
 /** core envelope 通用字段 → Excalidraw 骨架通用字段。 */
 function baseSkeleton(el: Element): ExElementSkeleton {
@@ -99,26 +83,6 @@ export function coreToExcalidraw(el: Element): ExElementSkeleton | null {
       }
       return sk;
     }
-    case 'connector': {
-      const isLine = el.startArrow === 'none' && el.endArrow === 'none';
-      const exMeta = connectorExMetaOf(el);
-      const sk: ExElementSkeleton = {
-        ...base,
-        type: isLine ? 'line' : 'arrow',
-        startArrowhead: toExArrowhead(el.startArrow),
-        endArrowhead: toExArrowhead(el.endArrow),
-      };
-      // 优先复用上次保存的 points（保持折线/曲线形状）；否则按包围盒给两点直线。
-      const exPoints = exMeta?.points;
-      sk.points =
-        Array.isArray(exPoints) && exPoints.length >= 2
-          ? exPoints.map((p): ExPoint => [p[0], p[1]])
-          : [
-              [0, 0],
-              [el.width, el.height],
-            ];
-      return sk;
-    }
     case 'draw': {
       const sk: ExElementSkeleton = {
         ...base,
@@ -130,19 +94,12 @@ export function coreToExcalidraw(el: Element): ExElementSkeleton | null {
       }
       return sk;
     }
-    // text/file/folder/region/image/suggestion/embed —— 不进 Excalidraw 场景。
-    // text 是白板原生的「Markdown 卡片」，连同内容元素一并由 DOM 覆盖层渲染。
+    // connector/text/file/folder/region/image/suggestion/embed —— 不进
+    // Excalidraw 场景。connector（连线）与 text（Markdown 卡片）等内容元素
+    // 一并由 DOM 覆盖层渲染。
     default:
       return null;
   }
-}
-
-function toExArrowhead(a: ArrowHead): ExArrowheadValue {
-  // core ArrowHead: none/arrow/triangle/dot；Excalidraw: null/arrow/bar/dot/triangle
-  if (a === 'none') return null;
-  if (a === 'triangle') return 'triangle';
-  if (a === 'dot') return 'dot';
-  return 'arrow';
 }
 
 // ───────────────────────── Excalidraw → core ─────────────────────────
@@ -153,6 +110,19 @@ function fromExArrowhead(a: unknown): ArrowHead {
   if (a === 'bar') return 'arrow'; // core 无 bar，归一为 arrow
   if (a === 'arrow') return 'arrow';
   return 'none';
+}
+
+/** 取 Excalidraw 线性元素的端点绑定目标 id（无绑定返回 null）。 */
+function bindingElementId(
+  ex: ExElement,
+  key: 'startBinding' | 'endBinding',
+): string | null {
+  const b = (ex as Record<string, unknown>)[key];
+  if (b && typeof b === 'object') {
+    const id = (b as { elementId?: unknown }).elementId;
+    if (typeof id === 'string' && id) return id;
+  }
+  return null;
 }
 
 /** core envelope 通用字段构造（Excalidraw → core 公用）。 */
@@ -194,17 +164,56 @@ const SHAPE_KINDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * 求 core `shape` 的 label（图形内文字）。
+ *
+ * Excalidraw 把图形内文字存为一个**独立的 text 元素**，带 `containerId` 指回
+ * 图形——它不是白板的独立文本卡。`excalidrawToScene` 会把这类绑定文本从
+ * 活元素里滤掉、单独传进来（`boundText`）。
+ *
+ * 真相源是 `boundText`：
+ *  - 有 `boundText` 且文字非空 → label = 该文字（含字号）。
+ *  - 无 `boundText` → 图形当前没有标签（从未输入 / 已清空）→ null。
+ *
+ * **不退回 `prev.label`**：图形有 label 时 `sceneToExcalidraw` 必定经
+ * `convertToExcalidrawElements` 物化出绑定文本，故「有 label ⇔ 有 boundText」。
+ * 若无 boundText 仍取 prev.label，既会让用户清空的标签复活，又——这是关键——
+ * 旧实现读的是从不被赋值的 `customData.boardLabel`、再退回 `prev.label`，导致
+ * 用户**新输入 / 修改**的图形内文字永远写不进 core，下次重渲染即丢失，
+ * 表现为「方框 / 圆框 / 菱形框内文本异常消失」。
+ */
+function shapeLabelOf(
+  ex: ExElement,
+  boundText: ExElement | null | undefined,
+): ShapeElement['label'] {
+  if (boundText) {
+    const raw = (boundText as { text?: string }).text ?? '';
+    if (raw.trim() === '') return null;
+    const fontSize = (boundText as { fontSize?: number }).fontSize;
+    return typeof fontSize === 'number' ? { text: raw, fontSize } : { text: raw };
+  }
+  // exRaw 还原路径（未知类型占位壳）暂存的 label——正常图形不会走到这里。
+  const labelRaw = ex.customData?.['boardLabel'];
+  if (labelRaw && typeof labelRaw === 'object') {
+    return labelRaw as ShapeElement['label'];
+  }
+  return null;
+}
+
+/**
  * Excalidraw 元素 → core `Element`。
  *
- * @param ex    Excalidraw 元素
- * @param actor 当前参与者 id（写入 updatedBy）
- * @param prev  上一轮同 id 的 core 元素（若有）——用于保留 z / parentId / state /
- *              createdAt 等 Excalidraw 不持有的字段
+ * @param ex        Excalidraw 元素
+ * @param actor     当前参与者 id（写入 updatedBy）
+ * @param prev      上一轮同 id 的 core 元素（若有）——用于保留 z / parentId /
+ *                  state / createdAt 等 Excalidraw 不持有的字段
+ * @param boundText 绑定在该元素上的标签文本（图形内文字）；由
+ *                  `excalidrawToScene` 按 containerId 配好后传入，无则 null
  */
 export function excalidrawToCore(
   ex: ExElement,
   actor: ParticipantId,
   prev?: Element,
+  boundText?: ExElement | null,
 ): Element {
   const style = styleFromExcalidraw(ex);
   const env = coreEnvelope(ex, actor, prev, style);
@@ -214,17 +223,11 @@ export function excalidrawToCore(
     case 'ellipse':
     case 'diamond': {
       const shape = ex.type as ShapeKind;
-      const labelRaw = ex.customData?.['boardLabel'];
       const result: ShapeElement = {
         ...env,
         type: 'shape',
         shape,
-        label:
-          labelRaw && typeof labelRaw === 'object'
-            ? (labelRaw as ShapeElement['label'])
-            : prev?.type === 'shape'
-              ? prev.label
-              : null,
+        label: shapeLabelOf(ex, boundText),
       };
       // 字体来自样式默认；shape 自身无字号字段。
       return result;
@@ -235,11 +238,19 @@ export function excalidrawToCore(
       const startArrow = fromExArrowhead(ex.startArrowhead);
       const endArrow =
         ex.type === 'line' ? 'none' : fromExArrowhead(ex.endArrowhead);
+      // Excalidraw 把箭头端点吸附到图形时记在 start/endBinding 上 —— 取其
+      // elementId 作为 core 端点绑定，使图形↔图形连线随图形移动跟随。
+      const startBind = bindingElementId(ex, 'startBinding');
+      const endBind = bindingElementId(ex, 'endBinding');
       const result: ConnectorElement = {
         ...env,
         type: 'connector',
-        start: prevConn?.start ?? { elementId: null, anchor: 'auto' },
-        end: prevConn?.end ?? { elementId: null, anchor: 'auto' },
+        start: startBind
+          ? { elementId: startBind, anchor: 'auto' }
+          : (prevConn?.start ?? { elementId: null, anchor: 'auto' }),
+        end: endBind
+          ? { elementId: endBind, anchor: 'auto' }
+          : (prevConn?.end ?? { elementId: null, anchor: 'auto' }),
         startArrow: ex.type === 'line' ? 'none' : startArrow,
         endArrow,
         routing: prevConn?.routing ?? 'straight',
@@ -338,9 +349,9 @@ export function rawExcalidrawOf(el: Element): Partial<ExElement> | null {
 
 // ──────── core → Excalidraw 骨架（convertToExcalidrawElements 专用）────────
 //
-// shape / connector 走 convertToExcalidrawElements：它能把骨架上的 `label`
-// 自动展开为「绑定文本」（图形内文字），把 `start`/`end` 自动建立为端点绑定
-// （连线随图形移动跟随）—— 这些是手搓 restoreElements 骨架做不到的。
+// shape 走 convertToExcalidrawElements：它能把骨架上的 `label` 自动展开为
+// 「绑定文本」（图形内文字）—— 这是手搓 restoreElements 骨架做不到的。
+// connector（连线）不走此路径 —— 它归 DOM 覆盖层 SVG 渲染（见 ConnectorLayer）。
 
 /**
  * core `shape` → convertToExcalidrawElements 容器骨架。
@@ -359,58 +370,5 @@ export function shapeToSkeleton(el: ShapeElement): ExcalidrawElementSkeleton {
     ...styleToExcalidraw(el.style),
     ...(el.label ? { label: { text: el.label.text } } : {}),
   };
-  return skeleton as unknown as ExcalidrawElementSkeleton;
-}
-
-/**
- * core `connector` → convertToExcalidrawElements 线性元素骨架。
- *
- * 端点几何按 `byId` 里两端元素的最新中心实时计算；两端若都是图形，
- * 额外给出 `start`/`end` 绑定，使连线随图形移动自动跟随。非图形端点
- * （如覆盖层文本卡）则只画静态直线（按当前位置）。
- */
-export function connectorToSkeleton(
-  el: ConnectorElement,
-  byId: ReadonlyMap<string, Element>,
-  shapeIds: ReadonlySet<string>,
-): ExcalidrawElementSkeleton {
-  const a = el.start.elementId ? byId.get(el.start.elementId) : undefined;
-  const b = el.end.elementId ? byId.get(el.end.elementId) : undefined;
-  let x = el.x;
-  let y = el.y;
-  let dx = el.width;
-  let dy = el.height;
-  if (a && b) {
-    x = a.x + a.width / 2;
-    y = a.y + a.height / 2;
-    dx = b.x + b.width / 2 - x;
-    dy = b.y + b.height / 2 - y;
-  }
-  const isLine = el.startArrow === 'none' && el.endArrow === 'none';
-  const skeleton: Record<string, unknown> = {
-    type: isLine ? 'line' : 'arrow',
-    id: el.id,
-    x,
-    y,
-    width: Math.abs(dx),
-    height: Math.abs(dy),
-    points: [
-      [0, 0],
-      [dx, dy],
-    ],
-    ...styleToExcalidraw(el.style),
-    startArrowhead: toExArrowhead(el.startArrow),
-    endArrowhead: toExArrowhead(el.endArrow),
-  };
-  // 端点是图形 → 绑定（随图形移动）；否则不绑定，按上面算出的直线渲染。
-  if (el.start.elementId && shapeIds.has(el.start.elementId)) {
-    skeleton['start'] = { id: el.start.elementId };
-  }
-  if (el.end.elementId && shapeIds.has(el.end.elementId)) {
-    skeleton['end'] = { id: el.end.elementId };
-  }
-  if (el.label) {
-    skeleton['label'] = { text: el.label.text };
-  }
   return skeleton as unknown as ExcalidrawElementSkeleton;
 }
