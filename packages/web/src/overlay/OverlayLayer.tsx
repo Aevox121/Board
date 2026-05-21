@@ -21,6 +21,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   BoardScene,
   ConnectorElement,
+  DrawElement,
   Element,
   FileElement,
   ParticipantId,
@@ -73,6 +74,21 @@ export interface OverlayViewport {
   scrollY: number;
   /** 缩放系数。 */
   zoom: number;
+}
+
+/**
+ * 缩放进行中的手绘元素 —— 采样点按比例实时缩放，使笔迹随包围盒一起变
+ * （否则缩放过程中笔迹与新尺寸脱节，松手才跳到位）。
+ */
+function liveDrawEl(el: DrawElement, r: ResizeState): DrawElement {
+  const sx = r.w0 > 0 ? r.w / r.w0 : 1;
+  const sy = r.h0 > 0 ? r.h / r.h0 : 1;
+  return {
+    ...el,
+    width: r.w,
+    height: r.h,
+    points: el.points.map((p): [number, number] => [p[0] * sx, p[1] * sy]),
+  };
 }
 
 /**
@@ -1876,9 +1892,17 @@ export function OverlayLayer({
                   onCommit={(md) => commitTextMarkdown(el.id, md)}
                 />
               ) : el.type === 'shape' ? (
-                <ShapeView element={el} />
+                <ShapeView
+                  element={
+                    resizing && resize
+                      ? { ...el, width: resize.w, height: resize.h }
+                      : el
+                  }
+                />
               ) : el.type === 'draw' ? (
-                <DrawView element={el} />
+                <DrawView
+                  element={resizing && resize ? liveDrawEl(el, resize) : el}
+                />
               ) : (
                 <FileCard element={el} missing={missingFileIds.has(el.id)} />
               )}

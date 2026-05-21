@@ -17,7 +17,12 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
-import type { BoardScene, ConnectorElement, ArrowHead } from '@board/core';
+import type {
+  BoardScene,
+  ConnectorElement,
+  ArrowHead,
+  ShapeKind,
+} from '@board/core';
 import type { RectLike } from './util';
 
 /** 端点贴边的间隙（画布单位）—— 箭头不与卡片边框糊在一起。 */
@@ -122,19 +127,33 @@ const center = (r: RectLike): Pt => ({
 const dist = (a: Pt, b: Pt): number => Math.hypot(b.x - a.x, b.y - a.y);
 
 /**
- * 从矩形中心朝 (tx,ty) 方向射线与矩形边的交点 —— 连线的「贴边」落点。
+ * 从元素中心朝 (tx,ty) 方向的射线与元素**实际形状**外缘的交点 —— 连线的
+ * 「贴边」落点。矩形按矩形边、椭圆按椭圆弧、菱形按菱形边求交，使连线端点
+ * 贴合元素真实形状，而非隐形的包围盒。
  */
-function edgePoint(r: RectLike, tx: number, ty: number): Pt {
+function edgePoint(r: RectLike, kind: ShapeKind, tx: number, ty: number): Pt {
   const c = center(r);
   const dx = tx - c.x;
   const dy = ty - c.y;
   if (dx === 0 && dy === 0) return c;
-  const halfW = r.width / 2;
-  const halfH = r.height / 2;
-  const sx = dx !== 0 ? halfW / Math.abs(dx) : Infinity;
-  const sy = dy !== 0 ? halfH / Math.abs(dy) : Infinity;
-  const s = Math.min(sx, sy);
-  return { x: c.x + dx * s, y: c.y + dy * s };
+  const a = r.width / 2;
+  const b = r.height / 2;
+  let t: number;
+  if (a <= 0 || b <= 0) {
+    t = 0;
+  } else if (kind === 'ellipse') {
+    // 椭圆 (x/a)² + (y/b)² = 1 与射线求交。
+    t = 1 / Math.hypot(dx / a, dy / b);
+  } else if (kind === 'diamond') {
+    // 菱形 |x/a| + |y/b| = 1 与射线求交。
+    t = 1 / (Math.abs(dx) / a + Math.abs(dy) / b);
+  } else {
+    // 矩形：取先碰到的那条边。
+    const sx = dx !== 0 ? a / Math.abs(dx) : Infinity;
+    const sy = dy !== 0 ? b / Math.abs(dy) : Infinity;
+    t = Math.min(sx, sy);
+  }
+  return { x: c.x + dx * t, y: c.y + dy * t };
 }
 
 /** strokeStyle → SVG dasharray（按线宽缩放，细线虚线段也细密）。 */
@@ -243,6 +262,11 @@ export function ConnectorLayer({
         ? { x: el.x, y: el.y, width: el.width, height: el.height }
         : null;
     };
+    /** 取元素的形状 —— 图形按其 shape，其余（卡片 / 手绘等）按矩形。 */
+    const kindOf = (id: string): ShapeKind => {
+      const el = byId.get(id);
+      return el && el.type === 'shape' ? el.shape : 'rectangle';
+    };
 
     const out: ConnGeom[] = [];
     for (const conn of connectors) {
@@ -267,8 +291,12 @@ export function ConnectorLayer({
         // 自身位置。两端皆绑定即标准「贴边路由」。
         const towardA = bRect ? center(bRect) : fb;
         const towardB = aRect ? center(aRect) : fa;
-        let p1 = aRect ? edgePoint(aRect, towardA.x, towardA.y) : fa;
-        let p2 = bRect ? edgePoint(bRect, towardB.x, towardB.y) : fb;
+        let p1 = aRect
+          ? edgePoint(aRect, kindOf(conn.start.elementId!), towardA.x, towardA.y)
+          : fa;
+        let p2 = bRect
+          ? edgePoint(bRect, kindOf(conn.end.elementId!), towardB.x, towardB.y)
+          : fb;
         // 仅对绑定端回退 EDGE_GAP（自由端停在画的点上）。
         const len = dist(p1, p2);
         if (len > EDGE_GAP * 2 + 1) {
