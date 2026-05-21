@@ -2117,17 +2117,13 @@ export function OverlayLayer({
           const isShape = el.type === 'shape';
           const isDraw = el.type === 'draw';
 
-          // 拖拽偏移：被拖元素自身，或被拖区域的子元素（随区域一起动）。
+          // 拖拽偏移：本次拖拽的全部成员（单拖为自身，区域拖含子元素，
+          // 整组拖为整个选区）都实时套上偏移变换，一起跟随指针。
           let dx = 0;
           let dy = 0;
-          if (drag?.moved) {
-            if (
-              drag.elementId === el.id ||
-              (drag.kind === 'region' && el.parentId === drag.elementId)
-            ) {
-              dx = drag.offsetX;
-              dy = drag.offsetY;
-            }
+          if (drag?.moved && drag.memberIds.has(el.id)) {
+            dx = drag.offsetX;
+            dy = drag.offsetY;
           }
           const offset = dx !== 0 || dy !== 0;
 
