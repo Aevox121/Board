@@ -153,6 +153,9 @@ export function Toolbar({ activeTool, onSelect }: ToolbarProps): JSX.Element {
             onClick={() => onSelect(t.id)}
           >
             {t.icon}
+            <span className="cv-tool__key" aria-hidden="true">
+              {t.shortcut}
+            </span>
           </button>
         ),
       )}

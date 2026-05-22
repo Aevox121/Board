@@ -89,6 +89,7 @@
 }
 
 .cv-tool {
+  position: relative;
   width: 36px;
   height: 36px;
   display: flex;
@@ -124,6 +125,24 @@
   width: 20px;
   height: 20px;
   display: block;
+}
+
+/* 工具按钮右下角的快捷键角标。 */
+.cv-tool__key {
+  position: absolute;
+  right: 3px;
+  bottom: 1px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 1;
+  color: var(--c-ink-2);
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.cv-tool--active .cv-tool__key {
+  color: var(--c-accent-strong);
+  opacity: 0.8;
 }
 
 .cv-tool-divider {
