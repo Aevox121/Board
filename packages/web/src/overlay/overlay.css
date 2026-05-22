@@ -1176,21 +1176,14 @@
 }
 
 /* ── 拖拽对齐参考线 ─────────────────────────────────────────────
- * 与 .ov-links 同款：0 尺寸 svg + overflow:visible，画布坐标定位。 */
-.ov-snap-layer {
-  position: absolute;
-  left: 0;
-  top: 0;
-  overflow: visible;
-  pointer-events: none;
-  z-index: 30;
-}
-
-/* 参考线本体 —— non-scaling-stroke 使其在任何缩放下恒为 1px 细线。 */
+ * 画布坐标定位的 div 细线（厚度由 OverlayLayer 按 1/zoom 折算成 1 屏幕
+ * 像素）。z-index 必须高过 .ov-slot--dragging（1000）—— 否则中线参考线
+ * 会被正在拖拽的元素本体整条遮住。 */
 .ov-snap-guide {
-  stroke: #e8590c;
-  stroke-width: 1;
-  vector-effect: non-scaling-stroke;
+  position: absolute;
+  background: #e8590c;
+  pointer-events: none;
+  z-index: 1001;
 }
 
 /* ── 连线层（connector）──────────────────────────────────────────

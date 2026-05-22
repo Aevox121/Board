@@ -3003,21 +3003,32 @@ export function OverlayLayer({
         ) : null}
 
         {/* 拖拽对齐参考线 —— 被拖元素的边 / 中线对齐到其它元素时浮现。
-            stroke 用 non-scaling-stroke，缩放下恒为 1px。 */}
-        {snapGuides.length > 0 ? (
-          <svg className="ov-snap-layer" width="0" height="0" aria-hidden="true">
-            {snapGuides.map((g, i) => (
-              <line
-                key={i}
-                className="ov-snap-guide"
-                x1={g.axis === 'x' ? g.pos : g.from}
-                y1={g.axis === 'x' ? g.from : g.pos}
-                x2={g.axis === 'x' ? g.pos : g.to}
-                y2={g.axis === 'x' ? g.to : g.pos}
-              />
-            ))}
-          </svg>
-        ) : null}
+            画布坐标 div 细线，厚度按 1/zoom 折算成恒定 1 屏幕像素。 */}
+        {snapGuides.map((g, i) => {
+          const t = 1 / zoom; // 1 屏幕像素对应的画布尺寸
+          const gStyle: React.CSSProperties =
+            g.axis === 'x'
+              ? {
+                  left: `${g.pos - t / 2}px`,
+                  top: `${g.from}px`,
+                  width: `${t}px`,
+                  height: `${g.to - g.from}px`,
+                }
+              : {
+                  left: `${g.from}px`,
+                  top: `${g.pos - t / 2}px`,
+                  width: `${g.to - g.from}px`,
+                  height: `${t}px`,
+                };
+          return (
+            <div
+              key={`snap-${i}`}
+              className="ov-snap-guide"
+              style={gStyle}
+              aria-hidden="true"
+            />
+          );
+        })}
 
         {/* 选中编组的整体外框 —— 套在逐元素选择框之外，标示「这是一个组」 */}
         {groupBoxes.map((b) => (
