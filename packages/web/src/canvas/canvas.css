@@ -5,6 +5,10 @@
 /* 图形容器 —— 充满其卡槽（由画布层定位到 element.x / element.y）。 */
 .cv-shape {
   position: relative;
+  /* 拖拽（连线 / 端点 / 元素）经过图形时不选中其标签文字 —— 与 .ov-card
+     一致；原生文本选中还会打断端点拖拽手势。 */
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 /* 手绘抖动可能略微超出包围盒 —— 不裁剪。 */
@@ -38,6 +42,9 @@
   overflow-wrap: anywhere;
   pointer-events: auto;
   cursor: text;
+  /* 编辑态恢复可选中 —— 抵消 .cv-shape 的 user-select:none。 */
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .cv-draw {
