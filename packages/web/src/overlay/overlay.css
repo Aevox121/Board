@@ -708,6 +708,19 @@
   pointer-events: none;
 }
 
+/* ── 编组外框 ───────────────────────────────────────────────────
+ * 选中编组时套在逐元素选择框之外的一圈虚线框 —— 标示「这是一个组」，
+ * 与临时框选（.ov-marquee）和逐元素选择框（.ov-select-frame，实线）区分。
+ * 画布坐标定位，随画布缩放 / 平移；pointer-events:none，不挡元素。 */
+.ov-group-box {
+  position: absolute;
+  border: 1.5px dashed var(--c-accent);
+  border-radius: 14px;
+  background: transparent;
+  opacity: 0.6;
+  pointer-events: none;
+}
+
 /* ── draft 态元素 ───────────────────────────────────────────────
  * Agent 进行中产出的元素 state=draft —— 半透明 + 虚线边框渲染
  * （PRD §7.4 第 3 点）。task.finish 后转 committed，恢复实线不透明。 */

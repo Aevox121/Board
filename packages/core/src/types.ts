@@ -128,6 +128,12 @@ export interface BaseElement {
   z: string;
   /** 所属区域/文件夹元素 id；null = 直接在画布上 */
   parentId: ElementId | null;
+  /**
+   * 所属编组 id 列表，由内到外（最后一项为最外层组）。空 / 省略 = 未编组。
+   * 与 parentId（区域/文件夹归属、对应文件系统）正交：编组纯属画布层的
+   * 选择聚合，多个元素共享同一组 id 即同组；支持嵌套（多层组 id）。
+   */
+  groupIds?: string[];
   locked: boolean;
   hidden?: boolean;
   state: ElementState;

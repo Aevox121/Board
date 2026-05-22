@@ -38,6 +38,7 @@ import {
   removeElement,
   nextZ,
   newElementId,
+  newGroupId,
   createShapeElement,
   createDrawElement,
   createTextElement,
@@ -731,16 +732,48 @@ export function OverlayLayer({
   // 连线本体拖拽的瞬时状态镜像 —— 连线是 SVG、走 window 监听，回调据此读最新值。
   const connDragRef = useRef<DragState | null>(null);
 
-  /** 选中单个元素（替换当前选区）。 */
+  /** 选中单个元素（替换当前选区）—— 用于新建元素等「就选它本身」的场景。 */
   function selectOnly(id: string): void {
     setSelectedIds(new Set([id]));
   }
-  /** 在选区中切换某元素的去留（shift 点选 —— 加入 / 移出多选）。 */
+  /**
+   * 某元素所属编组（最外层）的全部成员 id —— 未编组则仅含其自身。
+   * 点选 / 框选据此把选区扩展为整组（groupIds 末项为最外层组）。
+   */
+  function groupMembersOf(id: string): Set<string> {
+    const cur = sceneRef.current;
+    const el = cur.elements.find((e) => e.id === id);
+    const gids = el?.groupIds;
+    const outer = gids && gids.length > 0 ? gids[gids.length - 1] : null;
+    if (!outer) return new Set([id]);
+    const set = new Set<string>();
+    for (const e of cur.elements) {
+      if (e.groupIds?.includes(outer)) set.add(e.id);
+    }
+    return set;
+  }
+  /** 把一组元素 id 扩展为「连同各自所属编组的全部成员」。 */
+  function expandToGroups(ids: Iterable<string>): Set<string> {
+    const out = new Set<string>();
+    for (const id of ids) {
+      for (const m of groupMembersOf(id)) out.add(m);
+    }
+    return out;
+  }
+  /** 选中某元素 —— 若它属于编组则连同整组一起选中。 */
+  function selectGroupOf(id: string): void {
+    setSelectedIds(groupMembersOf(id));
+  }
+  /** shift 点选：把某元素（连同其所属编组）整体加入 / 移出选区。 */
   function toggleInSelection(id: string): void {
+    const gset = groupMembersOf(id);
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      const allIn = [...gset].every((g) => next.has(g));
+      for (const g of gset) {
+        if (allIn) next.delete(g);
+        else next.add(g);
+      }
       return next;
     });
   }
@@ -832,6 +865,43 @@ export function OverlayLayer({
     }
     return m;
   }, [drag, resize, scene.elements]);
+
+  // 选区涉及的各编组的整体包围盒 —— 选中编组时套一圈虚线框，与逐元素选择框
+  // 区分（直观显示「这是一个组」）。拖拽中按 liveRects 实时跟随。
+  const groupBoxes = useMemo<Array<{ gid: string } & RectLike>>(() => {
+    if (selectedIds.size === 0) return [];
+    const byId = new Map(scene.elements.map((e) => [e.id, e] as const));
+    const gids = new Set<string>();
+    for (const id of selectedIds) {
+      const g = byId.get(id)?.groupIds;
+      if (g && g.length > 0) gids.add(g[g.length - 1]!);
+    }
+    if (gids.size === 0) return [];
+    const out: Array<{ gid: string } & RectLike> = [];
+    for (const gid of gids) {
+      let x0 = Infinity;
+      let y0 = Infinity;
+      let x1 = -Infinity;
+      let y1 = -Infinity;
+      for (const e of scene.elements) {
+        if (!e.groupIds?.includes(gid)) continue;
+        const r = liveRects.get(e.id) ?? {
+          x: e.x,
+          y: e.y,
+          width: e.width,
+          height: e.height,
+        };
+        x0 = Math.min(x0, r.x);
+        y0 = Math.min(y0, r.y);
+        x1 = Math.max(x1, r.x + r.width);
+        y1 = Math.max(y1, r.y + r.height);
+      }
+      if (x0 < x1 && y0 < y1) {
+        out.push({ gid, x: x0, y: y0, width: x1 - x0, height: y1 - y0 });
+      }
+    }
+    return out;
+  }, [selectedIds, scene.elements, liveRects]);
 
   // 拖拽文件 / 文本卡时实时算出落点所在区域 —— 用于高亮提示（区域拖拽不需要）。
   const dropRegionId = useMemo<string | null>(() => {
@@ -1033,9 +1103,10 @@ export function OverlayLayer({
           }
         }
       }
+      // 命中编组成员即连同整组一并选中。
       setSelectedIds((prev) => {
         const next = p.additive ? new Set(prev) : new Set<string>();
-        for (const id of hits) next.add(id);
+        for (const id of expandToGroups(hits)) next.add(id);
         return next;
       });
     };
@@ -1197,7 +1268,9 @@ export function OverlayLayer({
     const onKey = (e: KeyboardEvent): void => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
       const k = e.key.toLowerCase();
-      if (k !== 'c' && k !== 'x' && k !== 'v' && k !== 'd') return;
+      if (k !== 'c' && k !== 'x' && k !== 'v' && k !== 'd' && k !== 'g') {
+        return;
+      }
       // 输入框 / 文本域 / 可编辑区聚焦时让位给原生复制粘贴。
       const ae = document.activeElement as HTMLElement | null;
       if (
@@ -1212,7 +1285,12 @@ export function OverlayLayer({
       if (k === 'c') copySelection();
       else if (k === 'x') cutSelection();
       else if (k === 'v') pasteClipboard();
-      else duplicateSelection();
+      else if (k === 'd') duplicateSelection();
+      else if (k === 'g') {
+        // Ctrl+G 成组 / Ctrl+Shift+G 取消编组。
+        if (e.shiftKey) ungroupSelection();
+        else groupSelection();
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -1389,6 +1467,14 @@ export function OverlayLayer({
     );
     const idMap = new Map<string, string>();
     for (const s of ordered) idMap.set(s.id, newElementId());
+    // 编组 id 重映射 —— 被一同克隆的编组在副本里形成「平行的新组」，
+    // 不与原件同组（否则点粘贴出的副本会连原件一起选中）。
+    const groupMap = new Map<string, string>();
+    for (const s of ordered) {
+      for (const g of s.groupIds ?? []) {
+        if (!groupMap.has(g)) groupMap.set(g, newGroupId());
+      }
+    }
     let zBase = parseInt(nextZ(cur.elements), 36);
     if (Number.isNaN(zBase)) zBase = 0;
     const ts = new Date().toISOString();
@@ -1400,6 +1486,9 @@ export function OverlayLayer({
       cloned.z = (zBase + i).toString(36).padStart(8, '0');
       cloned.parentId =
         s.parentId && idMap.has(s.parentId) ? idMap.get(s.parentId)! : null;
+      if (cloned.groupIds && cloned.groupIds.length > 0) {
+        cloned.groupIds = cloned.groupIds.map((g) => groupMap.get(g) ?? g);
+      }
       cloned.autoPlaced = false;
       cloned.createdBy = actorId;
       cloned.updatedBy = actorId;
@@ -1466,6 +1555,53 @@ export function OverlayLayer({
     const cur = sceneRef.current;
     replaceScene({ ...cur, elements: [...cur.elements, ...clones] }, 'canvas');
     setSelectedIds(new Set(clones.map((c) => c.id)));
+  }
+
+  /**
+   * Ctrl/⌘+G —— 把当前选区编为一组：给每个选中元素的 groupIds 追加同一个
+   * 新组 id（追加即成为最外层组，支持嵌套）。选区不足 2 个不成组。
+   */
+  function groupSelection(): void {
+    const sel = selectedIdsRef.current;
+    if (sel.size < 2) return;
+    const gid = newGroupId();
+    const cur = sceneRef.current;
+    const ts = new Date().toISOString();
+    const elements = cur.elements.map((e): Element =>
+      sel.has(e.id)
+        ? ({
+            ...e,
+            groupIds: [...(e.groupIds ?? []), gid],
+            updatedBy: actorId,
+            updatedAt: ts,
+          } as Element)
+        : e,
+    );
+    replaceScene({ ...cur, elements }, 'canvas');
+  }
+
+  /**
+   * Ctrl/⌘+Shift+G —— 解散选区中元素的最外层编组（弹出 groupIds 末项）。
+   * 嵌套编组只解最外一层；未编组元素不受影响。
+   */
+  function ungroupSelection(): void {
+    const sel = selectedIdsRef.current;
+    if (sel.size === 0) return;
+    const cur = sceneRef.current;
+    const ts = new Date().toISOString();
+    let changed = false;
+    const elements = cur.elements.map((e): Element => {
+      if (!sel.has(e.id) || !e.groupIds || e.groupIds.length === 0) return e;
+      changed = true;
+      const rest = e.groupIds.slice(0, -1);
+      return {
+        ...e,
+        groupIds: rest.length > 0 ? rest : undefined,
+        updatedBy: actorId,
+        updatedAt: ts,
+      } as Element;
+    });
+    if (changed) replaceScene({ ...cur, elements }, 'canvas');
   }
 
   /**
@@ -1927,14 +2063,18 @@ export function OverlayLayer({
     e: React.PointerEvent<HTMLDivElement>,
     el: Element,
     kind: 'file' | 'region' | 'text' | 'element' | 'group',
+    explicitMembers?: ReadonlySet<string>,
   ): void {
     if (e.button !== 0) return; // 仅响应主键
     e.currentTarget.setPointerCapture(e.pointerId);
     const cur = sceneRef.current;
-    // 随本次拖拽一起平移的元素集 —— group 为整个选区，其余仅自身；其中若含
-    // 区域则连带其子元素（保持「区域包含其内容」一起移动）。
+    // 随本次拖拽一起平移的元素集 —— group 为整个选区（或调用方显式给定的
+    // 成员集，用于点中未选元素即拖整组），其余仅自身；其中若含区域则连带
+    // 其子元素（保持「区域包含其内容」一起移动）。
     const members = new Set<string>(
-      kind === 'group' ? selectedIdsRef.current : [el.id],
+      kind === 'group'
+        ? (explicitMembers ?? selectedIdsRef.current)
+        : [el.id],
     );
     for (const id of [...members]) {
       const m = cur.elements.find((x) => x.id === id);
@@ -1988,8 +2128,8 @@ export function OverlayLayer({
     setDrag(null);
     if (d.moved) finishDrag(d);
     else if (d.kind === 'group') {
-      // 多选中对某元素的单击（未拖拽）—— 选区收敛到该元素。
-      selectOnly(d.elementId);
+      // 多选中对某元素的单击（未拖拽）—— 选区收敛到该元素（属编组则收敛到组）。
+      selectGroupOf(d.elementId);
     }
   }
 
@@ -2010,12 +2150,14 @@ export function OverlayLayer({
   ): void {
     if (e.button !== 0) return;
     const cur = sceneRef.current;
-    const inGroup =
+    const gset = groupMembersOf(connId);
+    const keepSel =
       selectedIdsRef.current.has(connId) && selectedIdsRef.current.size > 1;
-    if (!inGroup) selectOnly(connId);
-    // 拖拽成员：在多选中则整组，否则仅连线自身；含区域则连带其子元素。
+    if (!keepSel) setSelectedIds(gset);
+    // 拖拽成员：点中已选元素则用当前选区，否则用连线所属编组（无组即自身）；
+    // 含区域则连带其子元素。
     const members = new Set<string>(
-      inGroup ? selectedIdsRef.current : [connId],
+      keepSel ? selectedIdsRef.current : gset,
     );
     for (const id of [...members]) {
       const m = cur.elements.find((x) => x.id === id);
@@ -2074,8 +2216,8 @@ export function OverlayLayer({
     if (e.type === 'pointercancel') return; // 取消 —— 丢弃，不改场景
     if (d.moved) finishDrag(d);
     else if (selectedIdsRef.current.size > 1) {
-      // 多选中对连线的单击（未拖拽）—— 选区收敛到该连线。
-      selectOnly(d.elementId);
+      // 多选中对连线的单击（未拖拽）—— 选区收敛到该连线（属编组则收敛到组）。
+      selectGroupOf(d.elementId);
     }
   }
 
@@ -2367,14 +2509,21 @@ export function OverlayLayer({
               onPointerDown: (e) => {
                 if (e.button !== 0) return;
                 if (e.shiftKey) {
-                  // shift 点选 —— 切换区域在多选中的去留，不拖拽。
+                  // shift 点选 —— 切换区域（连同其编组）在选区中的去留。
                   toggleInSelection(region.id);
                   return;
                 }
-                const inGroup =
+                const gset = groupMembersOf(region.id);
+                const keepSel =
                   selectedIds.has(region.id) && selectedIds.size > 1;
-                if (!inGroup) selectOnly(region.id);
-                beginDrag(e, region, inGroup ? 'group' : 'region');
+                if (!keepSel) setSelectedIds(gset);
+                const groupDrag = keepSel || gset.size > 1;
+                beginDrag(
+                  e,
+                  region,
+                  groupDrag ? 'group' : 'region',
+                  !keepSel && groupDrag ? gset : undefined,
+                );
               },
               onPointerMove: handlePointerMove,
               onPointerUp: handlePointerUp,
@@ -2403,16 +2552,23 @@ export function OverlayLayer({
                       // 区域走头部手柄，不在此。
                       if (e.button !== 0) return;
                       if (e.shiftKey) {
-                        // shift 点选 —— 切换该元素在多选中的去留，不拖拽。
+                        // shift 点选 —— 切换该元素（连同其编组）在选区中的去留。
                         toggleInSelection(el.id);
                         return;
                       }
-                      // 在已有多选中按下 → 整组拖拽；否则单选该元素后单拖。
-                      const inGroup =
+                      // 点中的元素属编组则选中整组；点中已选元素则保持选区直接拖。
+                      const gset = groupMembersOf(el.id);
+                      const keepSel =
                         selectedIds.has(el.id) && selectedIds.size > 1;
-                      if (!inGroup) selectOnly(el.id);
-                      if (inGroup) {
-                        beginDrag(e, el, 'group');
+                      if (!keepSel) setSelectedIds(gset);
+                      const groupDrag = keepSel || gset.size > 1;
+                      if (groupDrag) {
+                        beginDrag(
+                          e,
+                          el,
+                          'group',
+                          keepSel ? undefined : gset,
+                        );
                       } else if (isFile || isText) {
                         beginDrag(e, el, isFile ? 'file' : 'text');
                       } else if (isShape || isDraw) {
@@ -2486,7 +2642,7 @@ export function OverlayLayer({
           liveRects={liveRects}
           selectedIds={selectedIds}
           onSelect={(id, additive) =>
-            additive ? toggleInSelection(id) : selectOnly(id)
+            additive ? toggleInSelection(id) : selectGroupOf(id)
           }
           onBodyDown={beginConnectorDrag}
           interactive={!connectMode}
@@ -2570,6 +2726,20 @@ export function OverlayLayer({
             }}
           />
         ) : null}
+
+        {/* 选中编组的整体外框 —— 套在逐元素选择框之外，标示「这是一个组」 */}
+        {groupBoxes.map((b) => (
+          <div
+            key={`gb-${b.gid}`}
+            className="ov-group-box"
+            style={{
+              left: `${b.x - 8}px`,
+              top: `${b.y - 8}px`,
+              width: `${b.width + 16}px`,
+              height: `${b.height + 16}px`,
+            }}
+          />
+        ))}
 
         {/* 创建预览 —— 拖拽创建图形 / 手绘 / 连线时的实时呈现 */}
         {creating ? (
