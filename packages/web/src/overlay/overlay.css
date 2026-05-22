@@ -680,6 +680,13 @@
   background: var(--c-surface-sunken);
 }
 
+/* 菜单分隔线 —— 区隔「选区操作」与「整理」两组。 */
+.ov-menu__divider {
+  height: 1px;
+  margin: var(--space-1) var(--space-2);
+  background: var(--c-border);
+}
+
 /* 「删除」等危险菜单项 —— 用红调与「整理」区分。 */
 .ov-menu__item--danger {
   color: #c0392b;

@@ -697,8 +697,8 @@ export function OverlayLayer({
     x: number;
     y: number;
     scope: MenuScope;
-    /** 右键命中的可删除元素 id（连线 / 文件卡 / 文本卡）；无则 null。 */
-    delTargetId: string | null;
+    /** 右键是否落在元素上 —— 决定菜单是否显示「编组 / 取消编组 / 删除」选区操作项。 */
+    onElement: boolean;
   } | null>(null);
   // 右键框选的虚线框（画布坐标矩形）；null = 无。
   const [marquee, setMarquee] = useState<RectLike | null>(null);
@@ -1042,16 +1042,20 @@ export function OverlayLayer({
           x: e.clientX,
           y: e.clientY,
           scope: { kind: 'selection', fileIds: ids },
-          delTargetId: null,
+          onElement: false,
         });
       } else {
-        // 单击 —— 按落点决定作用域（区域 / 收件区）
+        // 单击 —— 命中元素则按编组规则确保其选中（菜单的选区操作对象 = 当前
+        // 选区），整理作用域按落点决定（区域 / 收件区）。
         setMarquee(null);
+        if (p.targetId && !selectedIdsRef.current.has(p.targetId)) {
+          selectGroupOf(p.targetId);
+        }
         setMenu({
           x: e.clientX,
           y: e.clientY,
           scope: scopeAt(p.startCX, p.startCY),
-          delTargetId: p.targetId,
+          onElement: !!p.targetId,
         });
       }
     };
@@ -1139,7 +1143,10 @@ export function OverlayLayer({
         const t = e.target as HTMLElement | null;
         const onEl =
           !!t &&
-          !!t.closest('[data-element-id],[data-connector-id],.ov-style-panel');
+          !!t.closest(
+            '[data-element-id],[data-connector-id],.ov-style-panel,' +
+              '.ov-menu,.ov-menu-backdrop',
+          );
         if (onEl) return;
         // 空白处：非 shift 即清空选区；选择工具下左键拖拽 = 框选多选。
         if (!e.shiftKey) {
@@ -2388,19 +2395,18 @@ export function OverlayLayer({
         .filter((e): e is Element => !!e)
     : [];
 
-  // 右键菜单的删除目标 —— 右键落在连线 / 文件卡 / 文本卡上时可删。区域 /
-  // 文件夹背后是真实文件夹，不在画布删除范围（与 board rm / Delete 键一致），
-  // 故不纳入。
-  const menuDelEl =
-    menu && menu.delTargetId
-      ? (scene.elements.find(
-          (e) =>
-            e.id === menu.delTargetId &&
-            (e.type === 'connector' ||
-              e.type === 'text' ||
-              e.type === 'file'),
-        ) ?? null)
-      : null;
+  // 右键菜单（落在元素上时）的选区操作对象 —— 菜单的编组 / 取消编组 / 删除
+  // 都作用于当前选区，与单选时的菜单一致。区域 / 文件夹背后是真实文件夹，
+  // 不在画布删除范围（与 board rm / Delete 键一致），故 menuDeletable 排除之。
+  const menuSel: Element[] =
+    menu && menu.onElement
+      ? scene.elements.filter((e) => selectedIds.has(e.id))
+      : [];
+  const menuCanGroup = menuSel.length >= 2;
+  const menuCanUngroup = menuSel.some((e) => (e.groupIds?.length ?? 0) > 0);
+  const menuDeletable = menuSel.filter(
+    (e) => e.type !== 'region' && e.type !== 'folder',
+  );
 
   // 选中的元素 —— 决定是否浮出样式面板。图形 / 手绘自研画布层后也由本面板
   // 编辑（自研画布层增量5），不再依赖 Excalidraw 属性面板。
@@ -2756,8 +2762,8 @@ export function OverlayLayer({
         />
       ) : null}
 
-      {/* 右键上下文菜单 ——「整理」（作用域由右键位置 / 框选决定）+ 右键
-          命中连线 / 文件卡 / 文本卡时附「删除」项 */}
+      {/* 右键上下文菜单 —— 落在元素上时对当前选区可做「编组 / 取消编组 /
+          删除」（单选、多选同款菜单）；末尾恒有「整理」（作用域由位置决定）。 */}
       {menu ? (
         <>
           <div
@@ -2768,9 +2774,60 @@ export function OverlayLayer({
             className="ov-menu"
             style={{
               left: `${Math.min(menu.x, window.innerWidth - 220)}px`,
-              top: `${Math.min(menu.y, window.innerHeight - 96)}px`,
+              top: `${Math.min(menu.y, window.innerHeight - 156)}px`,
             }}
           >
+            {menu.onElement && menuCanGroup ? (
+              <button
+                type="button"
+                className="ov-menu__item"
+                onClick={() => {
+                  groupSelection();
+                  closeMenu();
+                }}
+              >
+                <span className="ov-menu__icon" aria-hidden="true">
+                  ⊞
+                </span>
+                编组（{menuSel.length} 项）
+              </button>
+            ) : null}
+            {menu.onElement && menuCanUngroup ? (
+              <button
+                type="button"
+                className="ov-menu__item"
+                onClick={() => {
+                  ungroupSelection();
+                  closeMenu();
+                }}
+              >
+                <span className="ov-menu__icon" aria-hidden="true">
+                  ⊟
+                </span>
+                取消编组
+              </button>
+            ) : null}
+            {menu.onElement && menuDeletable.length > 0 ? (
+              <button
+                type="button"
+                className="ov-menu__item ov-menu__item--danger"
+                onClick={() => {
+                  void deleteSelectedSet(selectedIds);
+                  closeMenu();
+                }}
+              >
+                <span className="ov-menu__icon" aria-hidden="true">
+                  🗑
+                </span>
+                {menuDeletable.length === 1
+                  ? delMenuLabel(menuDeletable[0]!)
+                  : `删除选中 ${menuDeletable.length} 项`}
+              </button>
+            ) : null}
+            {menu.onElement &&
+            (menuCanGroup || menuCanUngroup || menuDeletable.length > 0) ? (
+              <div className="ov-menu__divider" aria-hidden="true" />
+            ) : null}
             <button
               type="button"
               className="ov-menu__item"
@@ -2781,21 +2838,6 @@ export function OverlayLayer({
               </span>
               {menuLabel(menu.scope)}
             </button>
-            {menuDelEl ? (
-              <button
-                type="button"
-                className="ov-menu__item ov-menu__item--danger"
-                onClick={() => {
-                  void deleteSelected(menuDelEl.id);
-                  closeMenu();
-                }}
-              >
-                <span className="ov-menu__icon" aria-hidden="true">
-                  🗑
-                </span>
-                {delMenuLabel(menuDelEl)}
-              </button>
-            ) : null}
           </div>
         </>
       ) : null}
