@@ -28,14 +28,16 @@
   pointer-events: none;
 }
 
-/* 标签就地编辑态 —— 复用居中布局，开放指针、加焦点框、垫底色保证可读。 */
-.cv-shape__label--edit {
+/* 标签就地编辑区 —— 居中布局由外层 .cv-shape__label 提供；编辑区本身
+   透明无框（不加底色 / 焦点框），保持图形原本形态不被遮挡。 */
+.cv-shape__label-edit {
+  max-width: 100%;
+  outline: none;
+  text-align: center;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   pointer-events: auto;
   cursor: text;
-  outline: 2px solid var(--c-accent);
-  outline-offset: -2px;
-  border-radius: var(--radius-sm);
-  background: var(--c-surface);
 }
 
 .cv-draw {

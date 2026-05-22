@@ -39,7 +39,11 @@
   --c-p8: #5f8a82;  /* 灰青 */
 
   /* ── 字体 ─────────────────────────────────── */
-  --font-hand: 'Excalifont', 'Virgil', 'Patrick Hand', cursive;
+  /* 手写体：拉丁字形走 Excalifont 系（未内嵌时回退 cursive）；CJK 字形
+     无对应手写 webfont，按字形回退到系统楷体（Win: KaiTi / mac: STKaiti），
+     比默认黑体 / 宋体更贴「手绘风」。 */
+  --font-hand: 'Excalifont', 'Virgil', 'Patrick Hand', 'KaiTi', 'STKaiti',
+    'Kaiti SC', 'TW-Kai', cursive;
   --font-ui: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-serif: 'Tiempos', 'Source Serif 4', Georgia, serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;

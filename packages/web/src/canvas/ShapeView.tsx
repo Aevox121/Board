@@ -173,27 +173,31 @@ export function ShapeView({
         aria-hidden="true"
       />
       {editingLabel ? (
-        <div
-          ref={labelRef}
-          className="cv-shape__label cv-shape__label--edit"
-          contentEditable
-          suppressContentEditableWarning
-          style={labelStyle}
-          // 编辑区内的指针操作不冒泡到卡槽 —— 不触发拖拽 / 重选。
-          onPointerDown={(e) => e.stopPropagation()}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              e.preventDefault();
-              e.stopPropagation();
-              cancel();
-            } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-              e.preventDefault();
-              e.stopPropagation();
-              commit();
-            }
-          }}
-        />
+        // 外层复用 .cv-shape__label 的居中布局；内层编辑区透明无框，
+        // 保持图形原本形态不被白底遮挡，且空内容时光标也居中。
+        <div className="cv-shape__label">
+          <div
+            ref={labelRef}
+            className="cv-shape__label-edit"
+            contentEditable
+            suppressContentEditableWarning
+            style={labelStyle}
+            // 编辑区内的指针操作不冒泡到卡槽 —— 不触发拖拽 / 重选。
+            onPointerDown={(e) => e.stopPropagation()}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                cancel();
+              } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                e.stopPropagation();
+                commit();
+              }
+            }}
+          />
+        </div>
       ) : label && label.text ? (
         <div className="cv-shape__label" style={labelStyle}>
           {label.text}
