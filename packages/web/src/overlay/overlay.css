@@ -1141,11 +1141,12 @@
   stroke-linecap: round;
 }
 
-/* 连线点选命中区 —— 透明粗描边，仅在描边上响应指针（线宽容差更大、好点中）。
-   父级 .ov-connector 是 pointer-events:none，本元素显式开启即可被点中。 */
+/* 连线点选 / 拖拽命中区 —— 透明粗描边，仅在描边上响应指针（线宽容差更大、
+   好点中）。父级 .ov-connector 是 pointer-events:none，本元素显式开启即可被
+   点中 / 拖动。 */
 .ov-connector-hit {
   pointer-events: stroke;
-  cursor: pointer;
+  cursor: move;
 }
 
 /* 连线选中态 —— 可见线之下垫一道半透明陶土橙光晕。 */

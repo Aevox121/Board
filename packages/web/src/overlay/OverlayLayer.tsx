@@ -332,8 +332,8 @@ interface LeftPress {
 }
 
 /**
- * 左键框选中按「包围盒相交」判定的元素类型。连线另按线段相交单独判定
- * （见 connectorAnchors / segmentIntersectsRect）；区域 / 建议不纳入框选。
+ * 左键框选中按「包围盒相交」判定的元素类型。连线另按线段相交、区域另按
+ * 「完整罩住」单独判定（见 onLeftUp）；建议不纳入框选。
  */
 const MARQUEE_TYPES: ReadonlySet<string> = new Set([
   'shape',
@@ -728,6 +728,8 @@ export function OverlayLayer({
     elements: [],
     pasteCount: 0,
   });
+  // 连线本体拖拽的瞬时状态镜像 —— 连线是 SVG、走 window 监听，回调据此读最新值。
+  const connDragRef = useRef<DragState | null>(null);
 
   /** 选中单个元素（替换当前选区）。 */
   function selectOnly(id: string): void {
@@ -1009,8 +1011,8 @@ export function OverlayLayer({
       if (!p || !p.moved) return; // 只是点击 —— 选区已在 onDown 处理
       const c = toCanvas(e.clientX, e.clientY);
       const box = normRect(p.startCX, p.startCY, c.x, c.y);
-      // 与虚线框相交的元素：卡片 / 图形 / 手绘按包围盒判定，连线按线段判定
-      // （区域 / 建议不纳入框选）。
+      // 与虚线框相交的元素：卡片 / 图形 / 手绘按包围盒判定，连线按线段判定，
+      // 区域须被虚线框完整罩住才选中（建议不纳入框选）。
       const els = sceneRef.current.elements;
       const hits: string[] = [];
       for (const el of els) {
@@ -1019,6 +1021,16 @@ export function OverlayLayer({
         } else if (el.type === 'connector') {
           const { a, b } = connectorAnchors(el, els);
           if (segmentIntersectsRect(a, b, box)) hits.push(el.id);
+        } else if (el.type === 'region') {
+          // 区域是大容器 —— 须完整罩住才选中，否则在区域内框选卡片会误选区域。
+          if (
+            box.x <= el.x &&
+            box.y <= el.y &&
+            box.x + box.width >= el.x + el.width &&
+            box.y + box.height >= el.y + el.height
+          ) {
+            hits.push(el.id);
+          }
         }
       }
       setSelectedIds((prev) => {
@@ -1630,14 +1642,24 @@ export function OverlayLayer({
   }
 
   /**
-   * 多选整组拖拽结束 —— 把选区内全部元素按相同偏移整体平移。
-   * 纯空间批量移动：不重设归属、不触发区域增长、不做文件系统层面的移动
-   * （区分于单文件卡跨区域拖拽）。各元素标记为手动定位，避免被自动排版拉回。
+   * 多选整组拖拽结束 —— 全体成员按相同偏移整体平移，落点处的可归属元素
+   * （文件 / 文本 / 图形 / 手绘）重设所属区域，成为该区域下的元素。
+   *
+   *  - 随被拖区域一起移动的子元素保持归属不变（它们跟区域整体平移）。
+   *  - 文件改变归属须经 server 移动磁盘上的真实文件（其余元素仅改内存场景）。
+   *  - 落定后 growRegions 让区域增长以包住落入的内容。
    */
   function finishGroupDrag(d: DragState): void {
     const cur = sceneRef.current;
     const ts = new Date().toISOString();
-    const elements = cur.elements.map((e): Element =>
+    // 本次一起移动的区域 —— 其子元素随区域整体平移，不重新判定归属。
+    const movedRegionIds = new Set<string>();
+    for (const id of d.memberIds) {
+      const el = cur.elements.find((x) => x.id === id);
+      if (el?.type === 'region') movedRegionIds.add(id);
+    }
+    // 1. 全体成员按偏移平移。
+    const moved = cur.elements.map((e): Element =>
       d.memberIds.has(e.id)
         ? ({
             ...e,
@@ -1649,7 +1671,51 @@ export function OverlayLayer({
           } as Element)
         : e,
     );
-    replaceScene({ ...cur, elements }, 'canvas');
+    // 2. 落点处重设归属 —— 文件 / 文本 / 图形 / 手绘按落点所在区域设 parentId。
+    const regions = regionsOf(moved);
+    const fileMoves: { el: FileElement; target: RegionElement | null }[] = [];
+    const reparented = moved.map((e): Element => {
+      if (!d.memberIds.has(e.id)) return e;
+      if (
+        e.type !== 'file' &&
+        e.type !== 'text' &&
+        e.type !== 'shape' &&
+        e.type !== 'draw'
+      ) {
+        return e;
+      }
+      // 随被拖区域一起移动的子元素 —— 保持原归属。
+      if (e.parentId && movedRegionIds.has(e.parentId)) return e;
+      const target = regionForCard(
+        { x: e.x, y: e.y, width: e.width, height: e.height },
+        regions,
+      );
+      if (e.type === 'file') {
+        const curRegion = regionForFile(e.path, regions);
+        if ((target?.id ?? null) !== (curRegion?.id ?? null)) {
+          fileMoves.push({ el: e, target });
+        }
+      }
+      return { ...e, parentId: target ? target.id : null } as Element;
+    });
+    // 3. 区域增长以包住落入的内容。
+    const grown = growRegions(reparented);
+    replaceScene({ ...cur, elements: grown.elements }, 'canvas');
+    // 4. 文件改变归属 —— 经 server 移动磁盘上的真实文件（SSE 刷回权威场景）。
+    if (fileMoves.length > 0) {
+      if (connection !== 'connected') {
+        window.alert('未连接 board-server，文件元素的归属未在磁盘上同步。');
+        return;
+      }
+      for (const { el, target } of fileMoves) {
+        const baseName = fileBaseName(el.path);
+        const to = target ? `${target.path}/${baseName}` : baseName;
+        void moveFile(el.path, to, el.x, el.y).catch((err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          window.alert(`移动文件「${baseName}」失败：${msg}`);
+        });
+      }
+    }
   }
 
   /** 拖拽结束分发。 */
@@ -1930,6 +1996,87 @@ export function OverlayLayer({
   /** 指针取消（如系统手势打断）—— 直接丢弃拖拽，不改场景。 */
   function handlePointerCancel(e: React.PointerEvent<HTMLDivElement>): void {
     setDrag((d) => (d && d.pointerId === e.pointerId ? null : d));
+  }
+
+  /**
+   * 指针按下连线本体 —— 发起整条连线（或其所在多选组）的拖拽。
+   *
+   * 连线是 SVG，不走卡槽的指针捕获，改用 window 监听（与端点重连一致）。
+   * 复用整组拖拽（kind='group'）：单拖连线即 memberIds 仅含其自身。
+   */
+  function beginConnectorDrag(
+    connId: string,
+    e: React.PointerEvent<SVGPolylineElement>,
+  ): void {
+    if (e.button !== 0) return;
+    const cur = sceneRef.current;
+    const inGroup =
+      selectedIdsRef.current.has(connId) && selectedIdsRef.current.size > 1;
+    if (!inGroup) selectOnly(connId);
+    // 拖拽成员：在多选中则整组，否则仅连线自身；含区域则连带其子元素。
+    const members = new Set<string>(
+      inGroup ? selectedIdsRef.current : [connId],
+    );
+    for (const id of [...members]) {
+      const m = cur.elements.find((x) => x.id === id);
+      if (m?.type === 'region') {
+        for (const c of cur.elements) {
+          if (c.parentId === id) members.add(c.id);
+        }
+      }
+    }
+    const d: DragState = {
+      kind: 'group',
+      elementId: connId,
+      memberIds: members,
+      pointerId: e.pointerId,
+      startScreenX: e.clientX,
+      startScreenY: e.clientY,
+      startX: 0,
+      startY: 0,
+      offsetX: 0,
+      offsetY: 0,
+      moved: false,
+    };
+    connDragRef.current = d;
+    setDrag(d);
+    window.addEventListener('pointermove', onConnDragMove);
+    window.addEventListener('pointerup', onConnDragUp);
+    window.addEventListener('pointercancel', onConnDragUp);
+  }
+
+  /** 连线本体拖拽移动 —— window 监听，把屏幕位移换算为画布偏移。 */
+  function onConnDragMove(e: PointerEvent): void {
+    const d = connDragRef.current;
+    if (!d || e.pointerId !== d.pointerId) return;
+    const z = viewportRef.current.zoom;
+    const dxs = e.clientX - d.startScreenX;
+    const dys = e.clientY - d.startScreenY;
+    const next: DragState = {
+      ...d,
+      offsetX: dxs / z,
+      offsetY: dys / z,
+      moved: d.moved || Math.hypot(dxs, dys) > DRAG_THRESHOLD_PX,
+    };
+    connDragRef.current = next;
+    setDrag(next);
+  }
+
+  /** 连线本体拖拽结束 —— 越过阈值则按整组拖拽落定，否则按点选处理。 */
+  function onConnDragUp(e: PointerEvent): void {
+    const d = connDragRef.current;
+    if (!d || e.pointerId !== d.pointerId) return;
+    window.removeEventListener('pointermove', onConnDragMove);
+    window.removeEventListener('pointerup', onConnDragUp);
+    window.removeEventListener('pointercancel', onConnDragUp);
+    connDragRef.current = null;
+    setDrag(null);
+    if (e.type === 'pointercancel') return; // 取消 —— 丢弃，不改场景
+    if (d.moved) finishDrag(d);
+    else if (selectedIdsRef.current.size > 1) {
+      // 多选中对连线的单击（未拖拽）—— 选区收敛到该连线。
+      selectOnly(d.elementId);
+    }
   }
 
   /**
@@ -2341,6 +2488,7 @@ export function OverlayLayer({
           onSelect={(id, additive) =>
             additive ? toggleInSelection(id) : selectOnly(id)
           }
+          onBodyDown={beginConnectorDrag}
           interactive={!connectMode}
           zoom={zoom}
           onEndpointCommit={rebindConnectorEndpoint}

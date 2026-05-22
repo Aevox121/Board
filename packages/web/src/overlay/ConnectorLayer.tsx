@@ -82,6 +82,14 @@ export interface ConnectorLayerProps {
    */
   onSelect?: (id: string, additive: boolean) => void;
   /**
+   * 指针按下连线本体（非端点手柄、非 shift 点选）—— 由 OverlayLayer 发起整条
+   * 连线（或其所在多选组）的拖拽。未提供时退化为仅选中。
+   */
+  onBodyDown?: (
+    id: string,
+    e: ReactPointerEvent<SVGPolylineElement>,
+  ) => void;
+  /**
    * 是否启用连线点选命中区。连线模式（箭头工具）下传 false —— 否则连线的
    * 透明命中描边会挡住「从连线上画起 / 画到」。
    */
@@ -189,8 +197,16 @@ function arcMidpoint(pts: Pt[]): Pt {
   return pts[pts.length - 1]!;
 }
 
-/** 自由连线（无端点绑定）的折线顶点 —— 取 meta.ex.points，缺省则用包围盒对角。 */
-function freePoints(conn: ConnectorElement): Pt[] {
+/**
+ * 自由连线（无端点绑定）的折线顶点 —— 取 meta.ex.points，缺省则用包围盒对角。
+ * `ox`/`oy` 为连线原点：默认取 `conn.x/y`，连线本体被整体拖拽时由调用方传入
+ * 实时原点，使自由端跟随拖拽。
+ */
+function freePoints(
+  conn: ConnectorElement,
+  ox: number = conn.x,
+  oy: number = conn.y,
+): Pt[] {
   const ex = conn.meta?.['ex'];
   const raw =
     ex && typeof ex === 'object'
@@ -204,11 +220,11 @@ function freePoints(conn: ConnectorElement): Pt[] {
           typeof p[0] === 'number' &&
           typeof p[1] === 'number',
       )
-      .map((p) => ({ x: conn.x + p[0], y: conn.y + p[1] }));
+      .map((p) => ({ x: ox + p[0], y: oy + p[1] }));
   }
   return [
-    { x: conn.x, y: conn.y },
-    { x: conn.x + conn.width, y: conn.y + conn.height },
+    { x: ox, y: oy },
+    { x: ox + conn.width, y: oy + conn.height },
   ];
 }
 
@@ -235,6 +251,7 @@ export function ConnectorLayer({
   liveRects,
   selectedIds,
   onSelect,
+  onBodyDown,
   interactive = true,
   zoom = 1,
   onEndpointCommit,
@@ -284,8 +301,13 @@ export function ConnectorLayer({
       const aRect = aBound ? rectOf(conn.start.elementId!) : null;
       const bRect = bBound ? rectOf(conn.end.elementId!) : null;
 
+      // 连线本体正被整体拖拽时,liveRects 含其实时矩形 —— 用作自由端原点。
+      const selfLive = liveRects.get(conn.id);
+      const ox = selfLive ? selfLive.x : conn.x;
+      const oy = selfLive ? selfLive.y : conn.y;
+
       // 两端的「自由位置」—— 拖拽端用光标位置，否则取 meta.ex.points。
-      const free = freePoints(conn);
+      const free = freePoints(conn, ox, oy);
       let fa = free[0]!;
       let fb = free[free.length - 1]!;
       if (drag?.which === 'start') fa = { x: drag.curX, y: drag.curY };
@@ -491,7 +513,15 @@ export function ConnectorLayer({
                   strokeWidth={Math.max(g.strokeWidth + 10, 14)}
                   onPointerDown={(e) => {
                     e.stopPropagation();
-                    onSelect(g.id, e.shiftKey);
+                    if (e.shiftKey) {
+                      // shift 点选 —— 切换该连线在多选中的去留，不拖拽。
+                      onSelect(g.id, true);
+                    } else if (onBodyDown) {
+                      // 普通按下 —— 发起整条连线（或所在多选组）的拖拽。
+                      onBodyDown(g.id, e);
+                    } else {
+                      onSelect(g.id, false);
+                    }
                   }}
                 />
               ) : null}
