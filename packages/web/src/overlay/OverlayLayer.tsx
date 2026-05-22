@@ -3628,64 +3628,73 @@ export function OverlayLayer({
             onRotateCancel: handleRotateCancel,
           };
 
+          // 椭圆 / 菱形：命中区按真实形状裁剪 —— 包围盒「空心角」不再误选 /
+          // 误连。卡槽自身不收指针，由内层 .ov-shape-hit（clip-path 裁形）收。
+          const clipPath =
+            el.type === 'shape' && el.shape === 'ellipse'
+              ? 'ellipse(50% 50%)'
+              : el.type === 'shape' && el.shape === 'diamond'
+                ? 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)'
+                : null;
+
+          // 卡槽点选 / 进入待拖拽 —— 区域走头部手柄、不在此。
+          const slotPointerDown =
+            el.type === 'region'
+              ? undefined
+              : (e: React.PointerEvent<HTMLDivElement>): void => {
+                  if (e.button !== 0) return;
+                  if (el.locked) {
+                    // 锁定元素 —— 仅可点选（以便解锁），不拖拽。
+                    if (e.shiftKey) toggleInSelection(el.id);
+                    else setSelectedIds(new Set([el.id]));
+                    return;
+                  }
+                  if (e.shiftKey) {
+                    // shift 点选 —— 切换该元素（连同其编组）在选区中的去留。
+                    toggleInSelection(el.id);
+                    return;
+                  }
+                  // 点中元素属编组则选整组；点中已选元素则保持选区直接拖。
+                  const gset = groupMembersOf(el.id);
+                  const keepSel =
+                    selectedIds.has(el.id) && selectedIds.size > 1;
+                  if (!keepSel) setSelectedIds(gset);
+                  const groupDrag = keepSel || gset.size > 1;
+                  if (groupDrag) {
+                    beginDrag(e, el, 'group', keepSel ? undefined : gset);
+                  } else if (isFile || isText) {
+                    beginDrag(e, el, isFile ? 'file' : 'text');
+                  } else if (isShape || isDraw) {
+                    beginDrag(e, el, 'element');
+                  }
+                };
+          // 双击图形 —— 进入标签就地编辑。锁定元素不可编辑。
+          const slotDoubleClick =
+            isShape && !el.locked
+              ? (): void => setEditingLabelId(el.id)
+              : undefined;
+
           return (
             <div
               key={el.id}
-              className={className}
+              className={clipPath ? `${className} ov-slot--clipped` : className}
               style={slotStyle}
               data-element-id={el.id}
-              onPointerDown={
-                el.type === 'region'
-                  ? undefined
-                  : (e) => {
-                      // 点选该元素（显示选择框 / 手柄）并进入待拖拽态。
-                      // 区域走头部手柄，不在此。
-                      if (e.button !== 0) return;
-                      if (el.locked) {
-                        // 锁定元素 —— 仅可点选（以便解锁），不拖拽。
-                        if (e.shiftKey) toggleInSelection(el.id);
-                        else setSelectedIds(new Set([el.id]));
-                        return;
-                      }
-                      if (e.shiftKey) {
-                        // shift 点选 —— 切换该元素（连同其编组）在选区中的去留。
-                        toggleInSelection(el.id);
-                        return;
-                      }
-                      // 点中的元素属编组则选中整组；点中已选元素则保持选区直接拖。
-                      const gset = groupMembersOf(el.id);
-                      const keepSel =
-                        selectedIds.has(el.id) && selectedIds.size > 1;
-                      if (!keepSel) setSelectedIds(gset);
-                      const groupDrag = keepSel || gset.size > 1;
-                      if (groupDrag) {
-                        beginDrag(
-                          e,
-                          el,
-                          'group',
-                          keepSel ? undefined : gset,
-                        );
-                      } else if (isFile || isText) {
-                        beginDrag(e, el, isFile ? 'file' : 'text');
-                      } else if (isShape || isDraw) {
-                        beginDrag(e, el, 'element');
-                      }
-                    }
-              }
+              onPointerDown={clipPath ? undefined : slotPointerDown}
               onPointerMove={
-                el.type === 'region' ? undefined : handlePointerMove
+                clipPath || el.type === 'region'
+                  ? undefined
+                  : handlePointerMove
               }
-              onPointerUp={el.type === 'region' ? undefined : handlePointerUp}
+              onPointerUp={
+                clipPath || el.type === 'region' ? undefined : handlePointerUp
+              }
               onPointerCancel={
-                el.type === 'region' ? undefined : handlePointerCancel
+                clipPath || el.type === 'region'
+                  ? undefined
+                  : handlePointerCancel
               }
-              // 双击图形 —— 进入标签就地编辑（双击经指针捕获落在卡槽上）。
-              // 锁定元素不可编辑。
-              onDoubleClick={
-                isShape && !el.locked
-                  ? () => setEditingLabelId(el.id)
-                  : undefined
-              }
+              onDoubleClick={clipPath ? undefined : slotDoubleClick}
             >
               {el.type === 'region' ? (
                 <RegionCard
@@ -3732,6 +3741,23 @@ export function OverlayLayer({
               ) : (
                 <FileCard element={el} missing={missingFileIds.has(el.id)} />
               )}
+              {/* 形状命中层（椭圆 / 菱形）—— clip-path 裁成真实形状，承接
+                  点选 / 拖拽 / 双击；标签编辑态让位给下层 contentEditable。 */}
+              {clipPath ? (
+                <div
+                  className="ov-shape-hit"
+                  style={{
+                    clipPath,
+                    pointerEvents:
+                      editingLabelId === el.id ? 'none' : undefined,
+                  }}
+                  onPointerDown={slotPointerDown}
+                  onPointerMove={handlePointerMove}
+                  onPointerUp={handlePointerUp}
+                  onPointerCancel={handlePointerCancel}
+                  onDoubleClick={slotDoubleClick}
+                />
+              ) : null}
               {/* 选中态：选择框 —— 选中（含多选）即出现。 */}
               {selectedIds.has(el.id) ? (
                 <SelectionFrame element={el} width={rw} height={rh} />

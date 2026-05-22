@@ -46,6 +46,21 @@
   cursor: grab;
 }
 
+/* 形状命中层 —— 椭圆 / 菱形卡槽：卡槽自身不收指针，命中只发生在内层
+ * .ov-shape-hit（clip-path 裁成真实形状），包围盒「空心角」不再误选。 */
+.ov-slot--clipped {
+  pointer-events: none;
+}
+.ov-shape-hit {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  cursor: grab;
+}
+.ov-root--connect .ov-shape-hit {
+  pointer-events: none;
+}
+
 .ov-slot--shape.ov-slot--dragging {
   cursor: grabbing;
 }

@@ -52,31 +52,63 @@ export function pointInRect(px: number, py: number, rect: RectLike): boolean {
   );
 }
 
+/** 命中测试的目标元素 —— 携带形状信息以便按真实形状判定。 */
+export interface HitTarget extends RectLike {
+  id: string;
+  type: string;
+  /** 图形元素的几何形状（`rectangle` / `ellipse` / `diamond`）；非图形为 undefined。 */
+  shape?: string;
+}
+
+/**
+ * 点 (px,py) 是否落在元素真实形状内（形状外扩 tol）。
+ * 椭圆 / 菱形按真实形状判定；其余（矩形图形 / 卡片 / 区域等）按包围盒。
+ */
+export function pointInElementShape(
+  t: HitTarget,
+  px: number,
+  py: number,
+  tol = 0,
+): boolean {
+  if (t.type === 'shape' && (t.shape === 'ellipse' || t.shape === 'diamond')) {
+    const rx = t.width / 2 + tol;
+    const ry = t.height / 2 + tol;
+    if (rx <= 0 || ry <= 0) return false;
+    const nx = (px - (t.x + t.width / 2)) / rx;
+    const ny = (py - (t.y + t.height / 2)) / ry;
+    return t.shape === 'ellipse'
+      ? nx * nx + ny * ny <= 1
+      : Math.abs(nx) + Math.abs(ny) <= 1;
+  }
+  return (
+    px >= t.x - tol &&
+    px <= t.x + t.width + tol &&
+    py >= t.y - tol &&
+    py <= t.y + t.height + tol
+  );
+}
+
 /**
  * 命中 (px,py) 的「最小面积」元素 id —— 用于连线吸附与连线目标高亮。
  *
  * 取最小面积而非最高 z：点同时落在小卡片与其所在大区域内时，取卡片
  * （用户多半瞄的是卡片）；也不依赖易冲突的 z 值。`tol` 为命中容差。
+ * 椭圆 / 菱形按真实形状判定，包围盒「空心角」不命中。
  */
 export function smallestHitAt(
-  rects: ReadonlyArray<{ id: string } & RectLike>,
+  targets: ReadonlyArray<HitTarget>,
   px: number,
   py: number,
   tol = 0,
 ): string | null {
   let found: string | null = null;
   let bestArea = Infinity;
-  for (const r of rects) {
-    if (
-      px >= r.x - tol &&
-      px <= r.x + r.width + tol &&
-      py >= r.y - tol &&
-      py <= r.y + r.height + tol
-    ) {
-      const area = r.width * r.height;
+  for (const t of targets) {
+    if (pointInElementShape(t, px, py, tol)) {
+      const area = t.width * t.height;
       if (area < bestArea) {
         bestArea = area;
-        found = r.id;
+        found = t.id;
       }
     }
   }
