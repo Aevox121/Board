@@ -21,6 +21,8 @@ export interface TopBarProps {
   onRename: (name: string) => void;
   onImport: () => void;
   onExport: () => void;
+  /** 导出当前白板为图片（PNG / SVG）。 */
+  onExportImage: (format: 'png' | 'svg') => void;
   /** 触发保存到 server（仅已连接模式有效）。 */
   onSave: () => void;
   /** 元素计数，仅作轻量状态提示。 */
@@ -50,6 +52,7 @@ export function TopBar({
   onRename,
   onImport,
   onExport,
+  onExportImage,
   onSave,
   elementCount,
   connection,
@@ -60,6 +63,8 @@ export function TopBar({
 }: TopBarProps): JSX.Element {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(boardName);
+  // 「导出」下拉菜单开合。
+  const [exportOpen, setExportOpen] = useState(false);
 
   const commitName = (): void => {
     const next = draft.trim();
@@ -165,9 +170,57 @@ export function TopBar({
         <button type="button" className="btn btn--secondary" onClick={onImport}>
           导入 board.json
         </button>
-        <button type="button" className="btn btn--secondary" onClick={onExport}>
-          导出 board.json
-        </button>
+        <div className="tb-export">
+          <button
+            type="button"
+            className="btn btn--secondary"
+            onClick={() => setExportOpen((v) => !v)}
+            aria-haspopup="menu"
+            aria-expanded={exportOpen}
+          >
+            导出 ▾
+          </button>
+          {exportOpen ? (
+            <>
+              <div
+                className="tb-export__backdrop"
+                onClick={() => setExportOpen(false)}
+              />
+              <div className="tb-export__menu" role="menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setExportOpen(false);
+                    onExport();
+                  }}
+                >
+                  board.json
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setExportOpen(false);
+                    onExportImage('png');
+                  }}
+                >
+                  PNG 图片
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setExportOpen(false);
+                    onExportImage('svg');
+                  }}
+                >
+                  SVG 图片
+                </button>
+              </div>
+            </>
+          ) : null}
+        </div>
       </div>
     </header>
   );

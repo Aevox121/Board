@@ -23,6 +23,7 @@ import { TopBar, type SaveState } from './components/TopBar';
 import { CanvasShell } from './canvas/CanvasShell';
 import { FolderPanel } from './components/FolderPanel';
 import { downloadBoardJSON, pickAndParseBoardJSON } from './board/boardFile';
+import { exportBoardImage } from './board/exportImage';
 import { BoardParseError, diffToOps, type BoardOp, type BoardScene } from '@board/core';
 import { checkHealth, fetchBoard, sendOps, ServerError } from './server/client';
 import { subscribeBoardEvents } from './server/events';
@@ -180,6 +181,18 @@ function BoardApp(): JSX.Element {
     downloadBoardJSON(scene, `${safe}.json`);
   }, [scene, meta.name]);
 
+  const handleExportImage = useCallback(
+    async (format: 'png' | 'svg') => {
+      const safe = meta.name.replace(/[^\p{L}\p{N}_-]+/gu, '-') || 'board';
+      try {
+        await exportBoardImage(scene, format, safe);
+      } catch (e) {
+        window.alert(`导出失败：${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+    [scene, meta.name],
+  );
+
   const handleImport = useCallback(async () => {
     try {
       const imported = await pickAndParseBoardJSON();
@@ -226,6 +239,7 @@ function BoardApp(): JSX.Element {
         onRename={renameBoard}
         onImport={handleImport}
         onExport={handleExport}
+        onExportImage={handleExportImage}
         onSave={handleSave}
         elementCount={scene.elements.length}
         connection={connection}

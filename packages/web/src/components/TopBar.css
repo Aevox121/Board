@@ -195,3 +195,49 @@
 .btn--secondary.is-active:hover {
   background: var(--c-accent-tint);
 }
+
+/* ── 「导出」下拉菜单 ───────────────────────────────── */
+
+.tb-export {
+  position: relative;
+}
+
+/* 透明遮罩 —— 点击菜单外区域关闭。 */
+.tb-export__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+}
+
+.tb-export__menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 21;
+  display: flex;
+  flex-direction: column;
+  min-width: 140px;
+  padding: var(--space-1);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+
+.tb-export__menu button {
+  appearance: none;
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--c-ink);
+  cursor: pointer;
+  transition: background var(--dur-micro) var(--ease);
+}
+
+.tb-export__menu button:hover {
+  background: var(--c-surface-sunken);
+}
