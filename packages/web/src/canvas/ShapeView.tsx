@@ -47,6 +47,26 @@ function fontStack(family: Style['fontFamily']): string {
   return 'var(--font-hand, "Comic Sans MS", cursive)';
 }
 
+/**
+ * 圆角矩形的 SVG path（局部坐标，左上角为原点）—— roughjs `rs.rectangle`
+ * 不支持圆角，故 cornerRadius>0 时改走 `rs.path`。半径夹到不超过半边长。
+ */
+function roundedRectPath(w: number, h: number, radius: number): string {
+  const r = Math.max(0, Math.min(radius, w / 2, h / 2));
+  return [
+    `M ${r} 0`,
+    `H ${w - r}`,
+    `A ${r} ${r} 0 0 1 ${w} ${r}`,
+    `V ${h - r}`,
+    `A ${r} ${r} 0 0 1 ${w - r} ${h}`,
+    `H ${r}`,
+    `A ${r} ${r} 0 0 1 0 ${h - r}`,
+    `V ${r}`,
+    `A ${r} ${r} 0 0 1 ${r} 0`,
+    'Z',
+  ].join(' ');
+}
+
 export interface ShapeViewProps {
   element: ShapeElement;
 }
@@ -78,6 +98,8 @@ export function ShapeView({ element }: ShapeViewProps): JSX.Element {
         ],
         opts,
       );
+    } else if (style.cornerRadius > 0) {
+      node = rs.path(roundedRectPath(w, h, style.cornerRadius), opts);
     } else {
       node = rs.rectangle(0, 0, w, h, opts);
     }

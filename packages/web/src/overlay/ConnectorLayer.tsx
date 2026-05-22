@@ -566,7 +566,7 @@ export function ConnectorLayer({
   );
 }
 
-/** 渲染一个端点装饰（箭头三角 / 圆点 / 无）。 */
+/** 渲染一个端点装饰（开口箭头 / 实心三角 / 圆点 / 无）。 */
 function renderHead(
   kind: ArrowHead,
   tip: Pt,
@@ -580,6 +580,23 @@ function renderHead(
       <circle cx={tip.x} cy={tip.y} r={DOT_R + strokeWidth * 0.4} fill={color} />
     );
   }
-  // arrow / triangle 同以填充三角形呈现。
+  if (kind === 'arrow') {
+    // 开口箭头 —— 两道描边线（V 形），不填充。
+    const bx = tip.x - dir.x * ARROW_LEN;
+    const by = tip.y - dir.y * ARROW_LEN;
+    const px = -dir.y * ARROW_HALF;
+    const py = dir.x * ARROW_HALF;
+    return (
+      <path
+        d={`M ${bx + px} ${by + py} L ${tip.x} ${tip.y} L ${bx - px} ${by - py}`}
+        fill="none"
+        stroke={color}
+        strokeWidth={strokeWidth}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    );
+  }
+  // triangle —— 实心三角形。
   return <path d={arrowPath(tip, dir)} fill={color} />;
 }

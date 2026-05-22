@@ -2,19 +2,21 @@
  * 选区面板 —— 左键选中任意元素 / 多选 / 编组后浮出的统一面板。
  *
  * 内容：
- *  - 统一样式：描边色 / 背景色 / 描边宽度 / 描边样式 / 不透明度
- *    （即 `board style` CLI / MCP 所改的字段）。多选时改动应用到整个选区。
- *  - 编组操作：编组 / 取消编组（按选区状态条件显示）。
+ *  - 统一样式：描边色 / 背景色 / 填充纹理 / 描边宽度 / 边角 / 描边样式 /
+ *    粗糙度 / 文字（字体 + 字号）/ 不透明度（即 `board style` CLI / MCP 所改
+ *    的字段）。多选时改动应用到整个选区。
+ *  - 连线专属：起点 / 终点箭头样式。
+ *  - 翻转 / 图层顺序 / 编组操作（按选区状态条件显示）。
  *
  * 改动即 patch / 触发回调，由 OverlayLayer 写回内存场景并自动保存。
  */
-import type { Style, StrokeStyle } from '@board/core';
+import type { ArrowHead, FillStyle, Style, StrokeStyle } from '@board/core';
 
 /** 描边预设色 —— 经典手绘白板描边色板。 */
 const STROKE_PRESETS = ['#1e1e1e', '#e03131', '#2f9e44', '#1971c2', '#f08c00'];
 /** 背景预设色 —— 经典手绘白板背景色板（首项为透明）。 */
 const BG_PRESETS = ['transparent', '#ffc9c9', '#b2f2bb', '#a5d8ff', '#ffec99'];
-/** 描边宽度三档 —— 与原生面板的 细 / 粗 / 特粗 对应。 */
+/** 描边宽度三档 —— 与原生面板的 细 / 中 / 粗 对应。 */
 const WIDTHS: ReadonlyArray<{ label: string; value: number }> = [
   { label: '细', value: 1 },
   { label: '中', value: 2 },
@@ -26,6 +28,42 @@ const STROKE_STYLES: ReadonlyArray<{ label: string; value: StrokeStyle }> = [
   { label: '虚线', value: 'dashed' },
   { label: '点线', value: 'dotted' },
 ];
+/** 填充纹理三档（`none` 渲染同 `solid`，故归入「实心」）。 */
+const FILL_STYLES: ReadonlyArray<{ label: string; value: FillStyle }> = [
+  { label: '实心', value: 'solid' },
+  { label: '斜线', value: 'hachure' },
+  { label: '交叉', value: 'cross-hatch' },
+];
+/** 手绘粗糙度三档。 */
+const ROUGHNESS: ReadonlyArray<{ label: string; value: number }> = [
+  { label: '平整', value: 0 },
+  { label: '适中', value: 1 },
+  { label: '粗糙', value: 2 },
+];
+/** 字体三档。 */
+const FONT_FAMILIES: ReadonlyArray<{
+  label: string;
+  value: Style['fontFamily'];
+}> = [
+  { label: '手写', value: 'hand' },
+  { label: '正常', value: 'normal' },
+  { label: '等宽', value: 'code' },
+];
+/** 字号三档。 */
+const FONT_SIZES: ReadonlyArray<{ label: string; value: number }> = [
+  { label: '小', value: 16 },
+  { label: '中', value: 20 },
+  { label: '大', value: 28 },
+];
+/** 端点箭头四档。 */
+const ARROW_HEADS: ReadonlyArray<{ label: string; value: ArrowHead }> = [
+  { label: '无', value: 'none' },
+  { label: '箭头', value: 'arrow' },
+  { label: '三角', value: 'triangle' },
+  { label: '圆点', value: 'dot' },
+];
+/** 选「圆角」时赋给 cornerRadius 的半径值（直角为 0）。 */
+const ROUND_RADIUS = 16;
 
 export interface StylePanelProps {
   /** 选区的代表样式 —— 多选时取首个元素的样式作为指示值。 */
@@ -34,8 +72,21 @@ export interface StylePanelProps {
   count: number;
   /** 选区是否含可填充元素（非连线）—— 决定是否显示「背景」一节。 */
   hasFill: boolean;
+  /** 选区是否含图形 / 手绘 —— 决定是否显示「粗糙度」一节。 */
+  hasRough: boolean;
+  /** 选区是否含矩形图形 —— 决定是否显示「边角」一节。 */
+  hasRect: boolean;
+  /** 选区是否含文本 / 带标签图形 —— 决定是否显示「文字」一节。 */
+  hasText: boolean;
+  /** 选区代表连线的端点箭头；无连线时为 null（不显示「箭头」一节）。 */
+  arrows: { startArrow: ArrowHead; endArrow: ArrowHead } | null;
   /** 样式补丁回调 —— 由 OverlayLayer 应用到整个选区。 */
   onChange: (patch: Partial<Style>) => void;
+  /** 连线专属字段补丁（起点 / 终点箭头）—— 仅作用于选区内的连线。 */
+  onArrowChange: (patch: {
+    startArrow?: ArrowHead;
+    endArrow?: ArrowHead;
+  }) => void;
   /** 选区 ≥2 时可编组。 */
   canGroup: boolean;
   /** 选区含已编组元素时可取消编组。 */
@@ -66,12 +117,52 @@ function nearestWidth(w: number): number {
   return best;
 }
 
-/** 选区面板（样式 + 编组）。 */
+/** 把任意字号吸附到最接近的预设档（供分段按钮高亮）。 */
+function nearestSize(s: number): number {
+  let best = FONT_SIZES[0]!.value;
+  for (const x of FONT_SIZES) {
+    if (Math.abs(x.value - s) < Math.abs(best - s)) best = x.value;
+  }
+  return best;
+}
+
+/** 一行分段按钮 —— 选中项高亮。 */
+function Seg<T extends string | number>({
+  options,
+  value,
+  onPick,
+}: {
+  options: ReadonlyArray<{ label: string; value: T }>;
+  value: T;
+  onPick: (v: T) => void;
+}): JSX.Element {
+  return (
+    <div className="ov-seg">
+      {options.map((o) => (
+        <button
+          key={String(o.value)}
+          type="button"
+          className={'ov-seg__btn' + (value === o.value ? ' ov-seg__btn--on' : '')}
+          onClick={() => onPick(o.value)}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** 选区面板（样式 + 连线箭头 + 编组）。 */
 export function StylePanel({
   style: s,
   count,
   hasFill,
+  hasRough,
+  hasRect,
+  hasText,
+  arrows,
   onChange,
+  onArrowChange,
   canGroup,
   canUngroup,
   onGroup,
@@ -81,6 +172,12 @@ export function StylePanel({
   onLayer,
 }: StylePanelProps): JSX.Element {
   const widthSel = nearestWidth(s.strokeWidth);
+  // `none` 与 `solid` 渲染一致，归入「实心」高亮。
+  const fillSel: FillStyle = s.fillStyle === 'none' ? 'solid' : s.fillStyle;
+  const roughSel = Math.round(s.roughness);
+  const sizeSel = nearestSize(s.fontSize);
+  // 「填充」仅在选区有非透明背景时才有意义（透明背景下填充纹理不可见）。
+  const showFill = hasFill && s.backgroundColor !== 'transparent';
 
   return (
     <div
@@ -146,43 +243,99 @@ export function StylePanel({
         </section>
       ) : null}
 
+      {showFill ? (
+        <section className="ov-style-sec">
+          <span className="ov-style-sec__label">填充</span>
+          <Seg
+            options={FILL_STYLES}
+            value={fillSel}
+            onPick={(v) => onChange({ fillStyle: v })}
+          />
+        </section>
+      ) : null}
+
       <section className="ov-style-sec">
         <span className="ov-style-sec__label">描边宽度</span>
-        <div className="ov-seg">
-          {WIDTHS.map((w) => (
-            <button
-              key={w.value}
-              type="button"
-              className={
-                'ov-seg__btn' +
-                (widthSel === w.value ? ' ov-seg__btn--on' : '')
-              }
-              onClick={() => onChange({ strokeWidth: w.value })}
-            >
-              {w.label}
-            </button>
-          ))}
-        </div>
+        <Seg
+          options={WIDTHS}
+          value={widthSel}
+          onPick={(v) => onChange({ strokeWidth: v })}
+        />
       </section>
+
+      {hasRect ? (
+        <section className="ov-style-sec">
+          <span className="ov-style-sec__label">边角</span>
+          <Seg
+            options={[
+              { label: '直角', value: 0 },
+              { label: '圆角', value: 1 },
+            ]}
+            value={s.cornerRadius > 0 ? 1 : 0}
+            onPick={(v) =>
+              onChange({ cornerRadius: v === 1 ? ROUND_RADIUS : 0 })
+            }
+          />
+        </section>
+      ) : null}
 
       <section className="ov-style-sec">
         <span className="ov-style-sec__label">描边样式</span>
-        <div className="ov-seg">
-          {STROKE_STYLES.map((ss) => (
-            <button
-              key={ss.value}
-              type="button"
-              className={
-                'ov-seg__btn' +
-                (s.strokeStyle === ss.value ? ' ov-seg__btn--on' : '')
-              }
-              onClick={() => onChange({ strokeStyle: ss.value })}
-            >
-              {ss.label}
-            </button>
-          ))}
-        </div>
+        <Seg
+          options={STROKE_STYLES}
+          value={s.strokeStyle}
+          onPick={(v) => onChange({ strokeStyle: v })}
+        />
       </section>
+
+      {hasRough ? (
+        <section className="ov-style-sec">
+          <span className="ov-style-sec__label">粗糙度</span>
+          <Seg
+            options={ROUGHNESS}
+            value={roughSel}
+            onPick={(v) => onChange({ roughness: v })}
+          />
+        </section>
+      ) : null}
+
+      {hasText ? (
+        <section className="ov-style-sec">
+          <span className="ov-style-sec__label">字体</span>
+          <Seg
+            options={FONT_FAMILIES}
+            value={s.fontFamily}
+            onPick={(v) => onChange({ fontFamily: v })}
+          />
+          <Seg
+            options={FONT_SIZES}
+            value={sizeSel}
+            onPick={(v) => onChange({ fontSize: v })}
+          />
+        </section>
+      ) : null}
+
+      {arrows ? (
+        <section className="ov-style-sec">
+          <span className="ov-style-sec__label">起点箭头</span>
+          <Seg
+            options={ARROW_HEADS}
+            value={arrows.startArrow}
+            onPick={(v) => onArrowChange({ startArrow: v })}
+          />
+        </section>
+      ) : null}
+
+      {arrows ? (
+        <section className="ov-style-sec">
+          <span className="ov-style-sec__label">终点箭头</span>
+          <Seg
+            options={ARROW_HEADS}
+            value={arrows.endArrow}
+            onPick={(v) => onArrowChange({ endArrow: v })}
+          />
+        </section>
+      ) : null}
 
       <section className="ov-style-sec">
         <span className="ov-style-sec__label">不透明度</span>

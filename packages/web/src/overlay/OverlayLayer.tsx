@@ -19,6 +19,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
+  ArrowHead,
   BoardScene,
   ConnectorElement,
   DrawElement,
@@ -1669,6 +1670,29 @@ export function OverlayLayer({
     replaceScene(next, 'canvas');
   }
 
+  /**
+   * 改选区内连线的端点箭头（起点 / 终点）—— 与 `style` 字段无关，故单列；
+   * 仅作用于 `connector` 元素，其它类型跳过。只改内存场景，自动保存负责落盘。
+   */
+  function applyConnectorPatch(patch: {
+    startArrow?: ArrowHead;
+    endArrow?: ArrowHead;
+  }): void {
+    const cur = sceneRef.current;
+    const sel = selectedIdsRef.current;
+    if (sel.size === 0) return;
+    const ts = new Date().toISOString();
+    const next: BoardScene = {
+      ...cur,
+      elements: cur.elements.map((e): Element =>
+        sel.has(e.id) && e.type === 'connector'
+          ? ({ ...e, ...patch, updatedBy: actorId, updatedAt: ts } as Element)
+          : e,
+      ),
+    };
+    replaceScene(next, 'canvas');
+  }
+
   /** 同区域 / 收件区内拖拽文件卡 —— 仅就地重新定位（手动放置），不动文件归属。 */
   function repositionElement(
     base: BoardScene,
@@ -2608,6 +2632,27 @@ export function OverlayLayer({
   const selCanUngroup = selectedEls.some(
     (e) => (e.groupIds?.length ?? 0) > 0,
   );
+  // 选区面板各节按元素类型条件显示：粗糙度（图形 / 手绘）、边角（矩形）、
+  // 文字（文本 / 带标签图形）、箭头（连线）。
+  const selHasRough = selectedEls.some(
+    (e) => e.type === 'shape' || e.type === 'draw',
+  );
+  const selHasRect = selectedEls.some(
+    (e) => e.type === 'shape' && e.shape === 'rectangle',
+  );
+  const selHasText = selectedEls.some(
+    (e) => e.type === 'text' || (e.type === 'shape' && !!e.label?.text),
+  );
+  // 选区代表连线 —— 「箭头」节取其起点 / 终点箭头为指示值。
+  const selConnector = selectedEls.find(
+    (e): e is ConnectorElement => e.type === 'connector',
+  );
+  const selArrows = selConnector
+    ? {
+        startArrow: selConnector.startArrow,
+        endArrow: selConnector.endArrow,
+      }
+    : null;
 
   // 右键菜单（落在元素上时）的选区操作对象 —— 菜单的编组 / 取消编组 / 删除
   // 都作用于当前选区，与单选时的菜单一致。区域 / 文件夹背后是真实文件夹，
@@ -2978,7 +3023,12 @@ export function OverlayLayer({
           style={selectedEls[0]!.style}
           count={selectedEls.length}
           hasFill={selectedEls.some((e) => e.type !== 'connector')}
+          hasRough={selHasRough}
+          hasRect={selHasRect}
+          hasText={selHasText}
+          arrows={selArrows}
           onChange={applyStyleToSelection}
+          onArrowChange={applyConnectorPatch}
           canGroup={selCanGroup}
           canUngroup={selCanUngroup}
           onGroup={groupSelection}

@@ -11,10 +11,17 @@
  * 就地编辑（自研画布层增量4）：双击卡片正文进入编辑，文本域改 `draft`，
  * 失焦 / Ctrl+Enter 提交（经 `onCommit` 写回场景），Esc 取消。
  */
-import { useEffect, useRef, useState } from 'react';
-import type { TextElement } from '@board/core';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import type { Style, TextElement } from '@board/core';
 import { marked } from 'marked';
 import { cardRotation } from './util';
+
+/** fontFamily 枚举 → CSS 字体栈（与 ShapeView 同款映射）。 */
+function fontStack(family: Style['fontFamily']): string {
+  if (family === 'code') return 'var(--font-code, ui-monospace, monospace)';
+  if (family === 'normal') return 'var(--font-ui, system-ui, sans-serif)';
+  return 'var(--font-hand, "Comic Sans MS", cursive)';
+}
 
 export interface TextCardProps {
   element: TextElement;
@@ -58,6 +65,12 @@ export function TextCard({ element, onCommit }: TextCardProps): JSX.Element {
     setDraft(markdown);
   };
 
+  // 选区面板「文字」节所改的字体 / 字号 —— 应用到正文区（标题栏不受影响）。
+  const bodyStyle: CSSProperties = {
+    fontSize: `${element.style.fontSize}px`,
+    fontFamily: fontStack(element.style.fontFamily),
+  };
+
   return (
     <div
       className="ov-card ov-text"
@@ -84,6 +97,7 @@ export function TextCard({ element, onCommit }: TextCardProps): JSX.Element {
         <textarea
           ref={taRef}
           className="ov-text__body ov-text__editor"
+          style={bodyStyle}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           // 文本域内的指针操作不触发卡片拖拽。
@@ -103,6 +117,7 @@ export function TextCard({ element, onCommit }: TextCardProps): JSX.Element {
         markdown ? (
           <div
             className="ov-text__body ov-md"
+            style={bodyStyle}
             onDoubleClick={beginEdit}
             // marked 输出来自本地白板数据，受信，M2 直接内联。
             dangerouslySetInnerHTML={{ __html: html }}
@@ -110,6 +125,7 @@ export function TextCard({ element, onCommit }: TextCardProps): JSX.Element {
         ) : (
           <div
             className="ov-text__body ov-text__empty"
+            style={bodyStyle}
             onDoubleClick={beginEdit}
           >
             {onCommit ? '（空文本卡片 · 双击编辑）' : '（空文本卡片）'}
@@ -118,6 +134,7 @@ export function TextCard({ element, onCommit }: TextCardProps): JSX.Element {
       ) : (
         <pre
           className="ov-text__body ov-text__source"
+          style={bodyStyle}
           onDoubleClick={beginEdit}
         >
           {markdown}
