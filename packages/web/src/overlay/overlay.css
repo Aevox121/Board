@@ -812,6 +812,104 @@
   pointer-events: none;
 }
 
+/* ── 新建区域弹窗 ─────────────────────────────────────────────── */
+.ov-region-dialog__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 52;
+  pointer-events: auto;
+}
+.ov-region-dialog {
+  position: absolute;
+  z-index: 53;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  box-sizing: border-box;
+  width: 300px;
+  padding: var(--space-4);
+  font-family: var(--font-ui);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg, 0 10px 30px rgba(40, 36, 28, 0.14));
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+}
+.ov-region-dialog__title {
+  margin-bottom: var(--space-1);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-ink);
+}
+.ov-region-dialog__label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 12px;
+  color: var(--c-ink-2);
+}
+.ov-region-dialog__opt {
+  padding: 0 5px;
+  font-size: 11px;
+  color: var(--c-ink-3);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+}
+.ov-region-dialog__input,
+.ov-region-dialog__textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 7px 9px;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--c-ink);
+  background: var(--c-surface-sunken);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+.ov-region-dialog__input:focus,
+.ov-region-dialog__textarea:focus {
+  background: var(--c-surface);
+  border-color: var(--c-accent);
+}
+.ov-region-dialog__textarea {
+  min-height: 56px;
+  resize: vertical;
+}
+.ov-region-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.ov-region-dialog__btn {
+  padding: 6px 14px;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--c-ink);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.ov-region-dialog__btn:hover {
+  background: var(--c-surface-sunken);
+}
+.ov-region-dialog__btn--primary {
+  color: var(--c-on-accent);
+  background: var(--c-accent);
+  border-color: var(--c-accent);
+}
+.ov-region-dialog__btn--primary:hover {
+  background: var(--c-accent-strong);
+}
+.ov-region-dialog__btn--primary:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 /* ── 右键上下文菜单 ─────────────────────────────────────────────
  * 干净的暖色 UI（同顶栏风格，非手绘）。屏幕定位，故为 .ov-root 的直接
  * 子元素、不进变换容器。.ov-root 自身 pointer-events:none，菜单单独开启。 */

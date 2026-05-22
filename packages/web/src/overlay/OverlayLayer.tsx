@@ -60,6 +60,7 @@ import { EmbedView } from './EmbedView';
 import { TaskCard } from './TaskCard';
 import { SuggestionCard } from './SuggestionCard';
 import { RegionCard, type PointerHandlers } from './RegionCard';
+import { RegionCreateDialog } from './RegionCreateDialog';
 import { ConnectorLayer } from './ConnectorLayer';
 import { ResizeHandles, type ResizeApi } from './ResizeHandles';
 import { StylePanel } from './StylePanel';
@@ -1045,6 +1046,8 @@ export function OverlayLayer({
   const [marquee, setMarquee] = useState<RectLike | null>(null);
   // 创建手势瞬时状态（拖拽创建图形 / 手绘 / 连线）；null = 未在创建。
   const [creating, setCreating] = useState<CreatingState | null>(null);
+  // 新建区域弹窗 —— 拖出区域矩形后浮出（画布坐标矩形）；null = 无。
+  const [regionDraft, setRegionDraft] = useState<RectLike | null>(null);
 
   // 持有最新场景 / 视口，供事件回调（含挂在 window 上的）读取，避免闭包陈旧。
   const sceneRef = useRef(scene);
@@ -2058,13 +2061,37 @@ export function OverlayLayer({
    */
   async function deleteSelectedSet(ids: ReadonlySet<string>): Promise<void> {
     const cur = sceneRef.current;
-    const els = [...ids]
+    const picked = [...ids]
       .map((id) => cur.elements.find((e) => e.id === id))
-      .filter(
-        (e): e is Element =>
-          !!e && e.type !== 'region' && e.type !== 'folder' && !e.locked,
-      );
+      .filter((e): e is Element => !!e && !e.locked);
+    // 区域：级联删除（内部子元素 / 子区域一并删），文件夹移入回收站 ——
+    // 经 server 处理。文件夹（folder）仍不在画布删除范围。
+    const regions = picked.filter(
+      (e): e is RegionElement => e.type === 'region',
+    );
+    const els = picked.filter(
+      (e) => e.type !== 'region' && e.type !== 'folder',
+    );
     clearSelection();
+    if (regions.length > 0) {
+      if (connection !== 'connected') {
+        window.alert('未连接 board-server，无法删除区域。');
+      } else if (
+        window.confirm(
+          `删除区域「${regions.map((r) => r.label).join('、')}」` +
+            `及其内部全部内容？\n区域文件夹将移入回收站（可恢复）。`,
+        )
+      ) {
+        for (const r of regions) {
+          try {
+            await deleteElement(r.id);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            window.alert(`删除区域「${r.label}」失败：${msg}`);
+          }
+        }
+      }
+    }
     if (els.length === 0) return;
     const files = els.filter((e): e is FileElement => e.type === 'file');
     const others = els.filter((e) => e.type !== 'file');
@@ -2464,22 +2491,84 @@ export function OverlayLayer({
     void doMove(curScene, el, finalX, finalY, target, to);
   }
 
-  /** 区域拖拽结束 —— 把区域及其内全部子元素整体平移，落盘。 */
+  /**
+   * 区域拖拽结束 —— 区域 + 子元素整体平移；若落点落入另一区域则改归属
+   * （成为其子区域，经 server 移文件夹 + 重设 path / parentId）。
+   */
   function finishRegionDrag(d: DragState): void {
     const curScene = sceneRef.current;
     const region = curScene.elements.find(
       (x): x is RegionElement => x.id === d.elementId && x.type === 'region',
     );
     if (!region) return;
-    // 区域 + 其内子元素一起移动，保持「区域包含其内容」。
+    const regions = regionsOf(curScene.elements);
+    // 区域自身与其子区域（路径在其下）—— 不能把区域拖进自己的子区域。
+    const own = new Set<string>();
+    for (const r of regions) {
+      if (r.path === region.path || r.path.startsWith(`${region.path}/`)) {
+        own.add(r.id);
+      }
+    }
+    // 落点 = 区域平移后的中心；取最内层（路径最深）包含它的区域为目标。
+    const cx = region.x + d.offsetX + region.width / 2;
+    const cy = region.y + d.offsetY + region.height / 2;
+    let target: RegionElement | null = null;
+    let depth = -1;
+    for (const r of regions) {
+      if (own.has(r.id)) continue;
+      if (
+        cx >= r.x &&
+        cx <= r.x + r.width &&
+        cy >= r.y &&
+        cy <= r.y + r.height
+      ) {
+        const d2 = r.path.split('/').length;
+        if (d2 > depth) {
+          target = r;
+          depth = d2;
+        }
+      }
+    }
+    const newParent = target ? target.id : null;
+    if (newParent !== (region.parentId ?? null)) {
+      // 归属变化 —— 经 server 移文件夹 + 重设 path / parentId + 应用位移；
+      // 服务端落盘 + 广播，web 经 SSE 重载到权威场景。
+      if (connection === 'connected') {
+        void reparentRegion(region.id, newParent, d.offsetX, d.offsetY);
+        return;
+      }
+      window.alert('未连接 board-server，区域归属未更新（仅本地平移）。');
+    }
+    // 归属不变（或离线）—— 区域 + 直接子元素整体平移。
     const ids = new Set<string>([region.id]);
     for (const e of curScene.elements) {
       if (e.parentId === region.id) ids.add(e.id);
     }
-    const next = moveElementsBy(curScene, ids, d.offsetX, d.offsetY);
-    // 区域 + 其内全部子元素（含图形 / 手绘）已在场景中整体平移；覆盖层按
-    // 场景重渲染即跟随，无需额外同步。
-    replaceScene(next, 'canvas');
+    replaceScene(moveElementsBy(curScene, ids, d.offsetX, d.offsetY), 'canvas');
+  }
+
+  /** 经 server 把区域移入 / 移出另一区域（子区域嵌套）。 */
+  async function reparentRegion(
+    regionId: string,
+    parentId: string | null,
+    offsetX: number,
+    offsetY: number,
+  ): Promise<void> {
+    try {
+      const resp = await fetch('/api/regions/reparent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ regionId, parentId, offsetX, offsetY }),
+      });
+      const json = (await resp.json()) as { ok?: boolean; error?: string };
+      if (!resp.ok || !json.ok) {
+        window.alert(`移动区域失败：${json.error ?? resp.status}`);
+      }
+    } catch (err) {
+      window.alert(
+        `移动区域失败：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   /** 文本卡拖拽结束 —— 重新定位并按落点重设所属区域（文本无文件系统对应物）。 */
@@ -2683,7 +2772,13 @@ export function OverlayLayer({
         w = DEFAULT_REGION_W;
         h = DEFAULT_REGION_H;
       }
-      void createRegionViaDrag(x, y, Math.max(w, 120), Math.max(h, 80));
+      // 弹出新建区域弹窗（区域中心），由用户填名称 / 描述后提交。
+      setRegionDraft({
+        x,
+        y,
+        width: Math.max(w, 120),
+        height: Math.max(h, 80),
+      });
       onActiveToolChange?.('selection');
       return;
     } else {
@@ -2840,15 +2935,15 @@ export function OverlayLayer({
    * 拖出区域后创建 —— 弹名称输入，经 `POST /api/regions` 让 server 建
    * `files/<名称>/` 文件夹 + 区域元素;服务端落盘 + 广播，web 经 SSE 重载。
    */
-  async function createRegionViaDrag(
-    x: number,
-    y: number,
-    w: number,
-    h: number,
+  /**
+   * 提交新建区域 —— 经 `POST /api/regions` 让 server 建 `files/<名称>/`
+   * 文件夹（+ README 描述）与 region 元素;落盘 + 广播,web 经 SSE 重载。
+   */
+  async function submitRegion(
+    rect: RectLike,
+    name: string,
+    description: string,
   ): Promise<void> {
-    const raw = window.prompt('区域名称（将作为 files/ 下的文件夹名）');
-    const name = raw?.trim();
-    if (!name) return;
     if (name.includes('/') || name.includes('\\') || name.includes('..')) {
       window.alert('区域名不能包含路径分隔符或 ".."。');
       return;
@@ -2857,7 +2952,14 @@ export function OverlayLayer({
       const resp = await fetch('/api/regions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, x, y, width: w, height: h }),
+        body: JSON.stringify({
+          name,
+          description,
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+        }),
       });
       const json = (await resp.json()) as {
         ok?: boolean;
@@ -3949,13 +4051,13 @@ export function OverlayLayer({
     : null;
 
   // 右键菜单（落在元素上时）的选区操作对象 —— 菜单的编组 / 取消编组 / 删除
-  // 都作用于当前选区，与单选时的菜单一致。区域 / 文件夹背后是真实文件夹，
-  // 不在画布删除范围（与 board rm / Delete 键一致），故 menuDeletable 排除之。
+  // 都作用于当前选区，与单选时的菜单一致。文件夹不在画布删除范围；区域可
+  // 删除（级联删内容、文件夹移入回收站），故 menuDeletable 含区域、排文件夹。
   const menuSel: Element[] = menu && menu.onElement ? selectedEls : [];
   const menuCanGroup = menuSel.length >= 2;
   const menuCanUngroup = menuSel.some((e) => (e.groupIds?.length ?? 0) > 0);
   const menuDeletable = menuSel.filter(
-    (e) => e.type !== 'region' && e.type !== 'folder' && !e.locked,
+    (e) => e.type !== 'folder' && !e.locked,
   );
   // 菜单锁定项：选区全锁定显示「解锁」，否则「锁定」。
   const menuAllLocked =
@@ -4561,6 +4663,20 @@ export function OverlayLayer({
             </button>
           </div>
         </>
+      ) : null}
+
+      {/* 新建区域弹窗 —— 浮在拖出的区域矩形中心（屏幕坐标，不随缩放）。 */}
+      {regionDraft ? (
+        <RegionCreateDialog
+          screenX={(regionDraft.x + regionDraft.width / 2 + scrollX) * zoom}
+          screenY={(regionDraft.y + regionDraft.height / 2 + scrollY) * zoom}
+          onSubmit={(name, description) => {
+            const rect = regionDraft;
+            setRegionDraft(null);
+            void submitRegion(rect, name, description);
+          }}
+          onCancel={() => setRegionDraft(null)}
+        />
       ) : null}
     </div>
   );

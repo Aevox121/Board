@@ -25,7 +25,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, rename, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import {
@@ -659,6 +659,135 @@ async function handleCreateRegion(
 }
 
 /**
+ * POST /api/regions/reparent —— 把一个区域移入另一个区域（成为子区域）或
+ * 移回顶层。文件夹随之移动、自身与全部后代 path 重设前缀、parentId 改写,
+ * 并对整个子树应用拖拽位移 (offsetX/offsetY)。
+ */
+async function handleReparentRegion(
+  deps: HttpDeps,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch (err) {
+    fail(res, 400, errMsg(err));
+    return;
+  }
+  const b = (body ?? {}) as Record<string, unknown>;
+  const regionId = typeof b['regionId'] === 'string' ? b['regionId'] : '';
+  if (!regionId) {
+    fail(res, 400, '缺少 regionId');
+    return;
+  }
+  const parentId = typeof b['parentId'] === 'string' ? b['parentId'] : null;
+  const num = (v: unknown): number =>
+    typeof v === 'number' && Number.isFinite(v) ? v : 0;
+  const offsetX = num(b['offsetX']);
+  const offsetY = num(b['offsetY']);
+  const actor = typeof b['actor'] === 'string' ? b['actor'] : 'u_local';
+
+  const handle = await loadBoard(deps.dir);
+  const elements = handle.scene.elements;
+  const region = elements.find(
+    (e) => e.id === regionId && e.type === 'region',
+  );
+  if (!region) {
+    fail(res, 404, `未找到区域：${regionId}`);
+    return;
+  }
+  const oldPath = normalizePath((region as { path: string }).path);
+
+  // 子树：路径在区域下 + parentId 链可达区域。
+  const subtree = new Set<string>([region.id]);
+  for (const e of elements) {
+    const raw = (e as { path?: unknown }).path;
+    if (typeof raw === 'string') {
+      const p = normalizePath(raw);
+      if (p === oldPath || p.startsWith(`${oldPath}/`)) subtree.add(e.id);
+    }
+  }
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const e of elements) {
+      if (!subtree.has(e.id) && e.parentId && subtree.has(e.parentId)) {
+        subtree.add(e.id);
+        grew = true;
+      }
+    }
+  }
+
+  let parentPath = '';
+  if (parentId) {
+    const parent = elements.find(
+      (e) => e.id === parentId && e.type === 'region',
+    );
+    if (!parent) {
+      fail(res, 404, `未找到目标区域：${parentId}`);
+      return;
+    }
+    if (subtree.has(parentId)) {
+      fail(res, 400, '不能把区域移入自身或其子区域');
+      return;
+    }
+    parentPath = normalizePath((parent as { path: string }).path);
+  }
+
+  const seg = oldPath.slice(oldPath.lastIndexOf('/') + 1);
+  const newPath = parentPath ? `${parentPath}/${seg}` : seg;
+  if (newPath !== oldPath) {
+    try {
+      await stat(resolve(deps.dir, 'files', newPath));
+      fail(res, 409, `目标已存在: files/${newPath}`);
+      return;
+    } catch {
+      // 目标不存在，可移动
+    }
+    try {
+      await rename(
+        resolve(deps.dir, 'files', oldPath),
+        resolve(deps.dir, 'files', newPath),
+      );
+    } catch (err) {
+      fail(res, 500, `移动区域文件夹失败: ${errMsg(err)}`);
+      return;
+    }
+  }
+
+  const ts = new Date().toISOString();
+  const next = elements.map((e) => {
+    if (!subtree.has(e.id)) return e;
+    const patched = {
+      ...e,
+      x: e.x + offsetX,
+      y: e.y + offsetY,
+      updatedBy: actor,
+      updatedAt: ts,
+    };
+    const raw = (e as { path?: unknown }).path;
+    if (typeof raw === 'string') {
+      const p = normalizePath(raw);
+      (patched as { path: string }).path = newPath + p.slice(oldPath.length);
+    }
+    if (e.id === region.id) patched.parentId = parentId;
+    return patched;
+  });
+  try {
+    await saveBoard(deps.dir, handle.meta, {
+      ...handle.scene,
+      elements: next,
+    });
+    await deps.recordChange(actor);
+  } catch (err) {
+    fail(res, 500, `保存白板失败: ${errMsg(err)}`);
+    return;
+  }
+  ok(res, { regionId: region.id, path: newPath });
+}
+
+/**
  * POST /api/files/move —— 把 files/ 下的一个文件移动到新的相对路径。
  *
  * 请求体 `{ from, to, x?, y? }`：from/to 为相对 files/ 的路径。这是
@@ -1187,12 +1316,93 @@ async function handleDeleteElement(
     fail(res, 404, `未找到元素：${elementId}`);
     return;
   }
-  if (target.type === 'region' || target.type === 'folder') {
+  if (target.type === 'folder') {
     fail(
       res,
       400,
-      `不支持删除 ${target.type} 元素（其背后是真实文件夹，请直接操作文件夹）`,
+      '不支持删除 folder 元素（其背后是真实文件夹，请直接操作文件夹）',
     );
+    return;
+  }
+  if (target.type === 'region') {
+    // 区域级联删除：移除区域 + 其子树（路径在区域下 + parentId 链可达），
+    // 端点落在被删元素上的连线一并清掉；区域文件夹移入回收站（可恢复）。
+    const rp = normalizePath(target.path);
+    const remove = new Set<string>([target.id]);
+    for (const e of handle.scene.elements) {
+      const raw = (e as { path?: unknown }).path;
+      if (typeof raw === 'string') {
+        const p = normalizePath(raw);
+        if (p === rp || p.startsWith(`${rp}/`)) remove.add(e.id);
+      }
+    }
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const e of handle.scene.elements) {
+        if (!remove.has(e.id) && e.parentId && remove.has(e.parentId)) {
+          remove.add(e.id);
+          grew = true;
+        }
+      }
+    }
+    const next = handle.scene.elements.filter((e) => {
+      if (remove.has(e.id)) return false;
+      if (e.type === 'connector') {
+        const s = e.start.elementId;
+        const t = e.end.elementId;
+        if ((s && remove.has(s)) || (t && remove.has(t))) return false;
+      }
+      return true;
+    });
+    try {
+      await saveBoard(deps.dir, handle.meta, {
+        ...handle.scene,
+        elements: next,
+      });
+    } catch (err) {
+      fail(res, 500, `保存白板失败: ${errMsg(err)}`);
+      return;
+    }
+    let trashedFolder: string | null = null;
+    if (rp) {
+      const src = resolve(deps.dir, 'files', rp);
+      let onDisk = true;
+      try {
+        await stat(src);
+      } catch {
+        onDisk = false; // 文件夹已不在磁盘上 —— 仅删元素。
+      }
+      if (onDisk) {
+        const trashDir = resolve(deps.dir, '.runtime', 'trash');
+        const seg = rp.slice(rp.lastIndexOf('/') + 1);
+        const dest = resolve(trashDir, `${Date.now()}-${seg}`);
+        try {
+          await mkdir(trashDir, { recursive: true });
+          // 先尝试整体 rename（最快）；失败（如 Windows 监听句柄占用含子目录
+          // 的目录树）则回退为递归复制后递归删除。
+          try {
+            await rename(src, dest);
+          } catch {
+            await cp(src, dest, { recursive: true });
+            await rm(src, { recursive: true, force: true });
+          }
+          trashedFolder = rp;
+        } catch (err) {
+          console.error(
+            `[board-server] 区域文件夹移入回收站失败 (${rp}):`,
+            err,
+          );
+        }
+      }
+    }
+    await deps.recordChange(actor);
+    ok(res, {
+      removed: target.id,
+      type: 'region',
+      removedCount: remove.size,
+      trashedFolder,
+    });
     return;
   }
 
@@ -1450,6 +1660,11 @@ async function route(
   // POST /api/elements/delete —— 删除元素（含 file 移入回收站、连带清引用）
   if (path === '/api/elements/delete' && method === 'POST') {
     await handleDeleteElement(deps, req, res);
+    return;
+  }
+  // POST /api/regions/reparent —— 区域移入 / 移出区域（子区域嵌套）
+  if (path === '/api/regions/reparent' && method === 'POST') {
+    await handleReparentRegion(deps, req, res);
     return;
   }
   // POST /api/regions —— 在画布上创建区域（建文件夹 + region 元素）

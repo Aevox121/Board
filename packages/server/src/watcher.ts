@@ -80,8 +80,13 @@ export function startWatcher(
   }
 
   // ignoreInitial: true —— 启动时不重放已有文件（初始列表已由 listBoardFiles 提供）
+  // usePolling: true —— 用轮询而非原生 fs.watch。原生监听在 Windows 上会对被
+  //   监听的目录树持有句柄，导致服务端 rename / 删除含子目录的区域文件夹失败
+  //   （区域嵌套 / 删除）；轮询不持句柄，文件夹整体移动 / 删除即可正常进行。
   const watcher: FSWatcher = chokidar.watch(filesRoot, {
     ignoreInitial: true,
+    usePolling: true,
+    interval: 250,
     // 隐藏文件 / .runtime 由 isIgnoredPath 兜底，这里不额外配 ignored
   });
 
