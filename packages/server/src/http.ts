@@ -719,6 +719,34 @@ async function handleReparentRegion(
     }
   }
 
+  // 收编区域内的游离元素 —— parentId 为空、中心落在区域矩形内的图形 /
+  // 手绘 / 文本 / 图片 / 嵌入：它们「画在区域里却没归属」，区域移动时
+  // 本会被甩在原地，故一并纳入子树并归属该区域。
+  const ADOPTABLE: ReadonlySet<string> = new Set([
+    'shape',
+    'draw',
+    'text',
+    'image',
+    'embed',
+  ]);
+  const adopted = new Set<string>();
+  for (const e of elements) {
+    if (e.parentId != null || subtree.has(e.id) || !ADOPTABLE.has(e.type)) {
+      continue;
+    }
+    const ecx = e.x + e.width / 2;
+    const ecy = e.y + e.height / 2;
+    if (
+      ecx >= region.x &&
+      ecx <= region.x + region.width &&
+      ecy >= region.y &&
+      ecy <= region.y + region.height
+    ) {
+      adopted.add(e.id);
+      subtree.add(e.id);
+    }
+  }
+
   let parentPath = '';
   if (parentId) {
     const parent = elements.find(
@@ -772,6 +800,7 @@ async function handleReparentRegion(
       (patched as { path: string }).path = newPath + p.slice(oldPath.length);
     }
     if (e.id === region.id) patched.parentId = parentId;
+    else if (adopted.has(e.id)) patched.parentId = region.id;
     return patched;
   });
   try {

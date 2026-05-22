@@ -2716,6 +2716,10 @@ export function OverlayLayer({
   function commitCreation(st: CreatingState): void {
     const cur = sceneRef.current;
     const z = nextZ(cur.elements);
+    // 新元素落在某区域内 → 归属该区域（否则它只是「压在区域上」的游离元素，
+    // 区域移动 / 嵌套时不会跟随）。取与新元素矩形重叠最深的区域。
+    const regionAt = (r: RectLike): string | null =>
+      regionForCard(r, regionsOf(cur.elements))?.id ?? null;
     let el: Element | null = null;
     if (
       st.tool === 'rectangle' ||
@@ -2733,13 +2737,16 @@ export function OverlayLayer({
         w = DEFAULT_SHAPE_W;
         h = DEFAULT_SHAPE_H;
       }
+      const sw = Math.max(w, CREATE_MIN_DRAG);
+      const sh = Math.max(h, CREATE_MIN_DRAG);
       el = createShapeElement({
         x,
         y,
-        width: Math.max(w, CREATE_MIN_DRAG),
-        height: Math.max(h, CREATE_MIN_DRAG),
+        width: sw,
+        height: sh,
         createdBy: actorId,
         z,
+        parentId: regionAt({ x, y, width: sw, height: sh }),
         shape: st.tool,
       });
     } else if (st.tool === 'freedraw') {
@@ -2757,6 +2764,7 @@ export function OverlayLayer({
         height: h,
         createdBy: actorId,
         z,
+        parentId: regionAt({ x: minX, y: minY, width: w, height: h }),
         points: st.points.map((p) => [p[0] - minX, p[1] - minY]),
         pressures: st.pressures,
       });
@@ -2831,6 +2839,11 @@ export function OverlayLayer({
       height: NEW_TEXT_H,
       createdBy: actorId,
       z: nextZ(cur.elements),
+      parentId:
+        regionForCard(
+          { x: cx, y: cy, width: NEW_TEXT_W, height: NEW_TEXT_H },
+          regionsOf(cur.elements),
+        )?.id ?? null,
       markdown: '文本',
     });
     replaceScene({ ...cur, elements: [...cur.elements, el] }, 'canvas');
@@ -2858,13 +2871,20 @@ export function OverlayLayer({
       w *= s;
       h *= s;
     }
+    const ix = cx - w / 2;
+    const iy = cy - h / 2;
     const el = createImageElement({
-      x: cx - w / 2,
-      y: cy - h / 2,
+      x: ix,
+      y: iy,
       width: w,
       height: h,
       createdBy: actorId,
       z: nextZ(cur.elements),
+      parentId:
+        regionForCard(
+          { x: ix, y: iy, width: w, height: h },
+          regionsOf(cur.elements),
+        )?.id ?? null,
       assetId,
       naturalWidth: natW > 0 ? natW : Math.round(w),
       naturalHeight: natH > 0 ? natH : Math.round(h),
@@ -2906,13 +2926,20 @@ export function OverlayLayer({
     const cur = sceneRef.current;
     const w = 300;
     const h = 132;
+    const ex = cx - w / 2;
+    const ey = cy - h / 2;
     const el = createEmbedElement({
-      x: cx - w / 2,
-      y: cy - h / 2,
+      x: ex,
+      y: ey,
       width: w,
       height: h,
       createdBy: actorId,
       z: nextZ(cur.elements),
+      parentId:
+        regionForCard(
+          { x: ex, y: ey, width: w, height: h },
+          regionsOf(cur.elements),
+        )?.id ?? null,
       url,
     });
     replaceScene({ ...cur, elements: [...cur.elements, el] }, 'canvas');
