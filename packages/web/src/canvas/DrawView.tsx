@@ -11,7 +11,7 @@ import type { DrawElement } from '@board/core';
 import './canvas.css';
 
 /** perfect-freehand 输出的轮廓点 → SVG path（用二次贝塞尔平滑闭合）。 */
-function outlineToPath(outline: number[][]): string {
+export function outlineToPath(outline: number[][]): string {
   if (outline.length === 0) return '';
   const first = outline[0]!;
   const d: Array<string | number> = ['M', first[0]!, first[1]!, 'Q'];
@@ -22,6 +22,31 @@ function outlineToPath(outline: number[][]): string {
   }
   d.push('Z');
   return d.join(' ');
+}
+
+/** 笔迹命中区相对可见笔迹额外加宽的直径余量（画布单位）。 */
+const HIT_PAD = 22;
+
+/**
+ * 手绘元素的「命中轮廓」SVG path —— 比可见笔迹加宽 HIT_PAD 的填充轮廓，
+ * 用作 clip-path 把命中区裁成笔迹形状（细笔迹也留出可点容差）。
+ * 采样点少于 2 个时返回空串。
+ */
+export function drawHitPath(el: DrawElement): string {
+  if (el.points.length < 2) return '';
+  const input = el.points.map((p, i) => [
+    p[0],
+    p[1],
+    el.pressures?.[i] ?? 0.5,
+  ]);
+  const outline = getStroke(input, {
+    size: Math.max(2, el.style.strokeWidth * 4) + HIT_PAD,
+    thinning: 0.6,
+    smoothing: 0.5,
+    streamline: 0.5,
+    simulatePressure: !el.pressures || el.pressures.length === 0,
+  });
+  return outlineToPath(outline);
 }
 
 export interface DrawViewProps {

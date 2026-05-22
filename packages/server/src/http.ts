@@ -33,11 +33,13 @@ import {
   applyOps,
   clampPercent,
   commitDraftElements,
+  createRegionElement,
   createTask,
   describeSuggestion,
   growRegions,
   guessMime,
   isBoardOp,
+  nextZ,
   normalizePath,
   regionForFile,
   regionsOf,
@@ -480,6 +482,93 @@ async function handleUploadAsset(
   } catch (err) {
     fail(res, 500, `保存素材失败: ${errMsg(err)}`);
   }
+}
+
+/**
+ * POST /api/regions —— 在画布上创建一个区域。
+ *
+ * 区域本质是 files/ 下的文件夹（规格 R1）：建 `files/<name>/` 目录 +
+ * 写描述 README.md，并在 board.json 追加一个 region 元素（位置 / 尺寸由
+ * 画布拖拽给定）。落盘后 reconcile 同步并广播，各端经 SSE 重载。
+ */
+async function handleCreateRegion(
+  deps: HttpDeps,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch (err) {
+    fail(res, 400, errMsg(err));
+    return;
+  }
+  const b = (body ?? {}) as Record<string, unknown>;
+  const name = typeof b['name'] === 'string' ? b['name'].trim() : '';
+  if (!name) {
+    fail(res, 400, '缺少区域名');
+    return;
+  }
+  if (name.includes('/') || name.includes('\\') || name.includes('..')) {
+    fail(res, 400, '区域名不能包含路径分隔符或 ".."');
+    return;
+  }
+  const num = (v: unknown, d: number): number =>
+    typeof v === 'number' && Number.isFinite(v) ? v : d;
+  const x = num(b['x'], 0);
+  const y = num(b['y'], 0);
+  const width = Math.max(120, num(b['width'], 360));
+  const height = Math.max(80, num(b['height'], 240));
+  const description =
+    typeof b['description'] === 'string' ? b['description'] : '';
+  const actor = typeof b['actor'] === 'string' ? b['actor'] : 'u_local';
+
+  const handle = await loadBoard(deps.dir);
+  if (regionsOf(handle.scene.elements).some((r) => r.path === name)) {
+    fail(res, 409, `区域已存在: ${name}`);
+    return;
+  }
+  const regionDir = resolve(deps.dir, 'files', name);
+  let dirExists = true;
+  try {
+    await stat(regionDir);
+  } catch {
+    dirExists = false;
+  }
+  if (dirExists) {
+    fail(res, 409, `目标文件夹已存在: files/${name}`);
+    return;
+  }
+  try {
+    await mkdir(regionDir, { recursive: true });
+    await writeFile(join(regionDir, 'README.md'), description, 'utf8');
+  } catch (err) {
+    fail(res, 500, `创建区域文件夹失败: ${errMsg(err)}`);
+    return;
+  }
+  const element = createRegionElement({
+    x,
+    y,
+    width,
+    height,
+    createdBy: actor,
+    z: nextZ(handle.scene.elements),
+    autoPlaced: false,
+    path: name,
+    label: name,
+    description,
+  });
+  try {
+    await saveBoard(deps.dir, handle.meta, {
+      ...handle.scene,
+      elements: [...handle.scene.elements, element],
+    });
+    await deps.reconcileNow('region-create');
+  } catch (err) {
+    fail(res, 500, `保存区域失败: ${errMsg(err)}`);
+    return;
+  }
+  ok(res, { elementId: element.id, path: element.path });
 }
 
 /**
@@ -1274,6 +1363,11 @@ async function route(
   // POST /api/elements/delete —— 删除元素（含 file 移入回收站、连带清引用）
   if (path === '/api/elements/delete' && method === 'POST') {
     await handleDeleteElement(deps, req, res);
+    return;
+  }
+  // POST /api/regions —— 在画布上创建区域（建文件夹 + region 元素）
+  if (path === '/api/regions' && method === 'POST') {
+    await handleCreateRegion(deps, req, res);
     return;
   }
   // POST /api/assets —— 上传画布素材；GET /api/assets/<id> —— 读取素材

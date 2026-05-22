@@ -15,9 +15,12 @@ export type ToolId =
   | 'rectangle'
   | 'ellipse'
   | 'diamond'
+  | 'region'
   | 'arrow'
   | 'freedraw'
   | 'text'
+  | 'image'
+  | 'embed'
   | 'eraser';
 
 /** 把图标 path 包进统一规格的 SVG。filled=true 用填充（如光标），否则描边。 */
@@ -75,6 +78,15 @@ const TOOLS: Array<ToolDef | 'divider'> = [
     icon: icon(<path d="M12 3l9 9-9 9-9-9z" />),
   },
   {
+    id: 'region',
+    label: '区域',
+    shortcut: 'G',
+    icon: icon(
+      <rect x="3.5" y="5.5" width="17" height="13" rx="1.5"
+        strokeDasharray="3 2.4" />,
+    ),
+  },
+  {
     id: 'arrow',
     label: '箭头 / 连线',
     shortcut: 'A',
@@ -96,6 +108,29 @@ const TOOLS: Array<ToolDef | 'divider'> = [
     label: '文本',
     shortcut: 'T',
     icon: icon(<path d="M5 6.5V5h14v1.5M12 5v14M9 19h6" />),
+  },
+  {
+    id: 'image',
+    label: '图片',
+    shortcut: 'I',
+    icon: icon(
+      <>
+        <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+        <circle cx="9" cy="10" r="1.7" />
+        <path d="M20 15.5l-5-5-8 8" />
+      </>,
+    ),
+  },
+  {
+    id: 'embed',
+    label: '嵌入链接',
+    shortcut: 'U',
+    icon: icon(
+      <>
+        <path d="M10.5 13.5a3.4 3.4 0 0 0 5 .3l2.7-2.7a3.4 3.4 0 0 0-4.8-4.8l-1.5 1.5" />
+        <path d="M13.5 10.5a3.4 3.4 0 0 0-5-.3L5.8 12.9a3.4 3.4 0 0 0 4.8 4.8l1.5-1.5" />
+      </>,
+    ),
   },
   'divider',
   {

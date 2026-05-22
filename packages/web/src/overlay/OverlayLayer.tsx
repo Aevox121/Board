@@ -64,7 +64,7 @@ import { ConnectorLayer } from './ConnectorLayer';
 import { ResizeHandles, type ResizeApi } from './ResizeHandles';
 import { StylePanel } from './StylePanel';
 import { ShapeView } from '../canvas/ShapeView';
-import { DrawView } from '../canvas/DrawView';
+import { DrawView, drawHitPath } from '../canvas/DrawView';
 import {
   fileBaseName,
   intersectionArea,
@@ -623,10 +623,14 @@ const CREATE_TOOLS: ReadonlySet<string> = new Set([
   'rectangle',
   'ellipse',
   'diamond',
+  'region',
   'arrow',
   'freedraw',
   'text',
 ]);
+/** 拖出区域时的默认尺寸（点击而非拖拽，或拖拽过小）。 */
+const DEFAULT_REGION_W = 360;
+const DEFAULT_REGION_H = 240;
 /** 点击（拖拽尺寸过小）时图形采用的默认尺寸。 */
 const DEFAULT_SHAPE_W = 140;
 const DEFAULT_SHAPE_H = 90;
@@ -654,7 +658,7 @@ const COPYABLE_TYPES: ReadonlySet<string> = new Set([
 /** 创建手势的瞬时状态。 */
 interface CreatingState {
   /** 创建中的元素类型。 */
-  tool: 'rectangle' | 'ellipse' | 'diamond' | 'arrow' | 'freedraw';
+  tool: 'rectangle' | 'ellipse' | 'diamond' | 'region' | 'arrow' | 'freedraw';
   /** 捕获的指针 id。 */
   pointerId: number;
   /** 起点（画布坐标）。 */
@@ -932,11 +936,26 @@ function CreationPreview({
       </div>
     );
   }
-  // rectangle / ellipse / diamond
   const x = Math.min(state.startX, state.curX);
   const y = Math.min(state.startY, state.curY);
   const w = Math.max(1, Math.abs(state.curX - state.startX));
   const h = Math.max(1, Math.abs(state.curY - state.startY));
+  if (state.tool === 'region') {
+    // 区域创建预览 —— 虚线矩形框。
+    return (
+      <div
+        className="ov-create-region"
+        style={{
+          left: `${x}px`,
+          top: `${y}px`,
+          width: `${w}px`,
+          height: `${h}px`,
+        }}
+        aria-hidden="true"
+      />
+    );
+  }
+  // rectangle / ellipse / diamond
   const temp = {
     ...createShapeElement({
       x,
@@ -1100,6 +1119,18 @@ export function OverlayLayer({
       .filter(isCanvasElement)
       .sort((a, b) => (a.z < b.z ? -1 : a.z > b.z ? 1 : 0));
   }, [scene.elements]);
+
+  // 手绘元素的命中裁剪 path —— id → `path('<轮廓>')`，供卡槽 clip-path 把
+  // 手绘的命中区裁成笔迹形状（包围盒空白处不再误选）。采样点 <2 的不裁。
+  const drawHitClips = useMemo<Map<string, string>>(() => {
+    const m = new Map<string, string>();
+    for (const el of canvasElements) {
+      if (el.type !== 'draw') continue;
+      const d = drawHitPath(el);
+      if (d) m.set(el.id, `path('${d}')`);
+    }
+    return m;
+  }, [canvasElements]);
 
   // 连线模式下高亮的「可连接目标」—— 连线 / 建议外的全部元素（含图形）。
   const connectTargets = useMemo(
@@ -1669,6 +1700,7 @@ export function OverlayLayer({
         k !== 'c' &&
         k !== 'x' &&
         k !== 'd' &&
+        k !== 'a' &&
         k !== 'g' &&
         k !== ']' &&
         k !== '['
@@ -1689,6 +1721,7 @@ export function OverlayLayer({
       if (k === 'c') copySelection();
       else if (k === 'x') cutSelection();
       else if (k === 'd') duplicateSelection();
+      else if (k === 'a') selectAll();
       else if (k === 'g') {
         // Ctrl+G 成组 / Ctrl+Shift+G 取消编组。
         if (e.shiftKey) ungroupSelection();
@@ -1821,6 +1854,71 @@ export function OverlayLayer({
     // 处理函数闭包稳定（仅依赖 ref / 稳定的 replaceScene / actorId）。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 方向键微移选区 —— 无修饰键 1px，按住 Shift 10px。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const k = e.key;
+      if (
+        k !== 'ArrowUp' &&
+        k !== 'ArrowDown' &&
+        k !== 'ArrowLeft' &&
+        k !== 'ArrowRight'
+      ) {
+        return;
+      }
+      const ae = document.activeElement as HTMLElement | null;
+      if (
+        ae &&
+        (ae.tagName === 'INPUT' ||
+          ae.tagName === 'TEXTAREA' ||
+          ae.isContentEditable)
+      ) {
+        return;
+      }
+      if (selectedIdsRef.current.size === 0) return;
+      e.preventDefault();
+      const step = e.shiftKey ? 10 : 1;
+      nudgeSelection(
+        k === 'ArrowLeft' ? -step : k === 'ArrowRight' ? step : 0,
+        k === 'ArrowUp' ? -step : k === 'ArrowDown' ? step : 0,
+      );
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 图片 / 嵌入工具 —— 一次性动作：选中即弹文件选择器 / URL 输入框，
+  // 随后立即回到选择工具（不作为常驻工具）。
+  useEffect(() => {
+    if (activeTool !== 'image' && activeTool !== 'embed') return;
+    onActiveToolChange?.('selection');
+    if (activeTool === 'image') {
+      const inp = document.createElement('input');
+      inp.type = 'file';
+      inp.accept = 'image/*';
+      inp.onchange = (): void => {
+        const file = inp.files?.[0];
+        if (file) {
+          const c = viewportCenter();
+          void createImageFromBlob(file, c.x, c.y);
+        }
+      };
+      inp.click();
+    } else {
+      const raw = window.prompt('输入要嵌入的链接 URL');
+      const url = raw ? normalizeUrl(raw) : null;
+      if (url) {
+        const c = viewportCenter();
+        createEmbedAt(url, c.x, c.y);
+      } else if (raw && raw.trim()) {
+        window.alert('不是有效的链接 URL。');
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTool]);
 
   // 橡皮擦模式：在 .board-canvas 上以捕获阶段拦截左键按下 —— 命中画布元素
   // （图形 / 手绘 / 连线 / 文件卡 / 文本卡）即删除并吞掉事件（不触发拖拽）；
@@ -2094,6 +2192,47 @@ export function OverlayLayer({
     const cur = sceneRef.current;
     replaceScene({ ...cur, elements: [...cur.elements, ...clones] }, 'canvas');
     setSelectedIds(new Set(clones.map((c) => c.id)));
+  }
+
+  /** Ctrl/⌘+A —— 全选画布元素（排除建议卡与锁定元素）。 */
+  function selectAll(): void {
+    const ids = sceneRef.current.elements
+      .filter((e) => e.type !== 'suggestion' && !e.locked)
+      .map((e) => e.id);
+    setSelectedIds(new Set(ids));
+  }
+
+  /**
+   * 方向键微移选区 —— 按 (dx,dy) 平移选中元素（含选中区域的子元素），
+   * 锁定元素不动。连线随其绑定元素;自由连线按 x/y 原点整体平移。
+   */
+  function nudgeSelection(dx: number, dy: number): void {
+    const cur = sceneRef.current;
+    const sel = selectedIdsRef.current;
+    if (sel.size === 0) return;
+    const move = new Set<string>(sel);
+    for (const id of sel) {
+      const el = cur.elements.find((e) => e.id === id);
+      if (el?.type === 'region') {
+        for (const c of cur.elements) {
+          if (c.parentId === id) move.add(c.id);
+        }
+      }
+    }
+    let changed = false;
+    const ts = new Date().toISOString();
+    const next = cur.elements.map((e) => {
+      if (!move.has(e.id) || e.locked) return e;
+      changed = true;
+      return {
+        ...e,
+        x: e.x + dx,
+        y: e.y + dy,
+        updatedBy: actorId,
+        updatedAt: ts,
+      };
+    });
+    if (changed) replaceScene({ ...cur, elements: next }, 'canvas');
   }
 
   /**
@@ -2522,6 +2661,21 @@ export function OverlayLayer({
         points: st.points.map((p) => [p[0] - minX, p[1] - minY]),
         pressures: st.pressures,
       });
+    } else if (st.tool === 'region') {
+      // 区域 —— 拖出矩形区域，弹名称输入后经 server 建文件夹 + 区域元素。
+      let x = Math.min(st.startX, st.curX);
+      let y = Math.min(st.startY, st.curY);
+      let w = Math.abs(st.curX - st.startX);
+      let h = Math.abs(st.curY - st.startY);
+      if (w < CREATE_MIN_DRAG && h < CREATE_MIN_DRAG) {
+        x = st.startX;
+        y = st.startY;
+        w = DEFAULT_REGION_W;
+        h = DEFAULT_REGION_H;
+      }
+      void createRegionViaDrag(x, y, Math.max(w, 120), Math.max(h, 80));
+      onActiveToolChange?.('selection');
+      return;
     } else {
       // arrow —— 连线；端点命中元素则绑定，否则自由端。
       const dx = st.curX - st.startX;
@@ -2670,6 +2824,47 @@ export function OverlayLayer({
       x: rect.width / 2 / vp.zoom - vp.scrollX,
       y: rect.height / 2 / vp.zoom - vp.scrollY,
     };
+  }
+
+  /**
+   * 拖出区域后创建 —— 弹名称输入，经 `POST /api/regions` 让 server 建
+   * `files/<名称>/` 文件夹 + 区域元素;服务端落盘 + 广播，web 经 SSE 重载。
+   */
+  async function createRegionViaDrag(
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+  ): Promise<void> {
+    const raw = window.prompt('区域名称（将作为 files/ 下的文件夹名）');
+    const name = raw?.trim();
+    if (!name) return;
+    if (name.includes('/') || name.includes('\\') || name.includes('..')) {
+      window.alert('区域名不能包含路径分隔符或 ".."。');
+      return;
+    }
+    try {
+      const resp = await fetch('/api/regions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, x, y, width: w, height: h }),
+      });
+      const json = (await resp.json()) as {
+        ok?: boolean;
+        data?: { elementId?: string };
+        error?: string;
+      };
+      if (!resp.ok || !json.ok) {
+        window.alert(`创建区域失败：${json.error ?? resp.status}`);
+        return;
+      }
+      // 服务端已写 board.json + 广播；选中新区域（SSE 重载后该 id 即在场景中）。
+      if (json.data?.elementId) selectOnly(json.data.elementId);
+    } catch (err) {
+      window.alert(
+        `创建区域失败：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   /** 就地编辑提交文本卡正文。 */
@@ -3908,7 +4103,9 @@ export function OverlayLayer({
               ? 'ellipse(50% 50%)'
               : el.type === 'shape' && el.shape === 'diamond'
                 ? 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)'
-                : null;
+                : el.type === 'draw'
+                  ? (drawHitClips.get(el.id) ?? null)
+                  : null;
 
           // 卡槽点选 / 进入待拖拽 —— 区域走头部手柄、不在此。
           const slotPointerDown =

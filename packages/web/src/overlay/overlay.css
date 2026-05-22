@@ -802,6 +802,16 @@
   overflow: visible;
 }
 
+/* 区域创建预览 —— 拖出区域时的虚线矩形框。 */
+.ov-create-region {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1.5px dashed var(--c-accent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--c-accent) 7%, transparent);
+  pointer-events: none;
+}
+
 /* ── 右键上下文菜单 ─────────────────────────────────────────────
  * 干净的暖色 UI（同顶栏风格，非手绘）。屏幕定位，故为 .ov-root 的直接
  * 子元素、不进变换容器。.ov-root 自身 pointer-events:none，菜单单独开启。 */

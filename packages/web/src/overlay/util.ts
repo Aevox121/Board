@@ -58,6 +58,26 @@ export interface HitTarget extends RectLike {
   type: string;
   /** 图形元素的几何形状（`rectangle` / `ellipse` / `diamond`）；非图形为 undefined。 */
   shape?: string;
+  /** 手绘元素的采样点（相对 x/y）；仅 type==='draw' 时有意义。 */
+  points?: ReadonlyArray<readonly [number, number]>;
+}
+
+/** 点 (px,py) 到线段 (ax,ay)-(bx,by) 的最短距离。 */
+function pointSegDist(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  if (len2 === 0) return Math.hypot(px - ax, py - ay);
+  let t = ((px - ax) * dx + (py - ay) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 }
 
 /**
@@ -79,6 +99,31 @@ export function pointInElementShape(
     return t.shape === 'ellipse'
       ? nx * nx + ny * ny <= 1
       : Math.abs(nx) + Math.abs(ny) <= 1;
+  }
+  if (t.type === 'draw' && t.points && t.points.length > 0) {
+    // 手绘 —— 点到笔迹折线的最短距离 ≤ tol（外加笔宽余量）。
+    const lim = tol + 6;
+    if (t.points.length === 1) {
+      const p = t.points[0]!;
+      return Math.hypot(px - (t.x + p[0]), py - (t.y + p[1])) <= lim;
+    }
+    for (let i = 1; i < t.points.length; i += 1) {
+      const a = t.points[i - 1]!;
+      const b = t.points[i]!;
+      if (
+        pointSegDist(
+          px,
+          py,
+          t.x + a[0],
+          t.y + a[1],
+          t.x + b[0],
+          t.y + b[1],
+        ) <= lim
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
   return (
     px >= t.x - tol &&
