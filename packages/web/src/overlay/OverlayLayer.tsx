@@ -68,6 +68,7 @@ import {
   smallestHitAt,
   type RectLike,
 } from './util';
+import { computeSnap, type SnapGuide } from './snap';
 import './overlay.css';
 
 /** 视口状态 —— 与 canvas/viewport.ts 的 CanvasViewport 同构。 */
@@ -360,6 +361,8 @@ const MARQUEE_TYPES: ReadonlySet<string> = new Set([
 
 /** 启动拖拽 / 框选的位移阈值（屏幕像素）。 */
 const DRAG_THRESHOLD_PX = 4;
+/** 拖拽对齐吸附的识别阈值（屏幕像素，运行时按 zoom 折算到画布单位）。 */
+const SNAP_THRESHOLD_PX = 6;
 /**
  * 连线自动吸附的识别宽度（画布单位）—— 也是连线模式下 hover 外包围高亮的
  * 圈宽。须与 bridge `bindDrawnConnectors` 的 TOL、CSS `.ov-connect-target`
@@ -694,6 +697,8 @@ export function OverlayLayer({
 
   // 拖拽 / 缩放瞬时状态；null = 未在进行。
   const [drag, setDrag] = useState<DragState | null>(null);
+  // 当前拖拽的对齐参考线 —— 拖拽进行中实时刷新，落定 / 取消时清空。
+  const [snapGuides, setSnapGuides] = useState<SnapGuide[]>([]);
   const [resize, setResize] = useState<ResizeState | null>(null);
   // 旋转瞬时状态；null = 未在旋转。
   const [rotate, setRotate] = useState<RotateState | null>(null);
@@ -2165,21 +2170,66 @@ export function OverlayLayer({
     });
   }
 
-  /** 指针移动 —— 把屏幕位移换算为画布偏移（除以 zoom），更新拖拽状态。 */
+  /**
+   * 计算本次拖拽的对齐吸附 —— 把被拖元素并集包围盒的边 / 中线吸附到画布上
+   * 其它元素的对应线。连线本身包围盒不可靠，不参与（既不吸附也不作参照）。
+   */
+  function snapForDrag(
+    d: DragState,
+    rawDx: number,
+    rawDy: number,
+  ): { dx: number; dy: number; guides: SnapGuide[] } {
+    const cur = sceneRef.current;
+    // 被拖元素的并集包围盒（场景原坐标）。
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const e of cur.elements) {
+      if (!d.memberIds.has(e.id) || e.type === 'connector') continue;
+      x0 = Math.min(x0, e.x);
+      y0 = Math.min(y0, e.y);
+      x1 = Math.max(x1, e.x + e.width);
+      y1 = Math.max(y1, e.y + e.height);
+    }
+    if (!Number.isFinite(x0)) return { dx: rawDx, dy: rawDy, guides: [] };
+    const dragged: RectLike = {
+      x: x0 + rawDx,
+      y: y0 + rawDy,
+      width: x1 - x0,
+      height: y1 - y0,
+    };
+    // 参照矩形 —— 非被拖、非连线 / 建议的元素。
+    const refs: RectLike[] = [];
+    for (const e of cur.elements) {
+      if (d.memberIds.has(e.id)) continue;
+      if (e.type === 'connector' || e.type === 'suggestion') continue;
+      refs.push({ x: e.x, y: e.y, width: e.width, height: e.height });
+    }
+    return computeSnap(dragged, rawDx, rawDy, refs, SNAP_THRESHOLD_PX / zoom);
+  }
+
+  /**
+   * 指针移动 —— 把屏幕位移换算为画布偏移（除以 zoom），应用对齐吸附后更新
+   * 拖拽状态。按住 Ctrl/⌘ 临时关闭吸附。
+   */
   function handlePointerMove(e: React.PointerEvent<HTMLDivElement>): void {
-    setDrag((d) => {
-      if (!d || d.pointerId !== e.pointerId) return d;
-      const dxScreen = e.clientX - d.startScreenX;
-      const dyScreen = e.clientY - d.startScreenY;
-      const moved =
-        d.moved || Math.hypot(dxScreen, dyScreen) > DRAG_THRESHOLD_PX;
-      return {
-        ...d,
-        offsetX: dxScreen / zoom,
-        offsetY: dyScreen / zoom,
-        moved,
-      };
-    });
+    const d = drag;
+    if (!d || d.pointerId !== e.pointerId) return;
+    const dxScreen = e.clientX - d.startScreenX;
+    const dyScreen = e.clientY - d.startScreenY;
+    const moved = d.moved || Math.hypot(dxScreen, dyScreen) > DRAG_THRESHOLD_PX;
+    let dx = dxScreen / zoom;
+    let dy = dyScreen / zoom;
+    let guides: SnapGuide[] = [];
+    if (moved && !e.ctrlKey && !e.metaKey) {
+      const snap = snapForDrag(d, dx, dy);
+      dx = snap.dx;
+      dy = snap.dy;
+      guides = snap.guides;
+    }
+    setDrag({ ...d, offsetX: dx, offsetY: dy, moved });
+    setSnapGuides(guides);
   }
 
   /** 指针抬起 —— 释放捕获；越过阈值则落点处理，否则视为点击不处理。 */
@@ -2192,6 +2242,7 @@ export function OverlayLayer({
       // 指针捕获可能已自动释放，忽略。
     }
     setDrag(null);
+    setSnapGuides([]);
     if (d.moved) finishDrag(d);
     else if (d.kind === 'group') {
       // 多选中对某元素的单击（未拖拽）—— 选区收敛到该元素（属编组则收敛到组）。
@@ -2202,6 +2253,7 @@ export function OverlayLayer({
   /** 指针取消（如系统手势打断）—— 直接丢弃拖拽，不改场景。 */
   function handlePointerCancel(e: React.PointerEvent<HTMLDivElement>): void {
     setDrag((d) => (d && d.pointerId === e.pointerId ? null : d));
+    setSnapGuides([]);
   }
 
   /**
@@ -2948,6 +3000,23 @@ export function OverlayLayer({
               height: `${selectMarquee.height}px`,
             }}
           />
+        ) : null}
+
+        {/* 拖拽对齐参考线 —— 被拖元素的边 / 中线对齐到其它元素时浮现。
+            stroke 用 non-scaling-stroke，缩放下恒为 1px。 */}
+        {snapGuides.length > 0 ? (
+          <svg className="ov-snap-layer" width="0" height="0" aria-hidden="true">
+            {snapGuides.map((g, i) => (
+              <line
+                key={i}
+                className="ov-snap-guide"
+                x1={g.axis === 'x' ? g.pos : g.from}
+                y1={g.axis === 'x' ? g.from : g.pos}
+                x2={g.axis === 'x' ? g.pos : g.to}
+                y2={g.axis === 'x' ? g.to : g.pos}
+              />
+            ))}
+          </svg>
         ) : null}
 
         {/* 选中编组的整体外框 —— 套在逐元素选择框之外，标示「这是一个组」 */}

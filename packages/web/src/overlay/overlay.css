@@ -1175,6 +1175,24 @@
   opacity: 0.7;
 }
 
+/* ── 拖拽对齐参考线 ─────────────────────────────────────────────
+ * 与 .ov-links 同款：0 尺寸 svg + overflow:visible，画布坐标定位。 */
+.ov-snap-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 30;
+}
+
+/* 参考线本体 —— non-scaling-stroke 使其在任何缩放下恒为 1px 细线。 */
+.ov-snap-guide {
+  stroke: #e8590c;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
 /* ── 连线层（connector）──────────────────────────────────────────
  * 由覆盖层 SVG 渲染（脱离 Excalidraw），可连接任意元素并随端点实时跟随。
  * 每条连线一个独立 svg —— 尺寸贴合其包围盒、按画布坐标定位（在 .ov-transform
