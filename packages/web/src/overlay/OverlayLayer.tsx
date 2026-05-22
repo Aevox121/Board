@@ -291,6 +291,8 @@ interface ResizeState {
   y: number;
   w: number;
   h: number;
+  /** 元素角度（弧度）—— 非 0 时缩放需在元素本地坐标系换算。 */
+  angle: number;
   /** 绝对最小尺寸（按元素类型：区域更大，文件 / 文本 / 文件夹卡更小）。 */
   minW: number;
   minH: number;
@@ -312,6 +314,54 @@ interface RotateState {
   cy: number;
   /** 当前角度（弧度，随指针实时更新）。 */
   angle: number;
+}
+
+/**
+ * 多选成组缩放的瞬时状态 —— 八向手柄拖拽时，整组按比例缩放。
+ * 成组包围盒恒为轴对齐并集；缩放以对侧边角为锚点。
+ */
+interface GroupResizeState {
+  pointerId: number;
+  /** 手柄方向分量：-1=左/上, 0=不动, 1=右/下。 */
+  hx: -1 | 0 | 1;
+  hy: -1 | 0 | 1;
+  /** 指针按下时的屏幕坐标。 */
+  startScreenX: number;
+  startScreenY: number;
+  /** 缩放前的成组包围盒（轴对齐并集）。 */
+  bx0: number;
+  by0: number;
+  bw0: number;
+  bh0: number;
+  /** 当前成组包围盒（随指针实时更新）。 */
+  bx: number;
+  by: number;
+  bw: number;
+  bh: number;
+  /** 参与缩放的成员快照（缩放前几何）。 */
+  members: ReadonlyArray<XformMember>;
+}
+
+/**
+ * 多选成组旋转的瞬时状态 —— 顶部手柄拖拽时，整组绕并集中心刚性旋转。
+ * 手柄框冻结在手势开始时的并集，整体随之旋转（旋转手柄不抖）。
+ */
+interface GroupRotateState {
+  pointerId: number;
+  /** 成组并集中心（画布坐标）—— 旋转锚点。 */
+  cx: number;
+  cy: number;
+  /** 冻结的成组包围盒（手势开始时的并集，用于手柄框稳定渲染）。 */
+  bx0: number;
+  by0: number;
+  bw0: number;
+  bh0: number;
+  /** 手势开始时指针相对中心的角度（弧度）。 */
+  startPointer: number;
+  /** 当前累计旋转增量（弧度，随指针实时更新）。 */
+  delta: number;
+  /** 参与旋转的成员快照（旋转前几何）。 */
+  members: ReadonlyArray<XformMember>;
 }
 
 /** 右键上下文菜单的作用域 —— 决定「整理」整理哪些文件。 */
@@ -359,6 +409,69 @@ const MARQUEE_TYPES: ReadonlySet<string> = new Set([
   'file',
   'folder',
 ]);
+
+/**
+ * 可参与「成组变换」（多选缩放 / 旋转）的元素类型 —— 与单选缩放手柄支持的
+ * 类型一致，排除连线（几何派生）与区域（容器，含子元素、轴对齐）。
+ */
+const GROUP_XFORM_TYPES: ReadonlySet<string> = new Set([
+  'shape',
+  'draw',
+  'text',
+  'file',
+  'folder',
+]);
+
+/** 成组缩放时成组包围盒的最小边长（画布坐标）。 */
+const GROUP_MIN = 16;
+
+/** 成组变换的成员快照 —— 手势开始时冻结的几何，用于推算变换后的位置。 */
+interface XformMember {
+  id: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** 元素角度（弧度）。 */
+  angle: number;
+  /** draw 元素的采样点（其余类型为 undefined）。 */
+  points?: ReadonlyArray<readonly [number, number]>;
+}
+
+/** 旋转元素的轴对齐包围盒 —— 四角绕中心旋转后取 min/max。 */
+function rotatedAABB(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  angle: number,
+): { x: number; y: number; w: number; h: number } {
+  if (!angle) return { x, y, w, h };
+  const cx = x + w / 2;
+  const cy = y + h / 2;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const hw = w / 2;
+  const hh = h / 2;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const [sx, sy] of [
+    [-hw, -hh],
+    [hw, -hh],
+    [hw, hh],
+    [-hw, hh],
+  ] as const) {
+    const px = cx + sx * cos - sy * sin;
+    const py = cy + sx * sin + sy * cos;
+    minX = Math.min(minX, px);
+    minY = Math.min(minY, py);
+    maxX = Math.max(maxX, px);
+    maxY = Math.max(maxY, py);
+  }
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
 
 /** 启动拖拽 / 框选的位移阈值（屏幕像素）。 */
 const DRAG_THRESHOLD_PX = 4;
@@ -501,11 +614,51 @@ function regionForCard(
 }
 
 /** 按手柄方向与指针位移算出缩放后的矩形（含最小尺寸 / 内容边界 clamp）。 */
+/**
+ * 旋转元素的缩放 —— 指针位移投影到元素本地坐标轴算尺寸增量；缩放中对侧
+ * 锚点在世界坐标里保持不动，据此反推新中心。angle=0 时退化为轴对齐缩放。
+ */
+function computeRotatedResize(
+  r: ResizeState,
+  dx: number,
+  dy: number,
+): { x: number; y: number; w: number; h: number } {
+  const cos = Math.cos(r.angle);
+  const sin = Math.sin(r.angle);
+  // 缩放前中心。
+  const cx0 = r.x0 + r.w0 / 2;
+  const cy0 = r.y0 + r.h0 / 2;
+  // 对侧锚点（本地坐标，相对中心）→ 世界坐标；缩放中保持不动。
+  const ax = (-r.hx * r.w0) / 2;
+  const ay = (-r.hy * r.h0) / 2;
+  const anchorX = cx0 + ax * cos - ay * sin;
+  const anchorY = cy0 + ax * sin + ay * cos;
+  // 指针位移投影到元素本地坐标轴。
+  const ldx = dx * cos + dy * sin;
+  const ldy = -dx * sin + dy * cos;
+  let w = r.w0;
+  if (r.hx === 1) w = r.w0 + ldx;
+  else if (r.hx === -1) w = r.w0 - ldx;
+  let h = r.h0;
+  if (r.hy === 1) h = r.h0 + ldy;
+  else if (r.hy === -1) h = r.h0 - ldy;
+  w = Math.max(w, r.minW);
+  h = Math.max(h, r.minH);
+  // 新锚点本地偏移（相对新中心）→ 反推新中心，使锚点世界坐标不变。
+  const nax = (-r.hx * w) / 2;
+  const nay = (-r.hy * h) / 2;
+  const cx = anchorX - (nax * cos - nay * sin);
+  const cy = anchorY - (nax * sin + nay * cos);
+  return { x: cx - w / 2, y: cy - h / 2, w, h };
+}
+
 function computeResize(
   r: ResizeState,
   dx: number,
   dy: number,
 ): { x: number; y: number; w: number; h: number } {
+  // 旋转元素 —— 走本地坐标系换算（内容边界 clamp 仅区域有，区域不旋转）。
+  if (r.angle) return computeRotatedResize(r, dx, dy);
   const left0 = r.x0;
   const right0 = r.x0 + r.w0;
   const top0 = r.y0;
@@ -706,6 +859,9 @@ export function OverlayLayer({
   const [resize, setResize] = useState<ResizeState | null>(null);
   // 旋转瞬时状态；null = 未在旋转。
   const [rotate, setRotate] = useState<RotateState | null>(null);
+  // 多选成组缩放 / 旋转的瞬时状态；null = 未在进行。
+  const [groupResize, setGroupResize] = useState<GroupResizeState | null>(null);
+  const [groupRotate, setGroupRotate] = useState<GroupRotateState | null>(null);
   // 连线模式下鼠标悬停的可连接元素 id —— 高亮加强提示落点。
   const [hoverConnId, setHoverConnId] = useState<string | null>(null);
   // 连线端点拖拽落点所在的可连接元素 id —— 拖拽中临时高亮（同连线创建）。
@@ -864,6 +1020,80 @@ export function OverlayLayer({
     return ids;
   }, [scene.elements, serverFiles, connection]);
 
+  /**
+   * 成组缩放 / 旋转进行中各成员的实时几何 —— 由瞬时状态推算。
+   * 缩放：以对侧锚点为基准按比例缩放每个成员的位置 / 尺寸（draw 采样点同步）。
+   * 旋转：每个成员的中心绕并集中心刚性旋转，角度叠加旋转增量。
+   */
+  const groupGeom = useMemo<
+    Map<
+      string,
+      {
+        x: number;
+        y: number;
+        w: number;
+        h: number;
+        angle: number;
+        points?: [number, number][];
+      }
+    >
+  >(() => {
+    const m = new Map<
+      string,
+      {
+        x: number;
+        y: number;
+        w: number;
+        h: number;
+        angle: number;
+        points?: [number, number][];
+      }
+    >();
+    if (groupResize) {
+      const sx = groupResize.bw0 > 0 ? groupResize.bw / groupResize.bw0 : 1;
+      const sy = groupResize.bh0 > 0 ? groupResize.bh / groupResize.bh0 : 1;
+      // 锚点 = 缩放中保持不动的对侧边角。
+      const anchorX =
+        groupResize.hx === -1
+          ? groupResize.bx0 + groupResize.bw0
+          : groupResize.bx0;
+      const anchorY =
+        groupResize.hy === -1
+          ? groupResize.by0 + groupResize.bh0
+          : groupResize.by0;
+      for (const mem of groupResize.members) {
+        m.set(mem.id, {
+          x: anchorX + (mem.x - anchorX) * sx,
+          y: anchorY + (mem.y - anchorY) * sy,
+          w: mem.w * sx,
+          h: mem.h * sy,
+          angle: mem.angle,
+          points: mem.points
+            ? mem.points.map((p): [number, number] => [p[0] * sx, p[1] * sy])
+            : undefined,
+        });
+      }
+    }
+    if (groupRotate) {
+      const cos = Math.cos(groupRotate.delta);
+      const sin = Math.sin(groupRotate.delta);
+      for (const mem of groupRotate.members) {
+        const rx = mem.x + mem.w / 2 - groupRotate.cx;
+        const ry = mem.y + mem.h / 2 - groupRotate.cy;
+        const ncx = groupRotate.cx + rx * cos - ry * sin;
+        const ncy = groupRotate.cy + rx * sin + ry * cos;
+        m.set(mem.id, {
+          x: ncx - mem.w / 2,
+          y: ncy - mem.h / 2,
+          w: mem.w,
+          h: mem.h,
+          angle: mem.angle + groupRotate.delta,
+        });
+      }
+    }
+    return m;
+  }, [groupResize, groupRotate]);
+
   // 拖拽 / 缩放进行中的元素的实时矩形 —— 供连线层即时跟随端点：连线随被拖的
   // 卡片、被缩放的区域实时重算。仅含正在变动的元素，其余端点读场景坐标。
   const liveRects = useMemo<Map<string, RectLike>>(() => {
@@ -888,8 +1118,11 @@ export function OverlayLayer({
         height: resize.h,
       });
     }
+    for (const [id, g] of groupGeom) {
+      m.set(id, { x: g.x, y: g.y, width: g.w, height: g.h });
+    }
     return m;
-  }, [drag, resize, scene.elements]);
+  }, [drag, resize, groupGeom, scene.elements]);
 
   // 选区涉及的各编组的整体包围盒 —— 选中编组时套一圈虚线框，与逐元素选择框
   // 区分（直观显示「这是一个组」）。拖拽中按 liveRects 实时跟随。
@@ -1171,7 +1404,7 @@ export function OverlayLayer({
           !!t &&
           !!t.closest(
             '[data-element-id],[data-connector-id],.ov-style-panel,' +
-              '.ov-menu,.ov-menu-backdrop',
+              '.ov-menu,.ov-menu-backdrop,.ov-group-handles',
           );
         if (onEl) return;
         // 空白处：非 shift 即清空选区；选择工具下左键拖拽 = 框选多选。
@@ -2457,6 +2690,8 @@ export function OverlayLayer({
       y: el.y,
       w: el.width,
       h: el.height,
+      // 区域不旋转（容器、轴对齐）；其余按 el.angle。
+      angle: isRegion ? 0 : el.angle || 0,
       minW: isRegion ? REGION_MIN_W : CARD_MIN_W,
       minH: isRegion ? REGION_MIN_H : CARD_MIN_H,
       // 无子元素时 cl/cr/ct/cb 为 ±Infinity，对应的 clamp 自然失效。
@@ -2589,6 +2824,233 @@ export function OverlayLayer({
   /** 旋转取消 —— 丢弃，不改场景。 */
   function handleRotateCancel(e: React.PointerEvent<HTMLDivElement>): void {
     setRotate((r) => (r && r.pointerId === e.pointerId ? null : r));
+  }
+
+  /** 指针按下成组缩放手柄 —— 冻结成员快照与成组包围盒，进入成组缩放。 */
+  function beginGroupResize(
+    e: React.PointerEvent<HTMLDivElement>,
+    hx: -1 | 0 | 1,
+    hy: -1 | 0 | 1,
+  ): void {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    const box = groupHandleBox;
+    if (!box) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const members: XformMember[] = groupXformEls.map((el) => ({
+      id: el.id,
+      x: el.x,
+      y: el.y,
+      w: el.width,
+      h: el.height,
+      angle: el.angle || 0,
+      points: el.type === 'draw' ? el.points : undefined,
+    }));
+    setGroupResize({
+      pointerId: e.pointerId,
+      hx,
+      hy,
+      startScreenX: e.clientX,
+      startScreenY: e.clientY,
+      bx0: box.x,
+      by0: box.y,
+      bw0: box.w,
+      bh0: box.h,
+      bx: box.x,
+      by: box.y,
+      bw: box.w,
+      bh: box.h,
+      members,
+    });
+  }
+
+  /** 成组缩放手柄移动 —— 按指针位移更新成组包围盒（恒轴对齐、对侧锚点不动）。 */
+  function handleGroupResizeMove(
+    e: React.PointerEvent<HTMLDivElement>,
+  ): void {
+    setGroupResize((r) => {
+      if (!r || r.pointerId !== e.pointerId) return r;
+      const dx = (e.clientX - r.startScreenX) / zoom;
+      const dy = (e.clientY - r.startScreenY) / zoom;
+      let bx = r.bx0;
+      let bw = r.bw0;
+      if (r.hx === 1) {
+        bw = Math.max(GROUP_MIN, r.bw0 + dx);
+      } else if (r.hx === -1) {
+        const left = Math.min(r.bx0 + dx, r.bx0 + r.bw0 - GROUP_MIN);
+        bx = left;
+        bw = r.bx0 + r.bw0 - left;
+      }
+      let by = r.by0;
+      let bh = r.bh0;
+      if (r.hy === 1) {
+        bh = Math.max(GROUP_MIN, r.bh0 + dy);
+      } else if (r.hy === -1) {
+        const top = Math.min(r.by0 + dy, r.by0 + r.bh0 - GROUP_MIN);
+        by = top;
+        bh = r.by0 + r.bh0 - top;
+      }
+      return { ...r, bx, by, bw, bh };
+    });
+  }
+
+  /** 成组缩放结束 —— 按比例落定每个成员的位置 / 尺寸（draw 采样点同步）。 */
+  function handleGroupResizeUp(e: React.PointerEvent<HTMLDivElement>): void {
+    const r = groupResize;
+    if (!r || r.pointerId !== e.pointerId) return;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // 已释放，忽略。
+    }
+    setGroupResize(null);
+    if (r.bw === r.bw0 && r.bh === r.bh0 && r.bx === r.bx0 && r.by === r.by0) {
+      return;
+    }
+    const sx = r.bw0 > 0 ? r.bw / r.bw0 : 1;
+    const sy = r.bh0 > 0 ? r.bh / r.bh0 : 1;
+    const anchorX = r.hx === -1 ? r.bx0 + r.bw0 : r.bx0;
+    const anchorY = r.hy === -1 ? r.by0 + r.bh0 : r.by0;
+    const now = new Date().toISOString();
+    const patch = new Map<string, Partial<Element>>();
+    for (const mem of r.members) {
+      const p: Partial<Element> = {
+        x: anchorX + (mem.x - anchorX) * sx,
+        y: anchorY + (mem.y - anchorY) * sy,
+        width: mem.w * sx,
+        height: mem.h * sy,
+        autoPlaced: false,
+        updatedBy: actorId,
+        updatedAt: now,
+      };
+      if (mem.points) {
+        (p as Partial<DrawElement>).points = mem.points.map(
+          (pt): [number, number] => [pt[0] * sx, pt[1] * sy],
+        );
+      }
+      patch.set(mem.id, p);
+    }
+    const cur = sceneRef.current;
+    replaceScene(
+      {
+        ...cur,
+        elements: cur.elements.map((el) => {
+          const p = patch.get(el.id);
+          return p ? ({ ...el, ...p } as Element) : el;
+        }),
+      },
+      'canvas',
+    );
+  }
+
+  /** 成组缩放取消 —— 丢弃，不改场景。 */
+  function handleGroupResizeCancel(
+    e: React.PointerEvent<HTMLDivElement>,
+  ): void {
+    setGroupResize((r) => (r && r.pointerId === e.pointerId ? null : r));
+  }
+
+  /** 指针按下成组旋转手柄 —— 冻结成员快照与并集中心，进入成组旋转。 */
+  function beginGroupRotate(e: React.PointerEvent<HTMLDivElement>): void {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    const box = groupHandleBox;
+    const root = rootRef.current;
+    if (!box || !root) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const cx = box.x + box.w / 2;
+    const cy = box.y + box.h / 2;
+    const rect = root.getBoundingClientRect();
+    const px = (e.clientX - rect.left) / zoom - scrollX;
+    const py = (e.clientY - rect.top) / zoom - scrollY;
+    const members: XformMember[] = groupXformEls.map((el) => ({
+      id: el.id,
+      x: el.x,
+      y: el.y,
+      w: el.width,
+      h: el.height,
+      angle: el.angle || 0,
+    }));
+    setGroupRotate({
+      pointerId: e.pointerId,
+      cx,
+      cy,
+      bx0: box.x,
+      by0: box.y,
+      bw0: box.w,
+      bh0: box.h,
+      startPointer: Math.atan2(py - cy, px - cx),
+      delta: 0,
+      members,
+    });
+  }
+
+  /** 成组旋转手柄移动 —— 累计旋转增量；Shift 吸附到 15° 整数倍。 */
+  function handleGroupRotateMove(
+    e: React.PointerEvent<HTMLDivElement>,
+  ): void {
+    const root = rootRef.current;
+    if (!root) return;
+    const rect = root.getBoundingClientRect();
+    setGroupRotate((r) => {
+      if (!r || r.pointerId !== e.pointerId) return r;
+      const px = (e.clientX - rect.left) / zoom - scrollX;
+      const py = (e.clientY - rect.top) / zoom - scrollY;
+      let delta = Math.atan2(py - r.cy, px - r.cx) - r.startPointer;
+      if (e.shiftKey) {
+        const step = Math.PI / 12; // 15°
+        delta = Math.round(delta / step) * step;
+      }
+      return { ...r, delta };
+    });
+  }
+
+  /** 成组旋转结束 —— 每个成员绕并集中心刚性旋转、角度叠加增量后落定。 */
+  function handleGroupRotateUp(e: React.PointerEvent<HTMLDivElement>): void {
+    const r = groupRotate;
+    if (!r || r.pointerId !== e.pointerId) return;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // 已释放，忽略。
+    }
+    setGroupRotate(null);
+    if (r.delta === 0) return;
+    const cos = Math.cos(r.delta);
+    const sin = Math.sin(r.delta);
+    const now = new Date().toISOString();
+    const patch = new Map<string, Partial<Element>>();
+    for (const mem of r.members) {
+      const rx = mem.x + mem.w / 2 - r.cx;
+      const ry = mem.y + mem.h / 2 - r.cy;
+      const ncx = r.cx + rx * cos - ry * sin;
+      const ncy = r.cy + rx * sin + ry * cos;
+      patch.set(mem.id, {
+        x: ncx - mem.w / 2,
+        y: ncy - mem.h / 2,
+        angle: mem.angle + r.delta,
+        updatedBy: actorId,
+        updatedAt: now,
+      });
+    }
+    const cur = sceneRef.current;
+    replaceScene(
+      {
+        ...cur,
+        elements: cur.elements.map((el) => {
+          const p = patch.get(el.id);
+          return p ? ({ ...el, ...p } as Element) : el;
+        }),
+      },
+      'canvas',
+    );
+  }
+
+  /** 成组旋转取消 —— 丢弃，不改场景。 */
+  function handleGroupRotateCancel(
+    e: React.PointerEvent<HTMLDivElement>,
+  ): void {
+    setGroupRotate((r) => (r && r.pointerId === e.pointerId ? null : r));
   }
 
   /**
@@ -2805,6 +3267,70 @@ export function OverlayLayer({
   const selAlignCount = selectedEls.filter(
     (e) => e.type !== 'connector' && !e.locked,
   ).length;
+  // 可参与成组变换（多选缩放 / 旋转）的元素 —— 图形 / 手绘 / 文本 / 文件 /
+  // 文件夹卡，排除连线 / 区域 / 锁定元素。
+  const groupXformEls = selectedEls.filter(
+    (e) => GROUP_XFORM_TYPES.has(e.type) && !e.locked,
+  );
+  const canGroupXform = groupXformEls.length >= 2;
+
+  /**
+   * 成组变换手柄框 —— 多选（≥2 个可变换元素）时套在并集包围盒上。
+   * 静止：成员（含各自旋转）的轴对齐并集；缩放中：实时成组包围盒（轴对齐）；
+   * 旋转中：冻结的并集 + 整体旋转增量。null = 不显示成组手柄。
+   */
+  const groupHandleBox: {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    angle: number;
+  } | null = (() => {
+    if (!canGroupXform) return null;
+    if (groupRotate) {
+      return {
+        x: groupRotate.bx0,
+        y: groupRotate.by0,
+        w: groupRotate.bw0,
+        h: groupRotate.bh0,
+        angle: groupRotate.delta,
+      };
+    }
+    if (groupResize) {
+      return {
+        x: groupResize.bx,
+        y: groupResize.by,
+        w: groupResize.bw,
+        h: groupResize.bh,
+        angle: 0,
+      };
+    }
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const el of groupXformEls) {
+      const bb = rotatedAABB(el.x, el.y, el.width, el.height, el.angle || 0);
+      minX = Math.min(minX, bb.x);
+      minY = Math.min(minY, bb.y);
+      maxX = Math.max(maxX, bb.x + bb.w);
+      maxY = Math.max(maxY, bb.y + bb.h);
+    }
+    if (minX >= maxX || minY >= maxY) return null;
+    return { x: minX, y: minY, w: maxX - minX, h: maxY - minY, angle: 0 };
+  })();
+
+  // 成组变换手柄的事件 API —— 八向缩放 + 顶部旋转，整组同步变换。
+  const groupResizeApi: ResizeApi = {
+    onStart: beginGroupResize,
+    onMove: handleGroupResizeMove,
+    onUp: handleGroupResizeUp,
+    onCancel: handleGroupResizeCancel,
+    onRotateStart: beginGroupRotate,
+    onRotateMove: handleGroupRotateMove,
+    onRotateUp: handleGroupRotateUp,
+    onRotateCancel: handleGroupRotateCancel,
+  };
   // 选区面板各节按元素类型条件显示：粗糙度（图形 / 手绘）、边角（矩形）、
   // 文字（文本 / 带标签图形）、箭头（连线）。
   const selHasRough = selectedEls.some(
@@ -2890,22 +3416,26 @@ export function OverlayLayer({
           }
           const offset = dx !== 0 || dy !== 0;
 
+          // 成组缩放 / 旋转进行中该元素的实时几何（优先于单选变换）。
+          const gG = groupGeom.get(el.id);
           // 缩放：被缩放区域自身实时变矩形（位置 + 尺寸都可能变）。
           const resizing = resize?.elementId === el.id;
-          const rx = resizing && resize ? resize.x : el.x;
-          const ry = resizing && resize ? resize.y : el.y;
-          const rw = resizing && resize ? resize.w : el.width;
-          const rh = resizing && resize ? resize.h : el.height;
+          const rx = gG ? gG.x : resizing && resize ? resize.x : el.x;
+          const ry = gG ? gG.y : resizing && resize ? resize.y : el.y;
+          const rw = gG ? gG.w : resizing && resize ? resize.w : el.width;
+          const rh = gG ? gG.h : resizing && resize ? resize.h : el.height;
 
-          // 旋转：区域不旋转（容器、轴对齐）；其余按 el.angle，旋转中实时取
-          // rotate.angle。卡槽绕中心旋转（CSS transform 默认 transform-origin）。
+          // 旋转：区域不旋转（容器、轴对齐）；其余按 el.angle，单选旋转中取
+          // rotate.angle、成组变换中取 gG.angle。卡槽绕中心旋转。
           const rotating = rotate?.elementId === el.id;
           const ang =
             el.type === 'region'
               ? 0
-              : rotating && rotate
-                ? rotate.angle
-                : el.angle || 0;
+              : gG
+                ? gG.angle
+                : rotating && rotate
+                  ? rotate.angle
+                  : el.angle || 0;
 
           const regionActive =
             el.type === 'region' &&
@@ -3055,8 +3585,8 @@ export function OverlayLayer({
               ) : el.type === 'shape' ? (
                 <ShapeView
                   element={
-                    resizing && resize
-                      ? { ...el, width: resize.w, height: resize.h }
+                    gG || (resizing && resize)
+                      ? { ...el, width: rw, height: rh }
                       : el
                   }
                   editingLabel={editingLabelId === el.id}
@@ -3072,7 +3602,13 @@ export function OverlayLayer({
                 />
               ) : el.type === 'draw' ? (
                 <DrawView
-                  element={resizing && resize ? liveDrawEl(el, resize) : el}
+                  element={
+                    gG?.points
+                      ? { ...el, width: rw, height: rh, points: gG.points }
+                      : resizing && resize
+                        ? liveDrawEl(el, resize)
+                        : el
+                  }
                 />
               ) : (
                 <FileCard element={el} missing={missingFileIds.has(el.id)} />
@@ -3251,6 +3787,25 @@ export function OverlayLayer({
             }}
           />
         ))}
+
+        {/* 成组变换手柄框 —— 多选（≥2 个可变换元素）时套在并集包围盒上的
+            八向缩放 + 旋转手柄。拖拽中（整组平移）暂不显示，落定后回到位。 */}
+        {groupHandleBox && !drag?.moved ? (
+          <div
+            className="ov-group-handles"
+            style={{
+              left: `${groupHandleBox.x}px`,
+              top: `${groupHandleBox.y}px`,
+              width: `${groupHandleBox.w}px`,
+              height: `${groupHandleBox.h}px`,
+              transform: groupHandleBox.angle
+                ? `rotate(${groupHandleBox.angle}rad)`
+                : undefined,
+            }}
+          >
+            <ResizeHandles api={groupResizeApi} rotatable />
+          </div>
+        ) : null}
 
         {/* 创建预览 —— 拖拽创建图形 / 手绘 / 连线时的实时呈现 */}
         {creating ? (

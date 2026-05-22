@@ -776,6 +776,15 @@
   pointer-events: none;
 }
 
+/* ── 成组变换手柄框 ─────────────────────────────────────────────
+ * 多选（≥2 个可变换元素）时套在并集包围盒上 —— 承载八向缩放手柄与
+ * 顶部旋转手柄。框本身不接收指针（pointer-events:none），手柄各自
+ * 接收（.ov-rz / .ov-rotate 自带 pointer-events:auto）。 */
+.ov-group-handles {
+  position: absolute;
+  pointer-events: none;
+}
+
 /* ── draft 态元素 ───────────────────────────────────────────────
  * Agent 进行中产出的元素 state=draft —— 半透明 + 虚线边框渲染
  * （PRD §7.4 第 3 点）。task.finish 后转 committed，恢复实线不透明。 */
