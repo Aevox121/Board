@@ -1238,7 +1238,7 @@
  * （Excalidraw）属性面板的能力与交互：色板行 + 分段按钮 + 不透明度滑杆。 */
 .ov-style-panel {
   position: absolute;
-  right: 16px;
+  left: 16px;
   top: 16px;
   z-index: 40;
   width: 208px;
