@@ -118,6 +118,14 @@ export interface StylePanelProps {
   locked: boolean;
   /** 切换选区锁定态。 */
   onToggleLock: () => void;
+  /** 可对齐 / 分布的元素数 —— ≥2 显示「对齐」节、≥3 显示分布。 */
+  alignCount: number;
+  /** 对齐选区。 */
+  onAlign: (
+    mode: 'left' | 'center-h' | 'right' | 'top' | 'center-v' | 'bottom',
+  ) => void;
+  /** 沿某轴等距分布选区。 */
+  onDistribute: (axis: 'h' | 'v') => void;
 }
 
 /** `<input type="color">` 需合法 #rrggbb；透明 / 异常值回退到白。 */
@@ -187,6 +195,9 @@ export function StylePanel({
   onLayer,
   locked,
   onToggleLock,
+  alignCount,
+  onAlign,
+  onDistribute,
 }: StylePanelProps): JSX.Element {
   // 锁定态 —— 面板只给「解锁」入口，不暴露样式 / 变换控件。
   if (locked) {
@@ -443,6 +454,84 @@ export function StylePanel({
           </button>
         </div>
       </section>
+
+      {alignCount >= 2 ? (
+        <section className="ov-style-sec">
+          <span className="ov-style-sec__label">对齐</span>
+          <div className="ov-seg">
+            <button
+              type="button"
+              className="ov-seg__btn"
+              onClick={() => onAlign('left')}
+              title="左对齐"
+            >
+              左
+            </button>
+            <button
+              type="button"
+              className="ov-seg__btn"
+              onClick={() => onAlign('center-h')}
+              title="水平居中对齐"
+            >
+              居中
+            </button>
+            <button
+              type="button"
+              className="ov-seg__btn"
+              onClick={() => onAlign('right')}
+              title="右对齐"
+            >
+              右
+            </button>
+          </div>
+          <div className="ov-seg">
+            <button
+              type="button"
+              className="ov-seg__btn"
+              onClick={() => onAlign('top')}
+              title="顶对齐"
+            >
+              上
+            </button>
+            <button
+              type="button"
+              className="ov-seg__btn"
+              onClick={() => onAlign('center-v')}
+              title="垂直居中对齐"
+            >
+              居中
+            </button>
+            <button
+              type="button"
+              className="ov-seg__btn"
+              onClick={() => onAlign('bottom')}
+              title="底对齐"
+            >
+              下
+            </button>
+          </div>
+          {alignCount >= 3 ? (
+            <div className="ov-seg">
+              <button
+                type="button"
+                className="ov-seg__btn"
+                onClick={() => onDistribute('h')}
+                title="水平等距分布"
+              >
+                水平分布
+              </button>
+              <button
+                type="button"
+                className="ov-seg__btn"
+                onClick={() => onDistribute('v')}
+                title="垂直等距分布"
+              >
+                垂直分布
+              </button>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       {canGroup || canUngroup ? (
         <section className="ov-style-sec">

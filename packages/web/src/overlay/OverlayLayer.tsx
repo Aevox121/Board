@@ -2654,6 +2654,95 @@ export function OverlayLayer({
     replaceScene({ ...cur, elements }, 'canvas');
   }
 
+  /** 对齐 / 分布作用的元素 —— 连线几何派生、锁定元素冻结，均排除。 */
+  function alignTargets(): Element[] {
+    const sel = selectedIdsRef.current;
+    return sceneRef.current.elements.filter(
+      (e) => sel.has(e.id) && e.type !== 'connector' && !e.locked,
+    );
+  }
+
+  /**
+   * 把选区元素按某条边 / 中线对齐 —— 基准为选区并集包围盒。连线 / 锁定
+   * 元素不参与。
+   */
+  function alignSelection(
+    mode: 'left' | 'center-h' | 'right' | 'top' | 'center-v' | 'bottom',
+  ): void {
+    const els = alignTargets();
+    if (els.length < 2) return;
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const e of els) {
+      x0 = Math.min(x0, e.x);
+      y0 = Math.min(y0, e.y);
+      x1 = Math.max(x1, e.x + e.width);
+      y1 = Math.max(y1, e.y + e.height);
+    }
+    const ids = new Set(els.map((e) => e.id));
+    const ts = new Date().toISOString();
+    const cur = sceneRef.current;
+    const elements = cur.elements.map((e): Element => {
+      if (!ids.has(e.id)) return e;
+      let { x, y } = e;
+      if (mode === 'left') x = x0;
+      else if (mode === 'right') x = x1 - e.width;
+      else if (mode === 'center-h') x = (x0 + x1) / 2 - e.width / 2;
+      else if (mode === 'top') y = y0;
+      else if (mode === 'bottom') y = y1 - e.height;
+      else if (mode === 'center-v') y = (y0 + y1) / 2 - e.height / 2;
+      return {
+        ...e,
+        x,
+        y,
+        autoPlaced: false,
+        updatedBy: actorId,
+        updatedAt: ts,
+      } as Element;
+    });
+    replaceScene({ ...cur, elements }, 'canvas');
+  }
+
+  /**
+   * 把选区元素沿某轴等距分布 —— 首尾元素不动，其余使相邻包围盒间隙相等。
+   * 需 ≥3 个可对齐元素。
+   */
+  function distributeSelection(axis: 'h' | 'v'): void {
+    const els = alignTargets();
+    if (els.length < 3) return;
+    const horiz = axis === 'h';
+    const sizeOf = (e: Element): number => (horiz ? e.width : e.height);
+    const posOf = (e: Element): number => (horiz ? e.x : e.y);
+    const sorted = [...els].sort((a, b) => posOf(a) - posOf(b));
+    const spanStart = posOf(sorted[0]!);
+    const last = sorted[sorted.length - 1]!;
+    const spanEnd = posOf(last) + sizeOf(last);
+    const sumSize = sorted.reduce((s, e) => s + sizeOf(e), 0);
+    const gap = (spanEnd - spanStart - sumSize) / (sorted.length - 1);
+    const newPos = new Map<string, number>();
+    let cursor = spanStart;
+    for (const e of sorted) {
+      newPos.set(e.id, cursor);
+      cursor += sizeOf(e) + gap;
+    }
+    const ts = new Date().toISOString();
+    const cur = sceneRef.current;
+    const elements = cur.elements.map((e): Element => {
+      const p = newPos.get(e.id);
+      if (p === undefined) return e;
+      return {
+        ...e,
+        ...(horiz ? { x: p } : { y: p }),
+        autoPlaced: false,
+        updatedBy: actorId,
+        updatedAt: ts,
+      } as Element;
+    });
+    replaceScene({ ...cur, elements }, 'canvas');
+  }
+
   /** 关闭上下文菜单（连同虚线框）。 */
   function closeMenu(): void {
     setMenu(null);
@@ -2712,6 +2801,10 @@ export function OverlayLayer({
   const selCanUngroup = selectedEls.some(
     (e) => (e.groupIds?.length ?? 0) > 0,
   );
+  // 可对齐 / 分布的元素数 —— 排除连线（几何派生）与锁定元素。
+  const selAlignCount = selectedEls.filter(
+    (e) => e.type !== 'connector' && !e.locked,
+  ).length;
   // 选区面板各节按元素类型条件显示：粗糙度（图形 / 手绘）、边角（矩形）、
   // 文字（文本 / 带标签图形）、箭头（连线）。
   const selHasRough = selectedEls.some(
@@ -3185,6 +3278,9 @@ export function OverlayLayer({
           onLayer={reorderSelection}
           locked={selectedEls.every((e) => e.locked)}
           onToggleLock={toggleLock}
+          alignCount={selAlignCount}
+          onAlign={alignSelection}
+          onDistribute={distributeSelection}
         />
       ) : null}
 
