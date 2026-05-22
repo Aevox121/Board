@@ -699,6 +699,9 @@ export function OverlayLayer({
   const [drag, setDrag] = useState<DragState | null>(null);
   // 当前拖拽的对齐参考线 —— 拖拽进行中实时刷新，落定 / 取消时清空。
   const [snapGuides, setSnapGuides] = useState<SnapGuide[]>([]);
+  // 正在就地编辑标签的图形 id —— 双击图形进入；null = 无。双击事件经指针
+  // 捕获落在卡槽上，故由卡槽 onDoubleClick 触发、状态提到本层。
+  const [editingLabelId, setEditingLabelId] = useState<string | null>(null);
   const [resize, setResize] = useState<ResizeState | null>(null);
   // 旋转瞬时状态；null = 未在旋转。
   const [rotate, setRotate] = useState<RotateState | null>(null);
@@ -2055,6 +2058,24 @@ export function OverlayLayer({
   }
 
   /**
+   * 图形标签就地编辑提交 —— 写回 `shape.label`；文本去空后为空则置 label
+   * 为 null（无标签），否则保留原 label 的其它字段（如 fontSize）。
+   */
+  function commitShapeLabel(id: string, text: string): void {
+    const cur = sceneRef.current;
+    const ts = new Date().toISOString();
+    const next: BoardScene = {
+      ...cur,
+      elements: cur.elements.map((e): Element => {
+        if (e.id !== id || e.type !== 'shape') return e;
+        const label = text.trim() ? { ...(e.label ?? {}), text } : null;
+        return { ...e, label, updatedBy: actorId, updatedAt: ts } as Element;
+      }),
+    };
+    replaceScene(next, 'canvas');
+  }
+
+  /**
    * 连线端点拖拽落定 —— 对落点做命中测试，重绑该端点（落在空白处则变为
    * 自由端），据落点与另一端重算连线包围盒与折线几何。
    */
@@ -2853,6 +2874,10 @@ export function OverlayLayer({
               onPointerCancel={
                 el.type === 'region' ? undefined : handlePointerCancel
               }
+              // 双击图形 —— 进入标签就地编辑（双击经指针捕获落在卡槽上）。
+              onDoubleClick={
+                isShape ? () => setEditingLabelId(el.id) : undefined
+              }
             >
               {el.type === 'region' ? (
                 <RegionCard
@@ -2874,6 +2899,16 @@ export function OverlayLayer({
                     resizing && resize
                       ? { ...el, width: resize.w, height: resize.h }
                       : el
+                  }
+                  editingLabel={editingLabelId === el.id}
+                  onLabelCommit={(t) => {
+                    commitShapeLabel(el.id, t);
+                    setEditingLabelId((cur) =>
+                      cur === el.id ? null : cur,
+                    );
+                  }}
+                  onLabelCancel={() =>
+                    setEditingLabelId((cur) => (cur === el.id ? null : cur))
                   }
                 />
               ) : el.type === 'draw' ? (

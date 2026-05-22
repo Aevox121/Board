@@ -28,6 +28,16 @@
   pointer-events: none;
 }
 
+/* 标签就地编辑态 —— 复用居中布局，开放指针、加焦点框、垫底色保证可读。 */
+.cv-shape__label--edit {
+  pointer-events: auto;
+  cursor: text;
+  outline: 2px solid var(--c-accent);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm);
+  background: var(--c-surface);
+}
+
 .cv-draw {
   display: block;
 }

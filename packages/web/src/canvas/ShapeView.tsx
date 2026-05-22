@@ -7,7 +7,7 @@
  *
  * seed 由元素 id 派生并固定 —— 同一图形每次渲染的手绘抖动一致，不会跳动。
  */
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type CSSProperties } from 'react';
 import rough from 'roughjs';
 import type { Options } from 'roughjs/bin/core';
 import type { ShapeElement, Style } from '@board/core';
@@ -69,15 +69,36 @@ function roundedRectPath(w: number, h: number, radius: number): string {
 
 export interface ShapeViewProps {
   element: ShapeElement;
+  /**
+   * 是否处于标签就地编辑态 —— 由 OverlayLayer 控制（双击经指针捕获落在
+   * 卡槽上，故编辑态提到上层）。缺省（如创建预览）即不可编辑。
+   */
+  editingLabel?: boolean;
+  /** 标签提交（失焦 / Ctrl+Enter）—— 由 OverlayLayer 写回场景。 */
+  onLabelCommit?: (text: string) => void;
+  /** 标签编辑取消（Esc）—— 由 OverlayLayer 退出编辑态、不写回。 */
+  onLabelCancel?: () => void;
 }
 
 /**
  * 把一个 ShapeElement 渲染为手绘风 SVG + 居中标签（局部坐标 0..w / 0..h）。
  * 调用方负责把它定位到画布坐标 (element.x, element.y)。
+ *
+ * 标签就地编辑：双击图形（由 OverlayLayer 卡槽捕获）进入编辑 —— 渲染
+ * contentEditable（复用居中标签样式），失焦 / Ctrl+Enter 提交、Esc 取消；
+ * 清空则标签置空。
  */
-export function ShapeView({ element }: ShapeViewProps): JSX.Element {
+export function ShapeView({
+  element,
+  editingLabel = false,
+  onLabelCommit,
+  onLabelCancel,
+}: ShapeViewProps): JSX.Element {
   const { width: w, height: h, shape, style, label } = element;
   const svgRef = useRef<SVGSVGElement>(null);
+  const labelRef = useRef<HTMLDivElement>(null);
+  // 防重复收尾 —— commit / cancel 后 onBlur 可能再触发一次。
+  const finishedRef = useRef(false);
 
   useEffect(() => {
     const svg = svgRef.current;
@@ -106,6 +127,41 @@ export function ShapeView({ element }: ShapeViewProps): JSX.Element {
     svg.appendChild(node);
   }, [shape, w, h, style, element.id]);
 
+  // 进入编辑 —— 用元素当前标签灌入可编辑区并全选（之后内容由用户掌控，
+  // React 不再触碰：该 div 无 children，重渲染不会回写）。
+  useEffect(() => {
+    if (!editingLabel) return;
+    finishedRef.current = false;
+    const node = labelRef.current;
+    if (!node) return;
+    node.textContent = label?.text ?? '';
+    node.focus();
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+    // 仅在进入编辑时跑一次；label 改变不重灌。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingLabel]);
+
+  const commit = (): void => {
+    if (finishedRef.current) return;
+    finishedRef.current = true;
+    onLabelCommit?.(labelRef.current?.textContent ?? '');
+  };
+  const cancel = (): void => {
+    if (finishedRef.current) return;
+    finishedRef.current = true;
+    onLabelCancel?.();
+  };
+
+  const labelStyle: CSSProperties = {
+    fontSize: `${label?.fontSize ?? style.fontSize}px`,
+    fontFamily: fontStack(style.fontFamily),
+    color: style.strokeColor,
+  };
+
   return (
     <div className="cv-shape" style={{ width: w, height: h }}>
       <svg
@@ -116,15 +172,30 @@ export function ShapeView({ element }: ShapeViewProps): JSX.Element {
         viewBox={`0 0 ${w} ${h}`}
         aria-hidden="true"
       />
-      {label && label.text ? (
+      {editingLabel ? (
         <div
-          className="cv-shape__label"
-          style={{
-            fontSize: `${label.fontSize ?? style.fontSize}px`,
-            fontFamily: fontStack(style.fontFamily),
-            color: style.strokeColor,
+          ref={labelRef}
+          className="cv-shape__label cv-shape__label--edit"
+          contentEditable
+          suppressContentEditableWarning
+          style={labelStyle}
+          // 编辑区内的指针操作不冒泡到卡槽 —— 不触发拖拽 / 重选。
+          onPointerDown={(e) => e.stopPropagation()}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              e.preventDefault();
+              e.stopPropagation();
+              cancel();
+            } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+              e.preventDefault();
+              e.stopPropagation();
+              commit();
+            }
           }}
-        >
+        />
+      ) : label && label.text ? (
+        <div className="cv-shape__label" style={labelStyle}>
           {label.text}
         </div>
       ) : null}
