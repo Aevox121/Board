@@ -22,6 +22,7 @@ import type {
   ArrowHead,
   BoardScene,
   ConnectorElement,
+  ConnectorRouting,
   DrawElement,
   Element,
   FileElement,
@@ -1679,12 +1680,36 @@ export function OverlayLayer({
   }
 
   /**
-   * 改选区内连线的端点箭头（起点 / 终点）—— 与 `style` 字段无关，故单列；
+   * 图形 / 连线标签提交 —— 写回 connector 的 `label`；文本去空后为空则置
+   * label 为 null（无标签）。
+   */
+  function commitConnectorLabel(id: string, text: string): void {
+    const cur = sceneRef.current;
+    const ts = new Date().toISOString();
+    const next: BoardScene = {
+      ...cur,
+      elements: cur.elements.map((e): Element =>
+        e.id === id && e.type === 'connector'
+          ? ({
+              ...e,
+              label: text.trim() ? { text } : null,
+              updatedBy: actorId,
+              updatedAt: ts,
+            } as Element)
+          : e,
+      ),
+    };
+    replaceScene(next, 'canvas');
+  }
+
+  /**
+   * 改选区内连线的端点箭头 / 路由方式 —— 与 `style` 字段无关，故单列；
    * 仅作用于 `connector` 元素，其它类型跳过。只改内存场景，自动保存负责落盘。
    */
   function applyConnectorPatch(patch: {
     startArrow?: ArrowHead;
     endArrow?: ArrowHead;
+    routing?: ConnectorRouting;
   }): void {
     const cur = sceneRef.current;
     const sel = selectedIdsRef.current;
@@ -2285,7 +2310,7 @@ export function OverlayLayer({
    */
   function beginConnectorDrag(
     connId: string,
-    e: React.PointerEvent<SVGPolylineElement>,
+    e: React.PointerEvent<SVGElement>,
   ): void {
     if (e.button !== 0) return;
     const cur = sceneRef.current;
@@ -2678,6 +2703,7 @@ export function OverlayLayer({
     ? {
         startArrow: selConnector.startArrow,
         endArrow: selConnector.endArrow,
+        routing: selConnector.routing,
       }
     : null;
 
@@ -2959,6 +2985,13 @@ export function OverlayLayer({
           zoom={zoom}
           onEndpointCommit={rebindConnectorEndpoint}
           onEndpointHover={handleEndpointHover}
+          onLabelEdit={(id) => setEditingLabelId(id)}
+          editingLabelId={editingLabelId}
+          onLabelCommit={(id, text) => {
+            commitConnectorLabel(id, text);
+            setEditingLabelId((cur) => (cur === id ? null : cur));
+          }}
+          onLabelCancel={() => setEditingLabelId(null)}
         />
 
         {/* 建议卡片（PRD §7.3）—— 承载 Agent 提议，含同意/拒绝/描述操作。

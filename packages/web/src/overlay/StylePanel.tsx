@@ -10,7 +10,13 @@
  *
  * 改动即 patch / 触发回调，由 OverlayLayer 写回内存场景并自动保存。
  */
-import type { ArrowHead, FillStyle, Style, StrokeStyle } from '@board/core';
+import type {
+  ArrowHead,
+  ConnectorRouting,
+  FillStyle,
+  Style,
+  StrokeStyle,
+} from '@board/core';
 
 /** 描边预设色 —— 经典手绘白板描边色板。 */
 const STROKE_PRESETS = ['#1e1e1e', '#e03131', '#2f9e44', '#1971c2', '#f08c00'];
@@ -62,6 +68,12 @@ const ARROW_HEADS: ReadonlyArray<{ label: string; value: ArrowHead }> = [
   { label: '三角', value: 'triangle' },
   { label: '圆点', value: 'dot' },
 ];
+/** 连线路由三档。 */
+const ROUTINGS: ReadonlyArray<{ label: string; value: ConnectorRouting }> = [
+  { label: '直线', value: 'straight' },
+  { label: '折线', value: 'orthogonal' },
+  { label: '曲线', value: 'curved' },
+];
 /** 选「圆角」时赋给 cornerRadius 的半径值（直角为 0）。 */
 const ROUND_RADIUS = 16;
 
@@ -78,14 +90,19 @@ export interface StylePanelProps {
   hasRect: boolean;
   /** 选区是否含文本 / 带标签图形 —— 决定是否显示「文字」一节。 */
   hasText: boolean;
-  /** 选区代表连线的端点箭头；无连线时为 null（不显示「箭头」一节）。 */
-  arrows: { startArrow: ArrowHead; endArrow: ArrowHead } | null;
+  /** 选区代表连线的端点箭头 / 路由；无连线时为 null（不显示连线相关节）。 */
+  arrows: {
+    startArrow: ArrowHead;
+    endArrow: ArrowHead;
+    routing: ConnectorRouting;
+  } | null;
   /** 样式补丁回调 —— 由 OverlayLayer 应用到整个选区。 */
   onChange: (patch: Partial<Style>) => void;
-  /** 连线专属字段补丁（起点 / 终点箭头）—— 仅作用于选区内的连线。 */
+  /** 连线专属字段补丁（起点 / 终点箭头、路由）—— 仅作用于选区内的连线。 */
   onArrowChange: (patch: {
     startArrow?: ArrowHead;
     endArrow?: ArrowHead;
+    routing?: ConnectorRouting;
   }) => void;
   /** 选区 ≥2 时可编组。 */
   canGroup: boolean;
@@ -305,6 +322,17 @@ export function StylePanel({
             options={FONT_SIZES}
             value={sizeSel}
             onPick={(v) => onChange({ fontSize: v })}
+          />
+        </section>
+      ) : null}
+
+      {arrows ? (
+        <section className="ov-style-sec">
+          <span className="ov-style-sec__label">线型</span>
+          <Seg
+            options={ROUTINGS}
+            value={arrows.routing}
+            onPick={(v) => onArrowChange({ routing: v })}
           />
         </section>
       ) : null}

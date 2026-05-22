@@ -20,6 +20,7 @@ import type { PointerEvent as ReactPointerEvent } from 'react';
 import type {
   BoardScene,
   ConnectorElement,
+  ConnectorRouting,
   ArrowHead,
   ShapeKind,
 } from '@board/core';
@@ -85,10 +86,7 @@ export interface ConnectorLayerProps {
    * 指针按下连线本体（非端点手柄、非 shift 点选）—— 由 OverlayLayer 发起整条
    * 连线（或其所在多选组）的拖拽。未提供时退化为仅选中。
    */
-  onBodyDown?: (
-    id: string,
-    e: ReactPointerEvent<SVGPolylineElement>,
-  ) => void;
+  onBodyDown?: (id: string, e: ReactPointerEvent<SVGElement>) => void;
   /**
    * 是否启用连线点选命中区。连线模式（箭头工具）下传 false —— 否则连线的
    * 透明命中描边会挡住「从连线上画起 / 画到」。
@@ -114,13 +112,25 @@ export interface ConnectorLayerProps {
    * 传 null 表示拖拽结束、清除高亮。
    */
   onEndpointHover?: (pos: { x: number; y: number } | null) => void;
+  /** 双击连线本体 —— 请求进入标签就地编辑（编辑态由 OverlayLayer 持有）。 */
+  onLabelEdit?: (id: string) => void;
+  /** 正在编辑标签的连线 id —— 该连线渲染 contentEditable 编辑区。 */
+  editingLabelId?: string | null;
+  /** 标签提交（失焦 / Enter）。 */
+  onLabelCommit?: (id: string, text: string) => void;
+  /** 标签编辑取消（Esc）。 */
+  onLabelCancel?: () => void;
 }
 
 /** 一条连线渲染所需的几何 + 样式。 */
 interface ConnGeom {
   id: string;
-  /** 折线顶点（画布坐标），至少 2 个。 */
+  /** 折线顶点（画布坐标），至少 2 个 —— 直线 2 点、折线 4 点、曲线 2 点。 */
   pts: Pt[];
+  /** 路由方式 —— 决定按折线还是二次贝塞尔渲染。 */
+  routing: ConnectorRouting;
+  /** 曲线路由的控制点（画布坐标）；非曲线为 undefined。 */
+  ctrl: Pt | undefined;
   stroke: string;
   strokeWidth: number;
   /** SVG stroke-dasharray；实线为 undefined。 */
@@ -131,6 +141,37 @@ interface ConnGeom {
   label: string | null;
   /** 标签锚点（折线弧长中点）。 */
   labelAt: Pt;
+}
+
+/**
+ * 按路由方式把两端点 (p1,p2) 展开为渲染顶点。
+ *  - straight：直连 [p1,p2]。
+ *  - orthogonal：直角 Z 形折线 —— 主轴方向居中转折。
+ *  - curved：仍是 [p1,p2]，弯曲由控制点在渲染时处理。
+ */
+function routePoints(p1: Pt, p2: Pt, routing: ConnectorRouting): Pt[] {
+  if (routing !== 'orthogonal') return [p1, p2];
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+  if (Math.abs(dx) < 1 || Math.abs(dy) < 1) return [p1, p2];
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    const mx = (p1.x + p2.x) / 2;
+    return [p1, { x: mx, y: p1.y }, { x: mx, y: p2.y }, p2];
+  }
+  const my = (p1.y + p2.y) / 2;
+  return [p1, { x: p1.x, y: my }, { x: p2.x, y: my }, p2];
+}
+
+/** 曲线路由的二次贝塞尔控制点 —— 自 p1→p2 中点垂直弓起约 1/5 长度。 */
+function curveControl(p1: Pt, p2: Pt): Pt {
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const off = Math.min(len * 0.22, 140);
+  return {
+    x: (p1.x + p2.x) / 2 + (-dy / len) * off,
+    y: (p1.y + p2.y) / 2 + (dx / len) * off,
+  };
 }
 
 const center = (r: RectLike): Pt => ({
@@ -256,6 +297,10 @@ export function ConnectorLayer({
   zoom = 1,
   onEndpointCommit,
   onEndpointHover,
+  onLabelEdit,
+  editingLabelId,
+  onLabelCommit,
+  onLabelCancel,
 }: ConnectorLayerProps): JSX.Element | null {
   // 端点拖拽瞬时状态；ref 镜像供指针回调读取最新值。
   const [epDrag, setEpDrag] = useState<EndpointDrag | null>(null);
@@ -339,10 +384,19 @@ export function ConnectorLayer({
       }
       if (pts.length < 2) continue;
 
+      // 路由展开 —— 折线插入直角转折点，曲线另算控制点。
+      const e1 = pts[0]!;
+      const e2 = pts[pts.length - 1]!;
+      const routePts = routePoints(e1, e2, conn.routing);
+      const ctrl =
+        conn.routing === 'curved' ? curveControl(e1, e2) : undefined;
+
       const st = conn.style;
       out.push({
         id: conn.id,
-        pts,
+        pts: routePts,
+        routing: conn.routing,
+        ctrl,
         stroke: st.strokeColor,
         strokeWidth: st.strokeWidth,
         dash: dashOf(st.strokeStyle, st.strokeWidth),
@@ -350,7 +404,13 @@ export function ConnectorLayer({
         startArrow: conn.startArrow,
         endArrow: conn.endArrow,
         label: conn.label?.text ?? null,
-        labelAt: arcMidpoint(pts),
+        // 曲线标签锚点取贝塞尔 t=0.5 处（非控制点）。
+        labelAt: ctrl
+          ? {
+              x: 0.25 * e1.x + 0.5 * ctrl.x + 0.25 * e2.x,
+              y: 0.25 * e1.y + 0.5 * ctrl.y + 0.25 * e2.y,
+            }
+          : arcMidpoint(routePts),
       });
     }
     return out;
@@ -447,8 +507,10 @@ export function ConnectorLayer({
     <>
       {geoms.map((g) => {
         // 每条连线一个独立 svg，尺寸贴合其包围盒（含箭头 / 线宽外扩余量）。
-        const xs = g.pts.map((p) => p.x);
-        const ys = g.pts.map((p) => p.y);
+        // 包围盒含曲线控制点 —— 否则弓起部分会被 svg 裁掉。
+        const bpts = g.ctrl ? [...g.pts, g.ctrl] : g.pts;
+        const xs = bpts.map((p) => p.x);
+        const ys = bpts.map((p) => p.y);
         const pad = ARROW_LEN + g.strokeWidth + 4;
         const minX = Math.min(...xs) - pad;
         const minY = Math.min(...ys) - pad;
@@ -459,9 +521,20 @@ export function ConnectorLayer({
         const lpts = g.pts.map(loc);
         const first = lpts[0]!;
         const last = lpts[lpts.length - 1]!;
-        const endDir = unit(lpts[lpts.length - 2]!, last);
-        const startDir = unit(lpts[1]!, first);
-        const pointStr = lpts.map((p) => `${p.x},${p.y}`).join(' ');
+        // 路径数据 + 端点切线方向 —— 曲线走二次贝塞尔，其余走折线。
+        let pathD: string;
+        let endDir: Pt;
+        let startDir: Pt;
+        if (g.routing === 'curved' && g.ctrl) {
+          const c = loc(g.ctrl);
+          pathD = `M ${first.x} ${first.y} Q ${c.x} ${c.y} ${last.x} ${last.y}`;
+          endDir = unit(c, last);
+          startDir = unit(c, first);
+        } else {
+          pathD = 'M ' + lpts.map((p) => `${p.x} ${p.y}`).join(' L ');
+          endDir = unit(lpts[lpts.length - 2]!, last);
+          startDir = unit(lpts[1]!, first);
+        }
         const isSelected = !!selectedIds?.has(g.id);
         // 端点重连手柄 —— 仅恰好单选该连线时出现（多选不重连）。
         const showHandles =
@@ -479,16 +552,16 @@ export function ConnectorLayer({
             <g opacity={g.opacity}>
               {/* 选中态：可见线之下垫一道半透明光晕。 */}
               {isSelected ? (
-                <polyline
+                <path
                   className="ov-connector-sel"
-                  points={pointStr}
+                  d={pathD}
                   fill="none"
                   strokeWidth={g.strokeWidth + 8}
                 />
               ) : null}
-              <polyline
+              <path
                 className="ov-connector-line"
-                points={pointStr}
+                d={pathD}
                 fill="none"
                 stroke={g.stroke}
                 strokeWidth={g.strokeWidth}
@@ -503,11 +576,11 @@ export function ConnectorLayer({
                 g.strokeWidth,
               )}
               {/* 点选命中区 —— 透明粗描边，比可见线宽得多，方便点中细线。
-                  连线模式下不渲染，避免挡住画箭头。 */}
+                  连线模式下不渲染，避免挡住画箭头。双击进入标签编辑。 */}
               {interactive && onSelect ? (
-                <polyline
+                <path
                   className="ov-connector-hit"
-                  points={pointStr}
+                  d={pathD}
                   fill="none"
                   stroke="transparent"
                   strokeWidth={Math.max(g.strokeWidth + 10, 14)}
@@ -522,6 +595,10 @@ export function ConnectorLayer({
                     } else {
                       onSelect(g.id, false);
                     }
+                  }}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    onLabelEdit?.(g.id);
                   }}
                 />
               ) : null}
@@ -552,17 +629,98 @@ export function ConnectorLayer({
         );
       })}
       {geoms
-        .filter((g) => g.label)
-        .map((g) => (
-          <div
-            key={`lbl-${g.id}`}
-            className="ov-connector-label"
-            style={{ left: `${g.labelAt.x}px`, top: `${g.labelAt.y}px` }}
-          >
-            {g.label}
-          </div>
-        ))}
+        .filter((g) => g.label || g.id === editingLabelId)
+        .map((g) =>
+          g.id === editingLabelId ? (
+            <ConnLabelEditor
+              key={`lbl-${g.id}`}
+              id={g.id}
+              text={g.label ?? ''}
+              at={g.labelAt}
+              onCommit={onLabelCommit}
+              onCancel={onLabelCancel}
+            />
+          ) : (
+            <div
+              key={`lbl-${g.id}`}
+              className="ov-connector-label"
+              style={{ left: `${g.labelAt.x}px`, top: `${g.labelAt.y}px` }}
+            >
+              {g.label}
+            </div>
+          ),
+        )}
     </>
+  );
+}
+
+/**
+ * 连线标签就地编辑区 —— 双击连线进入。contentEditable 复用标签样式，
+ * 失焦 / Enter / Ctrl+Enter 提交，Esc 取消；清空则标签置空。
+ */
+function ConnLabelEditor({
+  id,
+  text,
+  at,
+  onCommit,
+  onCancel,
+}: {
+  id: string;
+  text: string;
+  at: Pt;
+  onCommit?: (id: string, text: string) => void;
+  onCancel?: () => void;
+}): JSX.Element {
+  const ref = useRef<HTMLDivElement>(null);
+  const doneRef = useRef(false);
+
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    node.textContent = text;
+    node.focus();
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+    // 仅进入时跑一次。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const commit = (): void => {
+    if (doneRef.current) return;
+    doneRef.current = true;
+    onCommit?.(id, ref.current?.textContent ?? '');
+  };
+  const cancel = (): void => {
+    if (doneRef.current) return;
+    doneRef.current = true;
+    onCancel?.();
+  };
+
+  return (
+    <div
+      ref={ref}
+      className="ov-connector-label ov-connector-label--edit"
+      contentEditable
+      suppressContentEditableWarning
+      style={{ left: `${at.x}px`, top: `${at.y}px` }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          cancel();
+        } else if (e.key === 'Enter') {
+          // 连线标签通常单行 —— Enter 直接提交。
+          e.preventDefault();
+          e.stopPropagation();
+          commit();
+        }
+      }}
+    />
   );
 }
 

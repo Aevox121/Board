@@ -1247,6 +1247,16 @@
   pointer-events: none;
 }
 
+/* 连线标签就地编辑态 —— 双击连线进入；开放指针、加焦点框。 */
+.ov-connector-label--edit {
+  pointer-events: auto;
+  cursor: text;
+  outline: 2px solid var(--c-accent);
+  outline-offset: -1px;
+  min-width: 18px;
+  white-space: pre;
+}
+
 /* ── 连线模式（箭头 / 线条工具激活）──────────────────────────────
  * 卡片 / 缩放手柄 / 区域头部停止截获指针 —— 让箭头能从任意元素上画起、
  * 画到任意元素（否则 pointerdown 会被卡片抢去触发拖拽，区域内的元素也
