@@ -16,7 +16,7 @@ import { useBoard } from '../board/BoardContext';
 import { OverlayLayer } from '../overlay/OverlayLayer';
 import { PresenceLayer } from '../presence/PresenceLayer';
 import { CanvasGrid } from './CanvasGrid';
-import { Toolbar } from './Toolbar';
+import { Toolbar, TOOL_SHORTCUTS } from './Toolbar';
 import { useViewportGestures } from './useViewportGestures';
 import {
   INITIAL_VIEWPORT,
@@ -81,6 +81,34 @@ export function CanvasShell(): JSX.Element {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [undo, redo]);
+
+  // 工具快捷键 —— 无修饰键的字母 / 数字键切换工具（V/R/O/D/A/P/T/E 或 1-8），
+  // Esc 回到选择工具。输入框 / 文本域聚焦时让位给原生输入。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const ae = document.activeElement as HTMLElement | null;
+      if (
+        ae &&
+        (ae.tagName === 'INPUT' ||
+          ae.tagName === 'TEXTAREA' ||
+          ae.isContentEditable)
+      ) {
+        return;
+      }
+      if (e.key === 'Escape') {
+        setActiveTool('selection');
+        return;
+      }
+      const tool = TOOL_SHORTCUTS[e.key.toLowerCase()];
+      if (tool) {
+        e.preventDefault();
+        setActiveTool(tool);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   // 缩放控件 —— 以外壳中心为锚缩放。
   const zoomBy = useCallback((factor: number) => {

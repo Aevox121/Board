@@ -39,6 +39,8 @@ function icon(path: JSX.Element, filled = false): JSX.Element {
 interface ToolDef {
   id: ToolId;
   label: string;
+  /** 字母快捷键（大写，仅用于展示；实际匹配不分大小写）。 */
+  shortcut: string;
   icon: JSX.Element;
 }
 
@@ -47,6 +49,7 @@ const TOOLS: Array<ToolDef | 'divider'> = [
   {
     id: 'selection',
     label: '选择',
+    shortcut: 'V',
     icon: icon(
       <path d="M5 3v15.6l4.3-4.1 2.7 5.9 2.4-1.1-2.6-5.7h6z" />,
       true,
@@ -56,26 +59,31 @@ const TOOLS: Array<ToolDef | 'divider'> = [
   {
     id: 'rectangle',
     label: '矩形',
+    shortcut: 'R',
     icon: icon(<rect x="3.5" y="6" width="17" height="12" rx="1.5" />),
   },
   {
     id: 'ellipse',
     label: '椭圆',
+    shortcut: 'O',
     icon: icon(<ellipse cx="12" cy="12" rx="9" ry="6.5" />),
   },
   {
     id: 'diamond',
     label: '菱形',
+    shortcut: 'D',
     icon: icon(<path d="M12 3l9 9-9 9-9-9z" />),
   },
   {
     id: 'arrow',
     label: '箭头 / 连线',
+    shortcut: 'A',
     icon: icon(<path d="M3 12h16M13 6l7 6-7 6" />),
   },
   {
     id: 'freedraw',
     label: '画笔',
+    shortcut: 'P',
     icon: icon(
       <>
         <path d="M4 20l3.5-1L19 7.5 16.5 5 5 16.5z" />
@@ -86,12 +94,14 @@ const TOOLS: Array<ToolDef | 'divider'> = [
   {
     id: 'text',
     label: '文本',
+    shortcut: 'T',
     icon: icon(<path d="M5 6.5V5h14v1.5M12 5v14M9 19h6" />),
   },
   'divider',
   {
     id: 'eraser',
     label: '橡皮擦',
+    shortcut: 'E',
     icon: icon(
       <>
         <path d="M9 20h11" />
@@ -101,6 +111,22 @@ const TOOLS: Array<ToolDef | 'divider'> = [
     ),
   },
 ];
+
+/**
+ * 工具快捷键映射 —— 字母键（小写）+ 按工具栏顺序的数字键（1..8）→ 工具 id。
+ * 由 CanvasShell 的全局 keydown 监听消费。
+ */
+export const TOOL_SHORTCUTS: Readonly<Record<string, ToolId>> = (() => {
+  const map: Record<string, ToolId> = {};
+  let n = 0;
+  for (const t of TOOLS) {
+    if (t === 'divider') continue;
+    n += 1;
+    map[t.shortcut.toLowerCase()] = t.id;
+    map[String(n)] = t.id;
+  }
+  return map;
+})();
 
 export interface ToolbarProps {
   /** 当前工具 id。 */
@@ -121,7 +147,7 @@ export function Toolbar({ activeTool, onSelect }: ToolbarProps): JSX.Element {
             key={t.id}
             type="button"
             className={'cv-tool' + (t.id === activeTool ? ' cv-tool--active' : '')}
-            title={t.label}
+            title={`${t.label} — ${t.shortcut}`}
             aria-label={t.label}
             aria-pressed={t.id === activeTool}
             onClick={() => onSelect(t.id)}
