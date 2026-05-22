@@ -2466,52 +2466,6 @@ export function OverlayLayer({
   }
 
   /**
-   * 水平 / 垂直翻转当前选区 —— 沿选区包围盒中线镜像各元素的位置，并各自镜像
-   * 自身（手绘镜像采样点；所有元素角度取反 —— 镜像会把旋转 θ 变为 -θ）。
-   */
-  function flipSelection(axis: 'h' | 'v'): void {
-    const cur = sceneRef.current;
-    const sel = selectedIdsRef.current;
-    const els = cur.elements.filter((e) => sel.has(e.id));
-    if (els.length === 0) return;
-    let x0 = Infinity;
-    let y0 = Infinity;
-    let x1 = -Infinity;
-    let y1 = -Infinity;
-    for (const e of els) {
-      x0 = Math.min(x0, e.x);
-      y0 = Math.min(y0, e.y);
-      x1 = Math.max(x1, e.x + e.width);
-      y1 = Math.max(y1, e.y + e.height);
-    }
-    const ts = new Date().toISOString();
-    const elements = cur.elements.map((e): Element => {
-      if (!sel.has(e.id)) return e;
-      const nx = axis === 'h' ? x0 + x1 - (e.x + e.width) : e.x;
-      const ny = axis === 'v' ? y0 + y1 - (e.y + e.height) : e.y;
-      const common = {
-        x: nx,
-        y: ny,
-        angle: -(e.angle || 0),
-        autoPlaced: false,
-        updatedBy: actorId,
-        updatedAt: ts,
-      };
-      if (e.type === 'draw') {
-        return {
-          ...e,
-          ...common,
-          points: e.points.map((p): [number, number] =>
-            axis === 'h' ? [e.width - p[0], p[1]] : [p[0], e.height - p[1]],
-          ),
-        };
-      }
-      return { ...e, ...common } as Element;
-    });
-    replaceScene({ ...cur, elements }, 'canvas');
-  }
-
-  /**
    * 调整选区的图层顺序（z 序）—— 置顶 / 置底 / 上移一层 / 下移一层。
    *
    * 把全部元素按 z 排好后，按 mode 重排选区元素的位置，再给全体重新赋
@@ -3033,8 +2987,6 @@ export function OverlayLayer({
           canUngroup={selCanUngroup}
           onGroup={groupSelection}
           onUngroup={ungroupSelection}
-          onFlipH={() => flipSelection('h')}
-          onFlipV={() => flipSelection('v')}
           onLayer={reorderSelection}
         />
       ) : null}

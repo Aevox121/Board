@@ -6,7 +6,7 @@
  *    粗糙度 / 文字（字体 + 字号）/ 不透明度（即 `board style` CLI / MCP 所改
  *    的字段）。多选时改动应用到整个选区。
  *  - 连线专属：起点 / 终点箭头样式。
- *  - 翻转 / 图层顺序 / 编组操作（按选区状态条件显示）。
+ *  - 图层顺序 / 编组操作（按选区状态条件显示）。
  *
  * 改动即 patch / 触发回调，由 OverlayLayer 写回内存场景并自动保存。
  */
@@ -95,10 +95,6 @@ export interface StylePanelProps {
   onGroup: () => void;
   /** 取消编组（Ctrl+Shift+G）。 */
   onUngroup: () => void;
-  /** 水平翻转选区。 */
-  onFlipH: () => void;
-  /** 垂直翻转选区。 */
-  onFlipV: () => void;
   /** 调整选区图层顺序（置顶 / 置底 / 上移 / 下移）。 */
   onLayer: (mode: 'front' | 'back' | 'forward' | 'backward') => void;
 }
@@ -167,8 +163,6 @@ export function StylePanel({
   canUngroup,
   onGroup,
   onUngroup,
-  onFlipH,
-  onFlipV,
   onLayer,
 }: StylePanelProps): JSX.Element {
   const widthSel = nearestWidth(s.strokeWidth);
@@ -350,28 +344,6 @@ export function StylePanel({
             aria-label="不透明度"
           />
           <span className="ov-style-opacity__val">{s.opacity}</span>
-        </div>
-      </section>
-
-      <section className="ov-style-sec">
-        <span className="ov-style-sec__label">翻转</span>
-        <div className="ov-seg">
-          <button
-            type="button"
-            className="ov-seg__btn"
-            onClick={onFlipH}
-            title="水平翻转"
-          >
-            水平翻转
-          </button>
-          <button
-            type="button"
-            className="ov-seg__btn"
-            onClick={onFlipV}
-            title="垂直翻转"
-          >
-            垂直翻转
-          </button>
         </div>
       </section>
 
