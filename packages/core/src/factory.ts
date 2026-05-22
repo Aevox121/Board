@@ -28,6 +28,8 @@ import {
   type SuggestionElement,
   type SuggestionType,
   type SuggestionStatus,
+  type ImageElement,
+  type EmbedElement,
   type ParticipantId,
 } from './types.js';
 import { newBoardId, newElementId } from './ids.js';
@@ -237,6 +239,40 @@ export function createConnectorElement(
     endArrow: init.endArrow ?? 'arrow',
     routing: init.routing ?? 'straight',
     label: init.label ? { text: init.label } : null,
+  };
+}
+
+/**
+ * 创建画布原生图片元素（PRD §6.8）。
+ * `assetId`（assets/ 内素材）与 `path`（files/ 内文件）二选一。
+ */
+export function createImageElement(
+  init: BaseElementInit & {
+    naturalWidth: number;
+    naturalHeight: number;
+    assetId?: string;
+    path?: string;
+  },
+): ImageElement {
+  return {
+    ...baseElement('image', init),
+    type: 'image',
+    naturalWidth: init.naturalWidth,
+    naturalHeight: init.naturalHeight,
+    ...(init.assetId !== undefined ? { assetId: init.assetId } : {}),
+    ...(init.path !== undefined ? { path: init.path } : {}),
+  };
+}
+
+/** 创建外链嵌入元素（PRD §6.10）—— 默认链接卡。 */
+export function createEmbedElement(
+  init: BaseElementInit & { url: string; embedType?: 'iframe' | 'link-card' },
+): EmbedElement {
+  return {
+    ...baseElement('embed', init),
+    type: 'embed',
+    url: init.url,
+    embedType: init.embedType ?? 'link-card',
   };
 }
 

@@ -23,8 +23,9 @@
  *  - GET  /api/events           → SSE，board-changed + 结构化事件流（M2/M4）
  *  - GET  /api/events/log       → 按游标增量拉取留存事件（M4：事件流）
  */
+import { randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, rename, stat } from 'node:fs/promises';
+import { mkdir, rename, stat, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import {
@@ -350,6 +351,135 @@ async function handleGetFile(
     }
   });
   stream.pipe(res);
+}
+
+/** 画布素材（assets/）单文件大小上限 —— 25MB。 */
+const MAX_ASSET_BYTES = 25 * 1024 * 1024;
+
+/** content-type → 素材文件扩展名。 */
+function extForImageMime(mime: string): string {
+  const map: Record<string, string> = {
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'image/gif': 'gif',
+    'image/webp': 'webp',
+    'image/svg+xml': 'svg',
+    'image/bmp': 'bmp',
+    'image/avif': 'avif',
+  };
+  return map[mime] ?? 'bin';
+}
+
+/** assetId 合法性 —— 仅 [A-Za-z0-9._-]、不含 `..`，防目录穿越。 */
+function isSafeAssetId(id: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id) && !id.includes('..');
+}
+
+/** 读取请求体为原始二进制（assets 上传用，限额比 JSON 体大）。 */
+async function readBinaryBody(req: IncomingMessage): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of req) {
+    const buf = chunk as Buffer;
+    total += buf.length;
+    if (total > MAX_ASSET_BYTES) {
+      throw new Error('上传体超过大小上限（25MB）');
+    }
+    chunks.push(buf);
+  }
+  return Buffer.concat(chunks);
+}
+
+/**
+ * GET /api/assets/<assetId> —— 返回 assets/ 下画布素材的原始内容。
+ * 安全：assetId 须合法且解析后仍落在 `<dir>/assets/` 内。
+ */
+async function handleGetAsset(
+  deps: HttpDeps,
+  res: ServerResponse,
+  rawId: string,
+): Promise<void> {
+  let id: string;
+  try {
+    id = decodeURIComponent(rawId);
+  } catch {
+    fail(res, 400, 'assetId 编码非法');
+    return;
+  }
+  if (!id || !isSafeAssetId(id)) {
+    fail(res, 400, `assetId 非法: ${id}`);
+    return;
+  }
+  const assetsRoot = resolve(deps.dir, 'assets');
+  const target = resolve(assetsRoot, id);
+  const rootPrefix = assetsRoot.endsWith(sep) ? assetsRoot : assetsRoot + sep;
+  if (!target.startsWith(rootPrefix)) {
+    fail(res, 403, '禁止访问 assets/ 之外的路径');
+    return;
+  }
+  let st;
+  try {
+    st = await stat(target);
+  } catch {
+    fail(res, 404, `素材不存在: ${id}`);
+    return;
+  }
+  if (!st.isFile()) {
+    fail(res, 400, `路径不是文件: ${id}`);
+    return;
+  }
+  // assetId 内容寻址、不可变 —— 可长缓存。
+  res.writeHead(200, {
+    'Content-Type': guessMime(id),
+    'Content-Length': String(st.size),
+    'Cache-Control': 'public, max-age=31536000, immutable',
+  });
+  const stream = createReadStream(target);
+  stream.on('error', (err) => {
+    console.error('[board-server] 读取素材流出错:', err);
+    if (!res.headersSent) fail(res, 500, `读取素材失败: ${errMsg(err)}`);
+    else res.destroy();
+  });
+  stream.pipe(res);
+}
+
+/**
+ * POST /api/assets —— 上传画布素材（图片）到 assets/，返回新 assetId。
+ * 请求体为原始图片字节，`Content-Type` 标明 MIME。
+ */
+async function handleUploadAsset(
+  deps: HttpDeps,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const mime = (req.headers['content-type'] ?? '')
+    .split(';')[0]!
+    .trim()
+    .toLowerCase();
+  if (!mime.startsWith('image/')) {
+    fail(res, 415, '仅支持上传图片素材');
+    return;
+  }
+  let buf: Buffer;
+  try {
+    buf = await readBinaryBody(req);
+  } catch (err) {
+    fail(res, 413, errMsg(err));
+    return;
+  }
+  if (buf.length === 0) {
+    fail(res, 400, '上传体为空');
+    return;
+  }
+  const assetsRoot = resolve(deps.dir, 'assets');
+  try {
+    await mkdir(assetsRoot, { recursive: true });
+    const assetId = `${randomUUID().replace(/-/g, '').slice(0, 16)}.${extForImageMime(mime)}`;
+    await writeFile(resolve(assetsRoot, assetId), buf);
+    ok(res, { assetId, size: buf.length });
+  } catch (err) {
+    fail(res, 500, `保存素材失败: ${errMsg(err)}`);
+  }
 }
 
 /**
@@ -1144,6 +1274,16 @@ async function route(
   // POST /api/elements/delete —— 删除元素（含 file 移入回收站、连带清引用）
   if (path === '/api/elements/delete' && method === 'POST') {
     await handleDeleteElement(deps, req, res);
+    return;
+  }
+  // POST /api/assets —— 上传画布素材；GET /api/assets/<id> —— 读取素材
+  if (path === '/api/assets' && method === 'POST') {
+    await handleUploadAsset(deps, req, res);
+    return;
+  }
+  if (path.startsWith('/api/assets/') && method === 'GET') {
+    const rawPath = url.pathname;
+    await handleGetAsset(deps, res, rawPath.slice('/api/assets/'.length));
     return;
   }
   // GET /api/files/<相对路径> —— 注意用未折叠斜杠的原始 pathname 取子路径

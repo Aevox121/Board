@@ -61,6 +61,108 @@
   pointer-events: none;
 }
 
+/* 图片 / 嵌入槽 —— 可选中 / 拖拽 / 缩放（同图形槽）。 */
+.ov-slot--media {
+  pointer-events: auto;
+  cursor: grab;
+}
+
+/* ── 画布原生图片 ──────────────────────────────────────────────── */
+.ov-image {
+  width: 100%;
+  height: 100%;
+}
+.ov-image__img {
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  display: block;
+  border-radius: 4px;
+}
+.ov-image__missing {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  font-size: 13px;
+  color: var(--c-text-dim, #9b8e80);
+  background: var(--c-surface, #fff);
+  border: 1.5px dashed var(--c-border, #d8cfc2);
+  border-radius: 6px;
+}
+
+/* ── 外链嵌入 ──────────────────────────────────────────────────── */
+.ov-embed {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--c-surface, #fff);
+  border: 1.5px solid var(--c-border, #d8cfc2);
+  border-radius: 8px;
+}
+.ov-embed--card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+}
+.ov-embed__icon {
+  flex: none;
+  font-size: 22px;
+}
+.ov-embed__body {
+  flex: 1;
+  min-width: 0;
+}
+.ov-embed__host {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-text, #3a342c);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-embed__url {
+  margin-top: 2px;
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--c-text-dim, #9b8e80);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-embed__open {
+  display: flex;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  font-size: 15px;
+  color: var(--c-accent);
+  text-decoration: none;
+  background: var(--c-surface-2, #f4efe6);
+  cursor: pointer;
+}
+.ov-embed__open:hover {
+  background: var(--c-border, #d8cfc2);
+}
+.ov-embed--frame {
+  padding: 0;
+}
+.ov-embed__iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+  /* iframe 此阶段为只读预览 —— 不拦截指针，整个嵌入元素仍可拖拽 / 选中。 */
+  pointer-events: none;
+}
+
 .ov-slot--shape.ov-slot--dragging {
   cursor: grabbing;
 }

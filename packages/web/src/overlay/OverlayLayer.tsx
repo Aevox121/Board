@@ -45,6 +45,8 @@ import {
   createDrawElement,
   createTextElement,
   createConnectorElement,
+  createImageElement,
+  createEmbedElement,
   DEFAULT_STYLE,
 } from '@board/core';
 import { useBoard } from '../board/BoardContext';
@@ -53,6 +55,8 @@ import { deleteElement } from '../server/client';
 import { FileCard } from './FileCard';
 import { FolderCard } from './FolderCard';
 import { TextCard } from './TextCard';
+import { ImageView } from './ImageView';
+import { EmbedView } from './EmbedView';
 import { TaskCard } from './TaskCard';
 import { SuggestionCard } from './SuggestionCard';
 import { RegionCard, type PointerHandlers } from './RegionCard';
@@ -225,7 +229,17 @@ type ContentElement = Extract<
  */
 type CanvasElement = Extract<
   Element,
-  { type: 'file' | 'folder' | 'region' | 'text' | 'shape' | 'draw' }
+  {
+    type:
+      | 'file'
+      | 'folder'
+      | 'region'
+      | 'text'
+      | 'shape'
+      | 'draw'
+      | 'image'
+      | 'embed';
+  }
 >;
 
 /** 判断元素是否属于本层渲染范围。 */
@@ -236,7 +250,9 @@ function isCanvasElement(el: Element): el is CanvasElement {
     el.type === 'region' ||
     el.type === 'text' ||
     el.type === 'shape' ||
-    el.type === 'draw'
+    el.type === 'draw' ||
+    el.type === 'image' ||
+    el.type === 'embed'
   );
 }
 
@@ -409,6 +425,35 @@ const MARQUEE_TYPES: ReadonlySet<string> = new Set([
   'file',
   'folder',
 ]);
+
+/**
+ * 把一段文本规范化为 URL —— `http(s)://` 原样返回，裸域名（含点、无空白）
+ * 补 `https://`；其余返回 null。用于「拖入链接 → 嵌入元素」。
+ */
+function normalizeUrl(text: string): string | null {
+  const t = text.trim();
+  if (!t || /\s/.test(t)) return null;
+  if (/^https?:\/\/\S+$/i.test(t)) return t;
+  if (/^[\w-]+(\.[\w-]+)+(\/\S*)?$/.test(t)) return `https://${t}`;
+  return null;
+}
+
+/** 读取图片 Blob 的原始像素尺寸（解码失败则 reject）。 */
+function imageDimensions(blob: Blob): Promise<{ w: number; h: number }> {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = (): void => {
+      res({ w: img.naturalWidth, h: img.naturalHeight });
+      URL.revokeObjectURL(url);
+    };
+    img.onerror = (): void => {
+      URL.revokeObjectURL(url);
+      rej(new Error('图片解码失败'));
+    };
+    img.src = url;
+  });
+}
 
 /**
  * 可参与「成组变换」（多选缩放 / 旋转）的元素类型 —— 排除区域（容器，
@@ -1654,6 +1699,57 @@ export function OverlayLayer({
     return () => window.removeEventListener('keydown', onKey);
   }, [connection]);
 
+  // 拖入素材：图片文件 → 图片元素，链接 / URL → 嵌入元素。落点取放下处。
+  useEffect(() => {
+    const host = rootRef.current?.parentElement; // .board-canvas
+    if (!host) return;
+    const toCanvas = (cx: number, cy: number): { x: number; y: number } => {
+      const root = rootRef.current;
+      const vp = viewportRef.current;
+      if (!root) return { x: 0, y: 0 };
+      const rect = root.getBoundingClientRect();
+      return {
+        x: (cx - rect.left) / vp.zoom - vp.scrollX,
+        y: (cy - rect.top) / vp.zoom - vp.scrollY,
+      };
+    };
+    const onDragOver = (e: DragEvent): void => {
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    };
+    const onDrop = (e: DragEvent): void => {
+      const dt = e.dataTransfer;
+      if (!dt) return;
+      const pt = toCanvas(e.clientX, e.clientY);
+      const imgFile = Array.from(dt.files).find((f) =>
+        f.type.startsWith('image/'),
+      );
+      if (imgFile) {
+        e.preventDefault();
+        void createImageFromBlob(imgFile, pt.x, pt.y);
+        return;
+      }
+      // 链接：text/uri-list 取首个非注释行，回退 text/plain。
+      const uriList = dt.getData('text/uri-list');
+      const candidate =
+        uriList.split(/\r?\n/).find((l) => l && !l.startsWith('#')) ??
+        dt.getData('text/plain');
+      const url = normalizeUrl(candidate ?? '');
+      if (url) {
+        e.preventDefault();
+        createEmbedAt(url, pt.x, pt.y);
+      }
+    };
+    host.addEventListener('dragover', onDragOver);
+    host.addEventListener('drop', onDrop);
+    return () => {
+      host.removeEventListener('dragover', onDragOver);
+      host.removeEventListener('drop', onDrop);
+    };
+    // 创建函数闭包稳定（仅依赖 ref / 稳定的 replaceScene / actorId）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // 橡皮擦模式：在 .board-canvas 上以捕获阶段拦截左键按下 —— 命中画布元素
   // （图形 / 手绘 / 连线 / 文件卡 / 文本卡）即删除并吞掉事件（不触发拖拽）；
   // 命中区域 / 文件夹不删（背后是真实文件夹）；点空白处不拦截。
@@ -2400,6 +2496,87 @@ export function OverlayLayer({
     replaceScene({ ...cur, elements: [...cur.elements, el] }, 'canvas');
     selectOnly(el.id);
     onActiveToolChange?.('selection');
+  }
+
+  /**
+   * 在画布坐标 (cx,cy) 为中心放下一张图片元素 —— 尺寸由原始像素推算并
+   * 限制最长边不超过 460（过大图自动等比缩小）。
+   */
+  function placeImage(
+    assetId: string,
+    natW: number,
+    natH: number,
+    cx: number,
+    cy: number,
+  ): void {
+    const cur = sceneRef.current;
+    const max = 460;
+    let w = natW > 0 ? natW : 240;
+    let h = natH > 0 ? natH : 180;
+    if (w > max || h > max) {
+      const s = max / Math.max(w, h);
+      w *= s;
+      h *= s;
+    }
+    const el = createImageElement({
+      x: cx - w / 2,
+      y: cy - h / 2,
+      width: w,
+      height: h,
+      createdBy: actorId,
+      z: nextZ(cur.elements),
+      assetId,
+      naturalWidth: natW > 0 ? natW : Math.round(w),
+      naturalHeight: natH > 0 ? natH : Math.round(h),
+    });
+    replaceScene({ ...cur, elements: [...cur.elements, el] }, 'canvas');
+    selectOnly(el.id);
+  }
+
+  /** 由图片 Blob 创建图片元素 —— 上传到 assets/ 后落入画布。 */
+  async function createImageFromBlob(
+    blob: Blob,
+    cx: number,
+    cy: number,
+  ): Promise<void> {
+    try {
+      const dim = await imageDimensions(blob);
+      const resp = await fetch('/api/assets', {
+        method: 'POST',
+        headers: { 'Content-Type': blob.type || 'image/png' },
+        body: blob,
+      });
+      const json = (await resp.json()) as {
+        ok?: boolean;
+        data?: { assetId?: string };
+        error?: string;
+      };
+      if (!resp.ok || !json.ok || !json.data?.assetId) {
+        console.warn('[board] 图片上传失败:', json.error ?? resp.status);
+        return;
+      }
+      placeImage(json.data.assetId, dim.w, dim.h, cx, cy);
+    } catch (err) {
+      console.warn('[board] 图片创建失败:', err);
+    }
+  }
+
+  /** 在画布坐标 (cx,cy) 为中心创建一个外链嵌入元素（链接卡）。 */
+  function createEmbedAt(url: string, cx: number, cy: number): void {
+    const cur = sceneRef.current;
+    const w = 300;
+    const h = 132;
+    const el = createEmbedElement({
+      x: cx - w / 2,
+      y: cy - h / 2,
+      width: w,
+      height: h,
+      createdBy: actorId,
+      z: nextZ(cur.elements),
+      url,
+    });
+    replaceScene({ ...cur, elements: [...cur.elements, el] }, 'canvas');
+    selectOnly(el.id);
   }
 
   /** 就地编辑提交文本卡正文。 */
@@ -3524,6 +3701,8 @@ export function OverlayLayer({
           const isText = el.type === 'text';
           const isShape = el.type === 'shape';
           const isDraw = el.type === 'draw';
+          const isImage = el.type === 'image';
+          const isEmbed = el.type === 'embed';
 
           // 拖拽偏移：本次拖拽的全部成员（单拖为自身，区域拖含子元素，
           // 整组拖为整个选区）都实时套上偏移变换，一起跟随指针。
@@ -3584,6 +3763,7 @@ export function OverlayLayer({
             (isFile ? ' ov-slot--file' : '') +
             (isText ? ' ov-slot--text' : '') +
             (isShape || isDraw ? ' ov-slot--shape' : '') +
+            (isImage || isEmbed ? ' ov-slot--media' : '') +
             (el.state === 'draft' ? ' ov-slot--draft' : '') +
             (offset ? ' ov-slot--dragging' : '');
 
@@ -3664,7 +3844,7 @@ export function OverlayLayer({
                     beginDrag(e, el, 'group', keepSel ? undefined : gset);
                   } else if (isFile || isText) {
                     beginDrag(e, el, isFile ? 'file' : 'text');
-                  } else if (isShape || isDraw) {
+                  } else if (isShape || isDraw || isImage || isEmbed) {
                     beginDrag(e, el, 'element');
                   }
                 };
@@ -3738,6 +3918,10 @@ export function OverlayLayer({
                         : el
                   }
                 />
+              ) : el.type === 'image' ? (
+                <ImageView element={el} />
+              ) : el.type === 'embed' ? (
+                <EmbedView element={el} />
               ) : (
                 <FileCard element={el} missing={missingFileIds.has(el.id)} />
               )}
