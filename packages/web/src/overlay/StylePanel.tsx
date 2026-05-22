@@ -48,6 +48,8 @@ export interface StylePanelProps {
   onFlipH: () => void;
   /** 垂直翻转选区。 */
   onFlipV: () => void;
+  /** 调整选区图层顺序（置顶 / 置底 / 上移 / 下移）。 */
+  onLayer: (mode: 'front' | 'back' | 'forward' | 'backward') => void;
 }
 
 /** `<input type="color">` 需合法 #rrggbb；透明 / 异常值回退到白。 */
@@ -76,6 +78,7 @@ export function StylePanel({
   onUngroup,
   onFlipH,
   onFlipV,
+  onLayer,
 }: StylePanelProps): JSX.Element {
   const widthSel = nearestWidth(s.strokeWidth);
 
@@ -215,6 +218,44 @@ export function StylePanel({
             title="垂直翻转"
           >
             垂直翻转
+          </button>
+        </div>
+      </section>
+
+      <section className="ov-style-sec">
+        <span className="ov-style-sec__label">图层顺序</span>
+        <div className="ov-seg">
+          <button
+            type="button"
+            className="ov-seg__btn"
+            onClick={() => onLayer('front')}
+            title="置顶（Ctrl+Shift+]）"
+          >
+            置顶
+          </button>
+          <button
+            type="button"
+            className="ov-seg__btn"
+            onClick={() => onLayer('forward')}
+            title="上移一层（Ctrl+]）"
+          >
+            上移
+          </button>
+          <button
+            type="button"
+            className="ov-seg__btn"
+            onClick={() => onLayer('backward')}
+            title="下移一层（Ctrl+[）"
+          >
+            下移
+          </button>
+          <button
+            type="button"
+            className="ov-seg__btn"
+            onClick={() => onLayer('back')}
+            title="置底（Ctrl+Shift+[）"
+          >
+            置底
           </button>
         </div>
       </section>

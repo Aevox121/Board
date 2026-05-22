@@ -1290,7 +1290,15 @@ export function OverlayLayer({
     const onKey = (e: KeyboardEvent): void => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
       const k = e.key.toLowerCase();
-      if (k !== 'c' && k !== 'x' && k !== 'v' && k !== 'd' && k !== 'g') {
+      if (
+        k !== 'c' &&
+        k !== 'x' &&
+        k !== 'v' &&
+        k !== 'd' &&
+        k !== 'g' &&
+        k !== ']' &&
+        k !== '['
+      ) {
         return;
       }
       // 输入框 / 文本域 / 可编辑区聚焦时让位给原生复制粘贴。
@@ -1312,6 +1320,12 @@ export function OverlayLayer({
         // Ctrl+G 成组 / Ctrl+Shift+G 取消编组。
         if (e.shiftKey) ungroupSelection();
         else groupSelection();
+      } else if (k === ']') {
+        // Ctrl+] 上移一层 / Ctrl+Shift+] 置顶。
+        reorderSelection(e.shiftKey ? 'front' : 'forward');
+      } else if (k === '[') {
+        // Ctrl+[ 下移一层 / Ctrl+Shift+[ 置底。
+        reorderSelection(e.shiftKey ? 'back' : 'backward');
       }
     };
     window.addEventListener('keydown', onKey);
@@ -2473,6 +2487,69 @@ export function OverlayLayer({
     replaceScene({ ...cur, elements }, 'canvas');
   }
 
+  /**
+   * 调整选区的图层顺序（z 序）—— 置顶 / 置底 / 上移一层 / 下移一层。
+   *
+   * 把全部元素按 z 排好后，按 mode 重排选区元素的位置，再给全体重新赋
+   * 连续 z（`index` → base36 定宽串）；只有顺序真变了才落场景。
+   * 上移 / 下移时选区内部相对次序保持不变（成块移动，不互相穿越）。
+   */
+  function reorderSelection(
+    mode: 'front' | 'back' | 'forward' | 'backward',
+  ): void {
+    const cur = sceneRef.current;
+    const sel = selectedIdsRef.current;
+    if (sel.size === 0) return;
+    const ordered = [...cur.elements].sort((a, b) =>
+      a.z < b.z ? -1 : a.z > b.z ? 1 : 0,
+    );
+    let next: Element[];
+    if (mode === 'front') {
+      next = [
+        ...ordered.filter((e) => !sel.has(e.id)),
+        ...ordered.filter((e) => sel.has(e.id)),
+      ];
+    } else if (mode === 'back') {
+      next = [
+        ...ordered.filter((e) => sel.has(e.id)),
+        ...ordered.filter((e) => !sel.has(e.id)),
+      ];
+    } else if (mode === 'forward') {
+      next = [...ordered];
+      for (let i = next.length - 2; i >= 0; i -= 1) {
+        if (sel.has(next[i]!.id) && !sel.has(next[i + 1]!.id)) {
+          [next[i], next[i + 1]] = [next[i + 1]!, next[i]!];
+        }
+      }
+    } else {
+      next = [...ordered];
+      for (let i = 1; i < next.length; i += 1) {
+        if (sel.has(next[i]!.id) && !sel.has(next[i - 1]!.id)) {
+          [next[i], next[i - 1]] = [next[i - 1]!, next[i]!];
+        }
+      }
+    }
+    // 顺序没变就不动（避免无意义的撤销项）。
+    let changed = false;
+    for (let i = 0; i < ordered.length; i += 1) {
+      if (ordered[i]!.id !== next[i]!.id) {
+        changed = true;
+        break;
+      }
+    }
+    if (!changed) return;
+    const newZ = new Map<string, string>();
+    next.forEach((e, i) => newZ.set(e.id, i.toString(36).padStart(8, '0')));
+    const ts = new Date().toISOString();
+    const elements = cur.elements.map((e): Element => {
+      const z = newZ.get(e.id);
+      return z !== undefined && z !== e.z
+        ? ({ ...e, z, updatedBy: actorId, updatedAt: ts } as Element)
+        : e;
+    });
+    replaceScene({ ...cur, elements }, 'canvas');
+  }
+
   /** 关闭上下文菜单（连同虚线框）。 */
   function closeMenu(): void {
     setMenu(null);
@@ -2908,6 +2985,7 @@ export function OverlayLayer({
           onUngroup={ungroupSelection}
           onFlipH={() => flipSelection('h')}
           onFlipV={() => flipSelection('v')}
+          onLayer={reorderSelection}
         />
       ) : null}
 
