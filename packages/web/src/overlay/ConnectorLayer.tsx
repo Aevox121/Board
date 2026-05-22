@@ -112,6 +112,12 @@ export interface ConnectorLayerProps {
    * 传 null 表示拖拽结束、清除高亮。
    */
   onEndpointHover?: (pos: { x: number; y: number } | null) => void;
+  /**
+   * 成组变换（多选缩放 / 旋转）进行中的连线几何覆写 —— id → 变换后的连线
+   * 元素。命中时本层用覆写元素的 x/y/meta 渲染（自由端实时跟随成组变换；
+   * 绑定端仍按所连元素的 liveRects 跟随）。
+   */
+  liveConnectors?: ReadonlyMap<string, ConnectorElement>;
   /** 双击连线本体 —— 请求进入标签就地编辑（编辑态由 OverlayLayer 持有）。 */
   onLabelEdit?: (id: string) => void;
   /** 正在编辑标签的连线 id —— 该连线渲染 contentEditable 编辑区。 */
@@ -299,6 +305,7 @@ export function ConnectorLayer({
   zoom = 1,
   onEndpointCommit,
   onEndpointHover,
+  liveConnectors,
   onLabelEdit,
   editingLabelId,
   onLabelCommit,
@@ -339,7 +346,9 @@ export function ConnectorLayer({
     };
 
     const out: ConnGeom[] = [];
-    for (const conn of connectors) {
+    for (const conn0 of connectors) {
+      // 成组变换进行中 —— 用覆写后的连线几何（自由端跟随成组缩放 / 旋转）。
+      const conn = liveConnectors?.get(conn0.id) ?? conn0;
       // 正被拖拽的那一端视作自由端（忽略其绑定），停在光标处。
       const drag =
         epDrag && epDrag.connectorId === conn.id ? epDrag : null;
@@ -417,7 +426,7 @@ export function ConnectorLayer({
       });
     }
     return out;
-  }, [scene.elements, liveRects, epDrag]);
+  }, [scene.elements, liveRects, liveConnectors, epDrag]);
 
   // ── 端点拖拽指针处理 ─────────────────────────────────────────
   // 移动 / 抬起监听挂在 window 上（不靠 SVG 元素的 setPointerCapture ——

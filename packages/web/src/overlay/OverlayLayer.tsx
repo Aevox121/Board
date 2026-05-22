@@ -411,8 +411,9 @@ const MARQUEE_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * 可参与「成组变换」（多选缩放 / 旋转）的元素类型 —— 与单选缩放手柄支持的
- * 类型一致，排除连线（几何派生）与区域（容器，含子元素、轴对齐）。
+ * 可参与「成组变换」（多选缩放 / 旋转）的元素类型 —— 排除区域（容器，
+ * 含子元素、轴对齐）。连线纳入：绑定端跟随所连元素，自由端 / waypoints
+ * 随成组变换缩放 / 旋转。
  */
 const GROUP_XFORM_TYPES: ReadonlySet<string> = new Set([
   'shape',
@@ -420,6 +421,7 @@ const GROUP_XFORM_TYPES: ReadonlySet<string> = new Set([
   'text',
   'file',
   'folder',
+  'connector',
 ]);
 
 /** 成组缩放时成组包围盒的最小边长（画布坐标）。 */
@@ -436,6 +438,84 @@ interface XformMember {
   angle: number;
   /** draw 元素的采样点（其余类型为 undefined）。 */
   points?: ReadonlyArray<readonly [number, number]>;
+  /** 连线元素快照（其余类型为 undefined）—— 据此推算变换后的连线几何。 */
+  conn?: ConnectorElement;
+}
+
+/** 成组变换进行中某个卡槽成员的实时几何。 */
+interface GroupSlotGeom {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  angle: number;
+  /** draw 元素缩放后的采样点（其余类型为 undefined）。 */
+  points?: [number, number][];
+}
+
+/**
+ * 连线的折线顶点（相对 x/y 原点）—— 取 `meta.ex.points`，缺省回退包围盒对角。
+ * 与 ConnectorLayer 的 freePoints 同源。
+ */
+function connectorMetaPoints(conn: ConnectorElement): [number, number][] {
+  const ex = conn.meta?.['ex'];
+  const raw =
+    ex && typeof ex === 'object'
+      ? (ex as { points?: unknown }).points
+      : undefined;
+  if (Array.isArray(raw) && raw.length >= 2) {
+    const pts = raw
+      .filter(
+        (p): p is [number, number] =>
+          Array.isArray(p) &&
+          typeof p[0] === 'number' &&
+          typeof p[1] === 'number',
+      )
+      .map((p): [number, number] => [p[0], p[1]]);
+    if (pts.length >= 2) return pts;
+  }
+  return [
+    [0, 0],
+    [conn.width, conn.height],
+  ];
+}
+
+/**
+ * 按「点映射」整体变换一条连线 —— 把折线各顶点换算为世界坐标、过映射函数、
+ * 再归一化回 x/y 原点 + 相对顶点。成组缩放 / 旋转共用（映射函数不同）。
+ * 绑定端的渲染位置由所连元素决定、不读这里的几何，故对绑定端无副作用。
+ */
+function transformConnector(
+  conn: ConnectorElement,
+  map: (x: number, y: number) => [number, number],
+): ConnectorElement {
+  const mp = connectorMetaPoints(conn);
+  const abs = mp.map((p) => map(conn.x + p[0], conn.y + p[1]));
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const [ax, ay] of abs) {
+    minX = Math.min(minX, ax);
+    minY = Math.min(minY, ay);
+    maxX = Math.max(maxX, ax);
+    maxY = Math.max(maxY, ay);
+  }
+  const pts = abs.map((p): [number, number] => [p[0] - minX, p[1] - minY]);
+  const exObj =
+    conn.meta?.['ex'] && typeof conn.meta['ex'] === 'object'
+      ? (conn.meta['ex'] as Record<string, unknown>)
+      : {};
+  return {
+    ...conn,
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+    start: { ...conn.start, point: pts[0]! },
+    end: { ...conn.end, point: pts[pts.length - 1]! },
+    meta: { ...conn.meta, ex: { ...exObj, points: pts } },
+  };
 }
 
 /** 旋转元素的轴对齐包围盒 —— 四角绕中心旋转后取 min/max。 */
@@ -1022,33 +1102,15 @@ export function OverlayLayer({
 
   /**
    * 成组缩放 / 旋转进行中各成员的实时几何 —— 由瞬时状态推算。
-   * 缩放：以对侧锚点为基准按比例缩放每个成员的位置 / 尺寸（draw 采样点同步）。
-   * 旋转：每个成员的中心绕并集中心刚性旋转，角度叠加旋转增量。
+   * `slots`：图形 / 卡片类成员（缩放按比例改位置 / 尺寸，draw 采样点同步；
+   * 旋转中心绕并集中心刚性旋转）。`conns`：连线成员的实时几何覆写。
    */
-  const groupGeom = useMemo<
-    Map<
-      string,
-      {
-        x: number;
-        y: number;
-        w: number;
-        h: number;
-        angle: number;
-        points?: [number, number][];
-      }
-    >
-  >(() => {
-    const m = new Map<
-      string,
-      {
-        x: number;
-        y: number;
-        w: number;
-        h: number;
-        angle: number;
-        points?: [number, number][];
-      }
-    >();
+  const groupGeom = useMemo<{
+    slots: Map<string, GroupSlotGeom>;
+    conns: Map<string, ConnectorElement>;
+  }>(() => {
+    const slots = new Map<string, GroupSlotGeom>();
+    const conns = new Map<string, ConnectorElement>();
     if (groupResize) {
       const sx = groupResize.bw0 > 0 ? groupResize.bw / groupResize.bw0 : 1;
       const sy = groupResize.bh0 > 0 ? groupResize.bh / groupResize.bh0 : 1;
@@ -1061,8 +1123,16 @@ export function OverlayLayer({
         groupResize.hy === -1
           ? groupResize.by0 + groupResize.bh0
           : groupResize.by0;
+      const map = (x: number, y: number): [number, number] => [
+        anchorX + (x - anchorX) * sx,
+        anchorY + (y - anchorY) * sy,
+      ];
       for (const mem of groupResize.members) {
-        m.set(mem.id, {
+        if (mem.conn) {
+          conns.set(mem.id, transformConnector(mem.conn, map));
+          continue;
+        }
+        slots.set(mem.id, {
           x: anchorX + (mem.x - anchorX) * sx,
           y: anchorY + (mem.y - anchorY) * sy,
           w: mem.w * sx,
@@ -1077,12 +1147,20 @@ export function OverlayLayer({
     if (groupRotate) {
       const cos = Math.cos(groupRotate.delta);
       const sin = Math.sin(groupRotate.delta);
+      const cx = groupRotate.cx;
+      const cy = groupRotate.cy;
+      const map = (x: number, y: number): [number, number] => {
+        const rx = x - cx;
+        const ry = y - cy;
+        return [cx + rx * cos - ry * sin, cy + rx * sin + ry * cos];
+      };
       for (const mem of groupRotate.members) {
-        const rx = mem.x + mem.w / 2 - groupRotate.cx;
-        const ry = mem.y + mem.h / 2 - groupRotate.cy;
-        const ncx = groupRotate.cx + rx * cos - ry * sin;
-        const ncy = groupRotate.cy + rx * sin + ry * cos;
-        m.set(mem.id, {
+        if (mem.conn) {
+          conns.set(mem.id, transformConnector(mem.conn, map));
+          continue;
+        }
+        const [ncx, ncy] = map(mem.x + mem.w / 2, mem.y + mem.h / 2);
+        slots.set(mem.id, {
           x: ncx - mem.w / 2,
           y: ncy - mem.h / 2,
           w: mem.w,
@@ -1091,7 +1169,7 @@ export function OverlayLayer({
         });
       }
     }
-    return m;
+    return { slots, conns };
   }, [groupResize, groupRotate]);
 
   // 拖拽 / 缩放进行中的元素的实时矩形 —— 供连线层即时跟随端点：连线随被拖的
@@ -1118,7 +1196,7 @@ export function OverlayLayer({
         height: resize.h,
       });
     }
-    for (const [id, g] of groupGeom) {
+    for (const [id, g] of groupGeom.slots) {
       m.set(id, { x: g.x, y: g.y, width: g.w, height: g.h });
     }
     return m;
@@ -2845,6 +2923,7 @@ export function OverlayLayer({
       h: el.height,
       angle: el.angle || 0,
       points: el.type === 'draw' ? el.points : undefined,
+      conn: el.type === 'connector' ? el : undefined,
     }));
     setGroupResize({
       pointerId: e.pointerId,
@@ -2911,9 +2990,24 @@ export function OverlayLayer({
     const sy = r.bh0 > 0 ? r.bh / r.bh0 : 1;
     const anchorX = r.hx === -1 ? r.bx0 + r.bw0 : r.bx0;
     const anchorY = r.hy === -1 ? r.by0 + r.bh0 : r.by0;
+    const map = (x: number, y: number): [number, number] => [
+      anchorX + (x - anchorX) * sx,
+      anchorY + (y - anchorY) * sy,
+    ];
     const now = new Date().toISOString();
-    const patch = new Map<string, Partial<Element>>();
+    const patch = new Map<string, Element>();
     for (const mem of r.members) {
+      if (mem.conn) {
+        // 连线：整体按缩放映射变换（自由端 / 几何随之缩放，绑定端跟随元素）。
+        patch.set(mem.id, {
+          ...transformConnector(mem.conn, map),
+          updatedBy: actorId,
+          updatedAt: now,
+        });
+        continue;
+      }
+      const cur0 = sceneRef.current.elements.find((x) => x.id === mem.id);
+      if (!cur0) continue;
       const p: Partial<Element> = {
         x: anchorX + (mem.x - anchorX) * sx,
         y: anchorY + (mem.y - anchorY) * sy,
@@ -2928,16 +3022,13 @@ export function OverlayLayer({
           (pt): [number, number] => [pt[0] * sx, pt[1] * sy],
         );
       }
-      patch.set(mem.id, p);
+      patch.set(mem.id, { ...cur0, ...p } as Element);
     }
     const cur = sceneRef.current;
     replaceScene(
       {
         ...cur,
-        elements: cur.elements.map((el) => {
-          const p = patch.get(el.id);
-          return p ? ({ ...el, ...p } as Element) : el;
-        }),
+        elements: cur.elements.map((el) => patch.get(el.id) ?? el),
       },
       'canvas',
     );
@@ -2970,6 +3061,7 @@ export function OverlayLayer({
       w: el.width,
       h: el.height,
       angle: el.angle || 0,
+      conn: el.type === 'connector' ? el : undefined,
     }));
     setGroupRotate({
       pointerId: e.pointerId,
@@ -3018,29 +3110,40 @@ export function OverlayLayer({
     if (r.delta === 0) return;
     const cos = Math.cos(r.delta);
     const sin = Math.sin(r.delta);
+    const map = (x: number, y: number): [number, number] => {
+      const rx = x - r.cx;
+      const ry = y - r.cy;
+      return [r.cx + rx * cos - ry * sin, r.cy + rx * sin + ry * cos];
+    };
     const now = new Date().toISOString();
-    const patch = new Map<string, Partial<Element>>();
+    const patch = new Map<string, Element>();
     for (const mem of r.members) {
-      const rx = mem.x + mem.w / 2 - r.cx;
-      const ry = mem.y + mem.h / 2 - r.cy;
-      const ncx = r.cx + rx * cos - ry * sin;
-      const ncy = r.cy + rx * sin + ry * cos;
+      if (mem.conn) {
+        // 连线：整体按旋转映射变换（自由端绕并集中心转、绑定端跟随元素）。
+        patch.set(mem.id, {
+          ...transformConnector(mem.conn, map),
+          updatedBy: actorId,
+          updatedAt: now,
+        });
+        continue;
+      }
+      const cur0 = sceneRef.current.elements.find((x) => x.id === mem.id);
+      if (!cur0) continue;
+      const [ncx, ncy] = map(mem.x + mem.w / 2, mem.y + mem.h / 2);
       patch.set(mem.id, {
+        ...cur0,
         x: ncx - mem.w / 2,
         y: ncy - mem.h / 2,
         angle: mem.angle + r.delta,
         updatedBy: actorId,
         updatedAt: now,
-      });
+      } as Element);
     }
     const cur = sceneRef.current;
     replaceScene(
       {
         ...cur,
-        elements: cur.elements.map((el) => {
-          const p = patch.get(el.id);
-          return p ? ({ ...el, ...p } as Element) : el;
-        }),
+        elements: cur.elements.map((el) => patch.get(el.id) ?? el),
       },
       'canvas',
     );
@@ -3268,7 +3371,7 @@ export function OverlayLayer({
     (e) => e.type !== 'connector' && !e.locked,
   ).length;
   // 可参与成组变换（多选缩放 / 旋转）的元素 —— 图形 / 手绘 / 文本 / 文件 /
-  // 文件夹卡，排除连线 / 区域 / 锁定元素。
+  // 文件夹卡 + 连线,排除区域 / 锁定元素。
   const groupXformEls = selectedEls.filter(
     (e) => GROUP_XFORM_TYPES.has(e.type) && !e.locked,
   );
@@ -3310,14 +3413,30 @@ export function OverlayLayer({
     let maxX = -Infinity;
     let maxY = -Infinity;
     for (const el of groupXformEls) {
+      if (el.type === 'connector') {
+        // 连线：两端点（绑定端取所连元素中心、自由端取自身几何）。
+        const { a, b } = connectorAnchors(el, scene.elements);
+        minX = Math.min(minX, a.x, b.x);
+        minY = Math.min(minY, a.y, b.y);
+        maxX = Math.max(maxX, a.x, b.x);
+        maxY = Math.max(maxY, a.y, b.y);
+        continue;
+      }
       const bb = rotatedAABB(el.x, el.y, el.width, el.height, el.angle || 0);
       minX = Math.min(minX, bb.x);
       minY = Math.min(minY, bb.y);
       maxX = Math.max(maxX, bb.x + bb.w);
       maxY = Math.max(maxY, bb.y + bb.h);
     }
-    if (minX >= maxX || minY >= maxY) return null;
-    return { x: minX, y: minY, w: maxX - minX, h: maxY - minY, angle: 0 };
+    if (!Number.isFinite(minX) || !Number.isFinite(minY)) return null;
+    // 退化（成员共线，如两条水平连线）时给最小边长，避免手柄重叠为零尺寸。
+    return {
+      x: minX,
+      y: minY,
+      w: Math.max(maxX - minX, 1),
+      h: Math.max(maxY - minY, 1),
+      angle: 0,
+    };
   })();
 
   // 成组变换手柄的事件 API —— 八向缩放 + 顶部旋转，整组同步变换。
@@ -3417,7 +3536,7 @@ export function OverlayLayer({
           const offset = dx !== 0 || dy !== 0;
 
           // 成组缩放 / 旋转进行中该元素的实时几何（优先于单选变换）。
-          const gG = groupGeom.get(el.id);
+          const gG = groupGeom.slots.get(el.id);
           // 缩放：被缩放区域自身实时变矩形（位置 + 尺寸都可能变）。
           const resizing = resize?.elementId === el.id;
           const rx = gG ? gG.x : resizing && resize ? resize.x : el.x;
@@ -3659,6 +3778,7 @@ export function OverlayLayer({
           onBodyDown={beginConnectorDrag}
           interactive={!connectMode}
           zoom={zoom}
+          liveConnectors={groupGeom.conns}
           onEndpointCommit={rebindConnectorEndpoint}
           onEndpointHover={handleEndpointHover}
           onLabelEdit={(id) => setEditingLabelId(id)}
