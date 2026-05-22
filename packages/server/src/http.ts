@@ -558,17 +558,104 @@ async function handleCreateRegion(
     label: name,
     description,
   });
+
+  // 框选范围内的顶层元素（parentId 为空）归入新区域：
+  //  - 图形 / 手绘 / 文本 / 图片 / 嵌入 → 仅改 parentId；
+  //  - 文件 → 移入 files/<name>/，更新 path + parentId；
+  //  - 区域 / 文件夹 → 文件夹移入 files/<name>/，自身与全部后代 path 加
+  //    前缀，自身 parentId 指向新区域（即成为子区域）。连线 / 建议不纳入。
+  const inRegion = (e: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }): boolean => {
+    const ecx = e.x + e.width / 2;
+    const ecy = e.y + e.height / 2;
+    return ecx >= x && ecx <= x + width && ecy >= y && ecy <= y + height;
+  };
+  const baseOf = (p: string): string => {
+    const n = normalizePath(p);
+    const i = n.lastIndexOf('/');
+    return i >= 0 ? n.slice(i + 1) : n;
+  };
+  const pathPatch = new Map<string, string>();
+  const parentPatch = new Map<string, string>();
+  for (const e of handle.scene.elements) {
+    if (e.parentId != null) continue;
+    if (e.type === 'connector' || e.type === 'suggestion') continue;
+    if (!inRegion(e)) continue;
+    if (e.type === 'region' || e.type === 'folder') {
+      const oldP = normalizePath(e.path);
+      if (!oldP) continue;
+      try {
+        await rename(
+          resolve(deps.dir, 'files', oldP),
+          resolve(deps.dir, 'files', name, oldP),
+        );
+      } catch {
+        continue; // 文件夹缺失 / 目标冲突 —— 跳过该项
+      }
+      // 自身与全部后代（path 在 oldP 下）重设路径前缀。
+      for (const d of handle.scene.elements) {
+        const raw = (d as { path?: unknown }).path;
+        if (typeof raw !== 'string') continue;
+        const dp = normalizePath(raw);
+        if (dp === oldP || dp.startsWith(`${oldP}/`)) {
+          pathPatch.set(d.id, `${name}/${dp}`);
+        }
+      }
+      parentPatch.set(e.id, element.id);
+    } else if (e.type === 'file') {
+      const base = baseOf(e.path);
+      try {
+        await stat(resolve(deps.dir, 'files', name, base));
+        continue; // 目标已存在 —— 跳过
+      } catch {
+        // 目标不存在，可移入
+      }
+      try {
+        await rename(
+          resolve(deps.dir, 'files', normalizePath(e.path)),
+          resolve(deps.dir, 'files', name, base),
+        );
+      } catch {
+        continue;
+      }
+      pathPatch.set(e.id, `${name}/${base}`);
+      parentPatch.set(e.id, element.id);
+    } else {
+      parentPatch.set(e.id, element.id);
+    }
+  }
+
+  const ts = new Date().toISOString();
+  const nextElements = handle.scene.elements.map((e) => {
+    const np = pathPatch.get(e.id);
+    const npar = parentPatch.get(e.id);
+    if (np === undefined && npar === undefined) return e;
+    const patched = { ...e, updatedBy: actor, updatedAt: ts };
+    if (np !== undefined) (patched as { path: string }).path = np;
+    if (npar !== undefined) patched.parentId = npar;
+    return patched;
+  });
+  nextElements.push(element);
   try {
     await saveBoard(deps.dir, handle.meta, {
       ...handle.scene,
-      elements: [...handle.scene.elements, element],
+      elements: nextElements,
     });
-    await deps.reconcileNow('region-create');
+    // 显式广播 board-changed —— 区域元素已落 board.json，各端经 SSE 重载。
+    await deps.recordChange(actor);
   } catch (err) {
     fail(res, 500, `保存区域失败: ${errMsg(err)}`);
     return;
   }
-  ok(res, { elementId: element.id, path: element.path });
+  ok(res, {
+    elementId: element.id,
+    path: element.path,
+    adopted: parentPatch.size,
+  });
 }
 
 /**

@@ -736,13 +736,23 @@ function regionForCard(
 ): RegionElement | null {
   let best: RegionElement | null = null;
   let bestArea = 0;
+  let bestDepth = -1;
   for (const r of regions) {
     const area = intersectionArea(card, r);
     if (area <= 0) continue;
-    // 面积更大者胜；面积相等时取 z 更高（最上层）的区域。
-    if (area > bestArea || (area === bestArea && best !== null && r.z > best.z)) {
+    // 路径层级深度 —— 嵌套区域里取最内层（路径段更多者）。
+    const depth = r.path.split('/').length;
+    // 面积更大者胜；面积相当（卡片同时落在嵌套内外区域）时取更深的内层
+    // 区域；再相同取 z 更高者。
+    if (
+      area > bestArea + 0.5 ||
+      (Math.abs(area - bestArea) <= 0.5 &&
+        (depth > bestDepth ||
+          (depth === bestDepth && best !== null && r.z > best.z)))
+    ) {
       best = r;
       bestArea = area;
+      bestDepth = depth;
     }
   }
   return best;
