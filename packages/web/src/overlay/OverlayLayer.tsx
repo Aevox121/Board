@@ -637,6 +637,12 @@ const NEW_TEXT_H = 96;
 const CREATE_MIN_DRAG = 8;
 /** 粘贴 / 原地复制时相对源元素的偏移（画布单位）—— 连续粘贴逐次叠加错开。 */
 const PASTE_OFFSET = 24;
+/**
+ * 应用内元素复制写入系统剪贴板的前缀标记 —— 'paste' 事件据此识别「这是
+ * 一次应用内元素粘贴」，与外部图片 / 链接粘贴区分。前缀后接元素 JSON，
+ * 使粘贴在重载 / 跨标签后仍可由剪贴板内容重建。
+ */
+const CLIP_PREFIX = 'board/elements:';
 /** 可被复制 / 粘贴的元素类型 —— 文件 / 文件夹 / 区域背后是真实文件系统条目，不复制。 */
 const COPYABLE_TYPES: ReadonlySet<string> = new Set([
   'shape',
@@ -1657,10 +1663,11 @@ export function OverlayLayer({
     const onKey = (e: KeyboardEvent): void => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
       const k = e.key.toLowerCase();
+      // 粘贴（v）不在此处理 —— 改由 window 'paste' 事件统一分发（图片 /
+      // 链接 / 应用内元素），故此处不拦截 Ctrl+V，让 paste 事件正常触发。
       if (
         k !== 'c' &&
         k !== 'x' &&
-        k !== 'v' &&
         k !== 'd' &&
         k !== 'g' &&
         k !== ']' &&
@@ -1681,7 +1688,6 @@ export function OverlayLayer({
       e.preventDefault();
       if (k === 'c') copySelection();
       else if (k === 'x') cutSelection();
-      else if (k === 'v') pasteClipboard();
       else if (k === 'd') duplicateSelection();
       else if (k === 'g') {
         // Ctrl+G 成组 / Ctrl+Shift+G 取消编组。
@@ -1747,6 +1753,72 @@ export function OverlayLayer({
       host.removeEventListener('drop', onDrop);
     };
     // 创建函数闭包稳定（仅依赖 ref / 稳定的 replaceScene / actorId）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 粘贴（Ctrl+V）统一分发：图片素材 → 图片元素，链接 → 嵌入元素，
+  // 带前缀标记的文本 → 应用内元素粘贴。新元素落在视口中心。
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent): void => {
+      // 文本框 / 可编辑区聚焦 —— 让位原生粘贴。
+      const ae = document.activeElement as HTMLElement | null;
+      if (
+        ae &&
+        (ae.tagName === 'INPUT' ||
+          ae.tagName === 'TEXTAREA' ||
+          ae.isContentEditable)
+      ) {
+        return;
+      }
+      const dt = e.clipboardData;
+      if (!dt) {
+        pasteClipboard();
+        return;
+      }
+      // 1. 图片素材（截图 / 复制的图片文件）→ 图片元素。
+      const imgFile = Array.from(dt.files).find((f) =>
+        f.type.startsWith('image/'),
+      );
+      if (imgFile) {
+        e.preventDefault();
+        const c = viewportCenter();
+        void createImageFromBlob(imgFile, c.x, c.y);
+        return;
+      }
+      const text = dt.getData('text/plain');
+      // 2. 应用内元素粘贴（带前缀标记）—— 应用内剪贴板为空时由 JSON 重建。
+      if (text.startsWith(CLIP_PREFIX)) {
+        e.preventDefault();
+        if (clipboardRef.current.elements.length === 0) {
+          try {
+            const parsed = JSON.parse(text.slice(CLIP_PREFIX.length));
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              clipboardRef.current = {
+                elements: parsed as Element[],
+                pasteCount: 0,
+              };
+            }
+          } catch {
+            // 剪贴板 JSON 损坏 —— 忽略。
+          }
+        }
+        pasteClipboard();
+        return;
+      }
+      // 3. 链接 / URL → 嵌入元素。
+      const url = normalizeUrl(text);
+      if (url) {
+        e.preventDefault();
+        const c = viewportCenter();
+        createEmbedAt(url, c.x, c.y);
+        return;
+      }
+      // 4. 其余 —— 应用内元素粘贴兜底（系统剪贴板写入失败时仍可用）。
+      pasteClipboard();
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+    // 处理函数闭包稳定（仅依赖 ref / 稳定的 replaceScene / actorId）。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1977,14 +2049,23 @@ export function OverlayLayer({
       .filter((e): e is Element => !!e && COPYABLE_TYPES.has(e.type));
   }
 
-  /** Ctrl/⌘+C —— 把选区中可复制元素的快照存入剪贴板。 */
+  /** Ctrl/⌘+C —— 把选区中可复制元素的快照存入剪贴板（应用内 + 系统）。 */
   function copySelection(): void {
     const picked = copyableSelection();
     if (picked.length === 0) return;
-    clipboardRef.current = {
-      elements: picked.map((e) => JSON.parse(JSON.stringify(e)) as Element),
-      pasteCount: 0,
-    };
+    const snapshot = picked.map(
+      (e) => JSON.parse(JSON.stringify(e)) as Element,
+    );
+    clipboardRef.current = { elements: snapshot, pasteCount: 0 };
+    // 同步写系统剪贴板（带前缀标记）—— 让 paste 事件能把「应用内元素粘贴」
+    // 与外部图片 / 链接粘贴区分开；失败（无权限等）则仅靠应用内剪贴板兜底。
+    try {
+      void navigator.clipboard
+        ?.writeText(CLIP_PREFIX + JSON.stringify(snapshot))
+        .catch(() => {});
+    } catch {
+      // 浏览器不支持 / 非安全上下文 —— 忽略，应用内剪贴板仍可用。
+    }
   }
 
   /** Ctrl/⌘+X —— 复制选区后删除选区。 */
@@ -2577,6 +2658,18 @@ export function OverlayLayer({
     });
     replaceScene({ ...cur, elements: [...cur.elements, el] }, 'canvas');
     selectOnly(el.id);
+  }
+
+  /** 当前视口中心的画布坐标 —— 粘贴的图片 / 嵌入元素落在此处。 */
+  function viewportCenter(): { x: number; y: number } {
+    const root = rootRef.current;
+    const vp = viewportRef.current;
+    if (!root) return { x: 0, y: 0 };
+    const rect = root.getBoundingClientRect();
+    return {
+      x: rect.width / 2 / vp.zoom - vp.scrollX,
+      y: rect.height / 2 / vp.zoom - vp.scrollY,
+    };
   }
 
   /** 就地编辑提交文本卡正文。 */
