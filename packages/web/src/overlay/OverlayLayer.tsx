@@ -1115,6 +1115,7 @@ export function OverlayLayer({
       const els = sceneRef.current.elements;
       const hits: string[] = [];
       for (const el of els) {
+        if (el.locked) continue; // 锁定元素不被框选纳入
         if (MARQUEE_TYPES.has(el.type)) {
           if (intersectionArea(box, el) > 0) hits.push(el.id);
         } else if (el.type === 'connector') {
@@ -1473,7 +1474,8 @@ export function OverlayLayer({
     const els = [...ids]
       .map((id) => cur.elements.find((e) => e.id === id))
       .filter(
-        (e): e is Element => !!e && e.type !== 'region' && e.type !== 'folder',
+        (e): e is Element =>
+          !!e && e.type !== 'region' && e.type !== 'folder' && !e.locked,
       );
     clearSelection();
     if (els.length === 0) return;
@@ -1720,6 +1722,28 @@ export function OverlayLayer({
       elements: cur.elements.map((e): Element =>
         sel.has(e.id) && e.type === 'connector'
           ? ({ ...e, ...patch, updatedBy: actorId, updatedAt: ts } as Element)
+          : e,
+      ),
+    };
+    replaceScene(next, 'canvas');
+  }
+
+  /**
+   * 切换选区的锁定态 —— 选区全锁定则解锁、否则全锁定。锁定元素不可拖拽 /
+   * 缩放 / 旋转 / 删除 / 编辑，也不被框选纳入（仅可点选以便解锁）。
+   */
+  function toggleLock(): void {
+    const cur = sceneRef.current;
+    const sel = selectedIdsRef.current;
+    if (sel.size === 0) return;
+    const selEls = cur.elements.filter((e) => sel.has(e.id));
+    const lock = !selEls.every((e) => e.locked); // 非全锁定 → 锁定
+    const ts = new Date().toISOString();
+    const next: BoardScene = {
+      ...cur,
+      elements: cur.elements.map((e): Element =>
+        sel.has(e.id)
+          ? ({ ...e, locked: lock, updatedBy: actorId, updatedAt: ts } as Element)
           : e,
       ),
     };
@@ -2200,6 +2224,10 @@ export function OverlayLayer({
           if (c.parentId === id) members.add(c.id);
         }
       }
+    }
+    // 锁定元素不随拖拽移动 —— 从成员集剔除（被拖元素本身锁定时调用方已拦截）。
+    for (const id of [...members]) {
+      if (cur.elements.find((x) => x.id === id)?.locked) members.delete(id);
     }
     setDrag({
       kind,
@@ -2714,8 +2742,11 @@ export function OverlayLayer({
   const menuCanGroup = menuSel.length >= 2;
   const menuCanUngroup = menuSel.some((e) => (e.groupIds?.length ?? 0) > 0);
   const menuDeletable = menuSel.filter(
-    (e) => e.type !== 'region' && e.type !== 'folder',
+    (e) => e.type !== 'region' && e.type !== 'folder' && !e.locked,
   );
+  // 菜单锁定项：选区全锁定显示「解锁」，否则「锁定」。
+  const menuAllLocked =
+    menuSel.length > 0 && menuSel.every((e) => e.locked);
 
   // 变换容器样式 —— 实现 screen = (canvas + scroll) * zoom 的视口变换。
   const transformStyle: React.CSSProperties = {
@@ -2868,6 +2899,12 @@ export function OverlayLayer({
                       // 点选该元素（显示选择框 / 手柄）并进入待拖拽态。
                       // 区域走头部手柄，不在此。
                       if (e.button !== 0) return;
+                      if (el.locked) {
+                        // 锁定元素 —— 仅可点选（以便解锁），不拖拽。
+                        if (e.shiftKey) toggleInSelection(el.id);
+                        else setSelectedIds(new Set([el.id]));
+                        return;
+                      }
                       if (e.shiftKey) {
                         // shift 点选 —— 切换该元素（连同其编组）在选区中的去留。
                         toggleInSelection(el.id);
@@ -2901,8 +2938,11 @@ export function OverlayLayer({
                 el.type === 'region' ? undefined : handlePointerCancel
               }
               // 双击图形 —— 进入标签就地编辑（双击经指针捕获落在卡槽上）。
+              // 锁定元素不可编辑。
               onDoubleClick={
-                isShape ? () => setEditingLabelId(el.id) : undefined
+                isShape && !el.locked
+                  ? () => setEditingLabelId(el.id)
+                  : undefined
               }
             >
               {el.type === 'region' ? (
@@ -2948,12 +2988,19 @@ export function OverlayLayer({
               {selectedIds.has(el.id) ? (
                 <SelectionFrame element={el} width={rw} height={rh} />
               ) : null}
-              {/* 八向缩放手柄（圆点）—— 仅单选时出现（多选不缩放）。 */}
-              {soloId === el.id ? (
+              {/* 八向缩放手柄（圆点）—— 仅单选时出现（多选不缩放）；
+                  锁定元素不出手柄。 */}
+              {soloId === el.id && !el.locked ? (
                 <ResizeHandles
                   api={resizeApi}
                   rotatable={el.type !== 'region'}
                 />
+              ) : null}
+              {/* 锁定角标 —— 标示该元素已锁定。 */}
+              {el.locked ? (
+                <div className="ov-lock-badge" aria-hidden="true">
+                  🔒
+                </div>
               ) : null}
               {/* 评论角标（PRD §8.4）—— 元素有评论时显示条数 */}
               {(el.comments?.length ?? 0) > 0 ? (
@@ -3136,6 +3183,8 @@ export function OverlayLayer({
           onGroup={groupSelection}
           onUngroup={ungroupSelection}
           onLayer={reorderSelection}
+          locked={selectedEls.every((e) => e.locked)}
+          onToggleLock={toggleLock}
         />
       ) : null}
 
@@ -3184,6 +3233,21 @@ export function OverlayLayer({
                 取消编组
               </button>
             ) : null}
+            {menu.onElement && menuSel.length > 0 ? (
+              <button
+                type="button"
+                className="ov-menu__item"
+                onClick={() => {
+                  toggleLock();
+                  closeMenu();
+                }}
+              >
+                <span className="ov-menu__icon" aria-hidden="true">
+                  {menuAllLocked ? '🔓' : '🔒'}
+                </span>
+                {menuAllLocked ? '解锁' : '锁定'}
+              </button>
+            ) : null}
             {menu.onElement && menuDeletable.length > 0 ? (
               <button
                 type="button"
@@ -3201,8 +3265,7 @@ export function OverlayLayer({
                   : `删除选中 ${menuDeletable.length} 项`}
               </button>
             ) : null}
-            {menu.onElement &&
-            (menuCanGroup || menuCanUngroup || menuDeletable.length > 0) ? (
+            {menu.onElement && menuSel.length > 0 ? (
               <div className="ov-menu__divider" aria-hidden="true" />
             ) : null}
             <button

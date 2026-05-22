@@ -114,6 +114,10 @@ export interface StylePanelProps {
   onUngroup: () => void;
   /** 调整选区图层顺序（置顶 / 置底 / 上移 / 下移）。 */
   onLayer: (mode: 'front' | 'back' | 'forward' | 'backward') => void;
+  /** 选区是否全部锁定 —— 为真时面板只显示「解锁」。 */
+  locked: boolean;
+  /** 切换选区锁定态。 */
+  onToggleLock: () => void;
 }
 
 /** `<input type="color">` 需合法 #rrggbb；透明 / 异常值回退到白。 */
@@ -181,7 +185,34 @@ export function StylePanel({
   onGroup,
   onUngroup,
   onLayer,
+  locked,
+  onToggleLock,
 }: StylePanelProps): JSX.Element {
+  // 锁定态 —— 面板只给「解锁」入口，不暴露样式 / 变换控件。
+  if (locked) {
+    return (
+      <div
+        className="ov-style-panel"
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        <div className="ov-style-panel__title">
+          {count > 1 ? `已锁定 · ${count} 项` : '已锁定'}
+        </div>
+        <section className="ov-style-sec">
+          <span className="ov-style-sec__label">锁定</span>
+          <div className="ov-seg">
+            <button
+              type="button"
+              className="ov-seg__btn"
+              onClick={onToggleLock}
+            >
+              🔓 解锁
+            </button>
+          </div>
+        </section>
+      </div>
+    );
+  }
   const widthSel = nearestWidth(s.strokeWidth);
   // `none` 与 `solid` 渲染一致，归入「实心」高亮。
   const fillSel: FillStyle = s.fillStyle === 'none' ? 'solid' : s.fillStyle;
@@ -440,6 +471,20 @@ export function StylePanel({
           </div>
         </section>
       ) : null}
+
+      <section className="ov-style-sec">
+        <span className="ov-style-sec__label">锁定</span>
+        <div className="ov-seg">
+          <button
+            type="button"
+            className="ov-seg__btn"
+            onClick={onToggleLock}
+            title="锁定选区 —— 锁定后不可拖拽 / 缩放 / 删除 / 编辑"
+          >
+            🔒 锁定
+          </button>
+        </div>
+      </section>
     </div>
   );
 }

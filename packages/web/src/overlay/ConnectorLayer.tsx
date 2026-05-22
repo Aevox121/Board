@@ -136,6 +136,8 @@ interface ConnGeom {
   /** SVG stroke-dasharray；实线为 undefined。 */
   dash: string | undefined;
   opacity: number;
+  /** 锁定态 —— 锁定连线不可拖拽 / 重连端点 / 编辑标签。 */
+  locked: boolean;
   startArrow: ArrowHead;
   endArrow: ArrowHead;
   label: string | null;
@@ -401,6 +403,7 @@ export function ConnectorLayer({
         strokeWidth: st.strokeWidth,
         dash: dashOf(st.strokeStyle, st.strokeWidth),
         opacity: st.opacity / 100,
+        locked: conn.locked,
         startArrow: conn.startArrow,
         endArrow: conn.endArrow,
         label: conn.label?.text ?? null,
@@ -536,9 +539,12 @@ export function ConnectorLayer({
           startDir = unit(lpts[1]!, first);
         }
         const isSelected = !!selectedIds?.has(g.id);
-        // 端点重连手柄 —— 仅恰好单选该连线时出现（多选不重连）。
+        // 端点重连手柄 —— 仅恰好单选该连线时出现（多选不重连、锁定不重连）。
         const showHandles =
-          isSelected && selectedIds?.size === 1 && !!onEndpointCommit;
+          isSelected &&
+          selectedIds?.size === 1 &&
+          !!onEndpointCommit &&
+          !g.locked;
         return (
           <svg
             key={g.id}
@@ -586,7 +592,10 @@ export function ConnectorLayer({
                   strokeWidth={Math.max(g.strokeWidth + 10, 14)}
                   onPointerDown={(e) => {
                     e.stopPropagation();
-                    if (e.shiftKey) {
+                    if (g.locked) {
+                      // 锁定连线 —— 仅可点选（以便解锁），不拖拽。
+                      onSelect(g.id, e.shiftKey);
+                    } else if (e.shiftKey) {
                       // shift 点选 —— 切换该连线在多选中的去留，不拖拽。
                       onSelect(g.id, true);
                     } else if (onBodyDown) {
@@ -598,7 +607,7 @@ export function ConnectorLayer({
                   }}
                   onDoubleClick={(e) => {
                     e.stopPropagation();
-                    onLabelEdit?.(g.id);
+                    if (!g.locked) onLabelEdit?.(g.id);
                   }}
                 />
               ) : null}
