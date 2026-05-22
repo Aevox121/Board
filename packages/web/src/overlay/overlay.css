@@ -390,6 +390,35 @@
   stroke: var(--c-accent);
 }
 
+/* 旋转手柄 —— 顶部一个可见圆点，带一截连接茎。卡槽旋转时随之旋转。 */
+.ov-rotate {
+  position: absolute;
+  box-sizing: border-box;
+  top: -30px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--c-surface);
+  border: 1.5px solid var(--c-accent);
+  box-shadow: 0 1px 3px rgba(60, 40, 30, 0.3);
+  pointer-events: auto;
+  cursor: grab;
+}
+
+/* 旋转手柄到元素顶边的连接茎。 */
+.ov-rotate::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 11px;
+  width: 1.5px;
+  height: 19px;
+  transform: translateX(-50%);
+  background: var(--c-accent);
+}
+
 /* 八向缩放手柄 —— 可见圆点，落在选择框的四角与四边中点上。 */
 .ov-rz {
   position: absolute;

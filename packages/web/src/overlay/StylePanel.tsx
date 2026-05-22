@@ -44,6 +44,10 @@ export interface StylePanelProps {
   onGroup: () => void;
   /** 取消编组（Ctrl+Shift+G）。 */
   onUngroup: () => void;
+  /** 水平翻转选区。 */
+  onFlipH: () => void;
+  /** 垂直翻转选区。 */
+  onFlipV: () => void;
 }
 
 /** `<input type="color">` 需合法 #rrggbb；透明 / 异常值回退到白。 */
@@ -70,6 +74,8 @@ export function StylePanel({
   canUngroup,
   onGroup,
   onUngroup,
+  onFlipH,
+  onFlipV,
 }: StylePanelProps): JSX.Element {
   const widthSel = nearestWidth(s.strokeWidth);
 
@@ -188,6 +194,28 @@ export function StylePanel({
             aria-label="不透明度"
           />
           <span className="ov-style-opacity__val">{s.opacity}</span>
+        </div>
+      </section>
+
+      <section className="ov-style-sec">
+        <span className="ov-style-sec__label">翻转</span>
+        <div className="ov-seg">
+          <button
+            type="button"
+            className="ov-seg__btn"
+            onClick={onFlipH}
+            title="水平翻转"
+          >
+            水平翻转
+          </button>
+          <button
+            type="button"
+            className="ov-seg__btn"
+            onClick={onFlipV}
+            title="垂直翻转"
+          >
+            垂直翻转
+          </button>
         </div>
       </section>
 

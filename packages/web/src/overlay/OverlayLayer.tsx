@@ -298,6 +298,19 @@ interface ResizeState {
   minTop: number;
 }
 
+/** 旋转过程的瞬时状态。 */
+interface RotateState {
+  /** 被旋转的元素 id。 */
+  elementId: string;
+  /** 捕获的指针 id。 */
+  pointerId: number;
+  /** 元素中心（画布坐标）—— 旋转锚点。 */
+  cx: number;
+  cy: number;
+  /** 当前角度（弧度，随指针实时更新）。 */
+  angle: number;
+}
+
 /** 右键上下文菜单的作用域 —— 决定「整理」整理哪些文件。 */
 type MenuScope =
   | { kind: 'region'; regionId: string; label: string }
@@ -681,6 +694,8 @@ export function OverlayLayer({
   // 拖拽 / 缩放瞬时状态；null = 未在进行。
   const [drag, setDrag] = useState<DragState | null>(null);
   const [resize, setResize] = useState<ResizeState | null>(null);
+  // 旋转瞬时状态；null = 未在旋转。
+  const [rotate, setRotate] = useState<RotateState | null>(null);
   // 连线模式下鼠标悬停的可连接元素 id —— 高亮加强提示落点。
   const [hoverConnId, setHoverConnId] = useState<string | null>(null);
   // 连线端点拖拽落点所在的可连接元素 id —— 拖拽中临时高亮（同连线创建）。
@@ -1332,7 +1347,10 @@ export function OverlayLayer({
     s: BoardScene,
     id: string,
     patch: Partial<
-      Pick<Element, 'x' | 'y' | 'width' | 'height' | 'autoPlaced' | 'parentId'>
+      Pick<
+        Element,
+        'x' | 'y' | 'width' | 'height' | 'angle' | 'autoPlaced' | 'parentId'
+      >
     >,
   ): BoardScene {
     const ts = new Date().toISOString();
@@ -2349,6 +2367,112 @@ export function OverlayLayer({
     setResize((r) => (r && r.pointerId === e.pointerId ? null : r));
   }
 
+  /** 指针按下旋转手柄 —— 记录元素中心，进入旋转。 */
+  function beginRotate(
+    e: React.PointerEvent<HTMLDivElement>,
+    el: CanvasElement,
+  ): void {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setRotate({
+      elementId: el.id,
+      pointerId: e.pointerId,
+      cx: el.x + el.width / 2,
+      cy: el.y + el.height / 2,
+      angle: el.angle || 0,
+    });
+  }
+
+  /**
+   * 旋转手柄移动 —— 角度 = 元素中心指向指针的方向（手柄正上方为 0）。
+   * 按住 Shift 吸附到 15° 整数倍。
+   */
+  function handleRotateMove(e: React.PointerEvent<HTMLDivElement>): void {
+    const root = rootRef.current;
+    if (!root) return;
+    const rect = root.getBoundingClientRect();
+    setRotate((r) => {
+      if (!r || r.pointerId !== e.pointerId) return r;
+      const px = (e.clientX - rect.left) / zoom - scrollX;
+      const py = (e.clientY - rect.top) / zoom - scrollY;
+      let a = Math.atan2(py - r.cy, px - r.cx) + Math.PI / 2;
+      if (e.shiftKey) {
+        const step = Math.PI / 12; // 15°
+        a = Math.round(a / step) * step;
+      }
+      return { ...r, angle: a };
+    });
+  }
+
+  /** 旋转结束 —— 角度有变化则提交。 */
+  function handleRotateUp(e: React.PointerEvent<HTMLDivElement>): void {
+    const r = rotate;
+    if (!r || r.pointerId !== e.pointerId) return;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // 已释放，忽略。
+    }
+    setRotate(null);
+    const cur = sceneRef.current;
+    const el = cur.elements.find((x) => x.id === r.elementId);
+    if (el && (el.angle || 0) !== r.angle) {
+      replaceScene(patchElement(cur, r.elementId, { angle: r.angle }), 'canvas');
+    }
+  }
+
+  /** 旋转取消 —— 丢弃，不改场景。 */
+  function handleRotateCancel(e: React.PointerEvent<HTMLDivElement>): void {
+    setRotate((r) => (r && r.pointerId === e.pointerId ? null : r));
+  }
+
+  /**
+   * 水平 / 垂直翻转当前选区 —— 沿选区包围盒中线镜像各元素的位置，并各自镜像
+   * 自身（手绘镜像采样点；所有元素角度取反 —— 镜像会把旋转 θ 变为 -θ）。
+   */
+  function flipSelection(axis: 'h' | 'v'): void {
+    const cur = sceneRef.current;
+    const sel = selectedIdsRef.current;
+    const els = cur.elements.filter((e) => sel.has(e.id));
+    if (els.length === 0) return;
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const e of els) {
+      x0 = Math.min(x0, e.x);
+      y0 = Math.min(y0, e.y);
+      x1 = Math.max(x1, e.x + e.width);
+      y1 = Math.max(y1, e.y + e.height);
+    }
+    const ts = new Date().toISOString();
+    const elements = cur.elements.map((e): Element => {
+      if (!sel.has(e.id)) return e;
+      const nx = axis === 'h' ? x0 + x1 - (e.x + e.width) : e.x;
+      const ny = axis === 'v' ? y0 + y1 - (e.y + e.height) : e.y;
+      const common = {
+        x: nx,
+        y: ny,
+        angle: -(e.angle || 0),
+        autoPlaced: false,
+        updatedBy: actorId,
+        updatedAt: ts,
+      };
+      if (e.type === 'draw') {
+        return {
+          ...e,
+          ...common,
+          points: e.points.map((p): [number, number] =>
+            axis === 'h' ? [e.width - p[0], p[1]] : [p[0], e.height - p[1]],
+          ),
+        };
+      }
+      return { ...e, ...common } as Element;
+    });
+    replaceScene({ ...cur, elements }, 'canvas');
+  }
+
   /** 关闭上下文菜单（连同虚线框）。 */
   function closeMenu(): void {
     setMenu(null);
@@ -2474,6 +2598,16 @@ export function OverlayLayer({
           const rw = resizing && resize ? resize.w : el.width;
           const rh = resizing && resize ? resize.h : el.height;
 
+          // 旋转：区域不旋转（容器、轴对齐）；其余按 el.angle，旋转中实时取
+          // rotate.angle。卡槽绕中心旋转（CSS transform 默认 transform-origin）。
+          const rotating = rotate?.elementId === el.id;
+          const ang =
+            el.type === 'region'
+              ? 0
+              : rotating && rotate
+                ? rotate.angle
+                : el.angle || 0;
+
           const regionActive =
             el.type === 'region' &&
             ((drag?.kind === 'region' && drag.elementId === el.id) || resizing);
@@ -2484,8 +2618,12 @@ export function OverlayLayer({
             width: `${rw}px`,
             height: `${rh}px`,
           };
-          if (offset) {
-            slotStyle.transform = `translate(${dx}px, ${dy}px)`;
+          // 卡槽变换：先平移（拖拽偏移）再绕中心旋转。
+          const tParts: string[] = [];
+          if (offset) tParts.push(`translate(${dx}px, ${dy}px)`);
+          if (ang) tParts.push(`rotate(${ang}rad)`);
+          if (tParts.length > 0) {
+            slotStyle.transform = tParts.join(' ');
           }
           // 元素样式 → 卡槽 CSS 变量 + 不透明度（仅偏离默认值的字段才覆写）。
           Object.assign(slotStyle, styleVars(el.style));
@@ -2536,6 +2674,10 @@ export function OverlayLayer({
             onMove: handleResizeMove,
             onUp: handleResizeUp,
             onCancel: handleResizeCancel,
+            onRotateStart: (e) => beginRotate(e, el),
+            onRotateMove: handleRotateMove,
+            onRotateUp: handleRotateUp,
+            onRotateCancel: handleRotateCancel,
           };
 
           return (
@@ -2618,7 +2760,12 @@ export function OverlayLayer({
                 <SelectionFrame element={el} width={rw} height={rh} />
               ) : null}
               {/* 八向缩放手柄（圆点）—— 仅单选时出现（多选不缩放）。 */}
-              {soloId === el.id ? <ResizeHandles api={resizeApi} /> : null}
+              {soloId === el.id ? (
+                <ResizeHandles
+                  api={resizeApi}
+                  rotatable={el.type !== 'region'}
+                />
+              ) : null}
               {/* 评论角标（PRD §8.4）—— 元素有评论时显示条数 */}
               {(el.comments?.length ?? 0) > 0 ? (
                 <div
@@ -2759,6 +2906,8 @@ export function OverlayLayer({
           canUngroup={selCanUngroup}
           onGroup={groupSelection}
           onUngroup={ungroupSelection}
+          onFlipH={() => flipSelection('h')}
+          onFlipV={() => flipSelection('v')}
         />
       ) : null}
 
