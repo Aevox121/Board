@@ -1238,10 +1238,12 @@
  * （Excalidraw）属性面板的能力与交互：色板行 + 分段按钮 + 不透明度滑杆。 */
 .ov-style-panel {
   position: absolute;
-  left: 16px;
+  right: 16px;
   top: 16px;
   z-index: 40;
   width: 208px;
+  max-height: calc(100% - 32px);
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);

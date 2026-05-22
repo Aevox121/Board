@@ -1,13 +1,14 @@
 /**
- * 元素样式面板 —— 选中任意元素（图形 / 手绘 / 连线 / 文件卡 / 文本卡 /
- * 文件夹 / 区域）时浮出，编辑统一样式。
+ * 选区面板 —— 左键选中任意元素 / 多选 / 编组后浮出的统一面板。
  *
- * 编辑 5 项统一样式：描边色 / 背景色 / 描边宽度 / 描边样式 / 不透明度
- * （即 `board style` CLI / MCP 所改的字段）。布局为色板行 + 分段按钮 +
- * 不透明度滑杆；改动即 patch `element.style`，由 OverlayLayer 写回内存场景
- * 并自动保存。
+ * 内容：
+ *  - 统一样式：描边色 / 背景色 / 描边宽度 / 描边样式 / 不透明度
+ *    （即 `board style` CLI / MCP 所改的字段）。多选时改动应用到整个选区。
+ *  - 编组操作：编组 / 取消编组（按选区状态条件显示）。
+ *
+ * 改动即 patch / 触发回调，由 OverlayLayer 写回内存场景并自动保存。
  */
-import type { Element, Style, StrokeStyle } from '@board/core';
+import type { Style, StrokeStyle } from '@board/core';
 
 /** 描边预设色 —— 经典手绘白板描边色板。 */
 const STROKE_PRESETS = ['#1e1e1e', '#e03131', '#2f9e44', '#1971c2', '#f08c00'];
@@ -27,10 +28,22 @@ const STROKE_STYLES: ReadonlyArray<{ label: string; value: StrokeStyle }> = [
 ];
 
 export interface StylePanelProps {
-  /** 当前选中的覆盖层元素。 */
-  element: Element;
-  /** 样式补丁回调 —— 由 OverlayLayer 落到 element.style。 */
+  /** 选区的代表样式 —— 多选时取首个元素的样式作为指示值。 */
+  style: Style;
+  /** 选区元素数。 */
+  count: number;
+  /** 选区是否含可填充元素（非连线）—— 决定是否显示「背景」一节。 */
+  hasFill: boolean;
+  /** 样式补丁回调 —— 由 OverlayLayer 应用到整个选区。 */
   onChange: (patch: Partial<Style>) => void;
+  /** 选区 ≥2 时可编组。 */
+  canGroup: boolean;
+  /** 选区含已编组元素时可取消编组。 */
+  canUngroup: boolean;
+  /** 编组（Ctrl+G）。 */
+  onGroup: () => void;
+  /** 取消编组（Ctrl+Shift+G）。 */
+  onUngroup: () => void;
 }
 
 /** `<input type="color">` 需合法 #rrggbb；透明 / 异常值回退到白。 */
@@ -47,11 +60,17 @@ function nearestWidth(w: number): number {
   return best;
 }
 
-/** 覆盖层元素样式面板。 */
-export function StylePanel({ element, onChange }: StylePanelProps): JSX.Element {
-  const s = element.style;
-  // 连线是一条线，没有填充 —— 隐藏「背景」一节。
-  const hasFill = element.type !== 'connector';
+/** 选区面板（样式 + 编组）。 */
+export function StylePanel({
+  style: s,
+  count,
+  hasFill,
+  onChange,
+  canGroup,
+  canUngroup,
+  onGroup,
+  onUngroup,
+}: StylePanelProps): JSX.Element {
   const widthSel = nearestWidth(s.strokeWidth);
 
   return (
@@ -60,7 +79,9 @@ export function StylePanel({ element, onChange }: StylePanelProps): JSX.Element 
       // 面板自身的指针操作不冒泡到画布 —— 避免被「点空白取消选中」误伤。
       onPointerDown={(e) => e.stopPropagation()}
     >
-      <div className="ov-style-panel__title">样式</div>
+      <div className="ov-style-panel__title">
+        {count > 1 ? `选区 · ${count} 项` : '样式'}
+      </div>
 
       <section className="ov-style-sec">
         <span className="ov-style-sec__label">描边</span>
@@ -100,9 +121,7 @@ export function StylePanel({ element, onChange }: StylePanelProps): JSX.Element 
                   (c === 'transparent' ? ' ov-swatch--none' : '') +
                   (s.backgroundColor === c ? ' ov-swatch--on' : '')
                 }
-                style={
-                  c === 'transparent' ? undefined : { background: c }
-                }
+                style={c === 'transparent' ? undefined : { background: c }}
                 onClick={() => onChange({ backgroundColor: c })}
                 aria-label={c === 'transparent' ? '透明背景' : `背景色 ${c}`}
               />
@@ -171,6 +190,34 @@ export function StylePanel({ element, onChange }: StylePanelProps): JSX.Element 
           <span className="ov-style-opacity__val">{s.opacity}</span>
         </div>
       </section>
+
+      {canGroup || canUngroup ? (
+        <section className="ov-style-sec">
+          <span className="ov-style-sec__label">编组</span>
+          <div className="ov-seg">
+            {canGroup ? (
+              <button
+                type="button"
+                className="ov-seg__btn"
+                onClick={onGroup}
+                title="编组（Ctrl+G）"
+              >
+                编组
+              </button>
+            ) : null}
+            {canUngroup ? (
+              <button
+                type="button"
+                className="ov-seg__btn"
+                onClick={onUngroup}
+                title="取消编组（Ctrl+Shift+G）"
+              >
+                取消编组
+              </button>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }

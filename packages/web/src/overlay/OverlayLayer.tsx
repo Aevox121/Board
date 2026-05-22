@@ -1612,16 +1612,19 @@ export function OverlayLayer({
   }
 
   /**
-   * 改选中覆盖层元素的统一样式（描边色 / 背景色 / 线宽 / 线型 / 不透明度）。
-   * 仅改内存场景 —— 防抖自动保存负责落盘，故拖动不透明度滑杆不会逐次打 server。
+   * 改整个选区的统一样式（描边色 / 背景色 / 线宽 / 线型 / 不透明度）——
+   * 单选改一个、多选批量改全部。仅改内存场景，防抖自动保存负责落盘，
+   * 故拖动不透明度滑杆不会逐次打 server。
    */
-  function applyStyle(id: string, patch: Partial<Style>): void {
+  function applyStyleToSelection(patch: Partial<Style>): void {
     const cur = sceneRef.current;
+    const sel = selectedIdsRef.current;
+    if (sel.size === 0) return;
     const ts = new Date().toISOString();
     const next: BoardScene = {
       ...cur,
       elements: cur.elements.map((e): Element =>
-        e.id === id
+        sel.has(e.id)
           ? ({
               ...e,
               style: { ...e.style, ...patch },
@@ -2395,34 +2398,25 @@ export function OverlayLayer({
         .filter((e): e is Element => !!e)
     : [];
 
+  // 当前选区的元素对象列表 —— 选区面板（样式 / 编组）与右键菜单共用。
+  const selectedEls: Element[] = scene.elements.filter((e) =>
+    selectedIds.has(e.id),
+  );
+  // 选区能否编组（≥2）/ 取消编组（含已编组元素）。
+  const selCanGroup = selectedEls.length >= 2;
+  const selCanUngroup = selectedEls.some(
+    (e) => (e.groupIds?.length ?? 0) > 0,
+  );
+
   // 右键菜单（落在元素上时）的选区操作对象 —— 菜单的编组 / 取消编组 / 删除
   // 都作用于当前选区，与单选时的菜单一致。区域 / 文件夹背后是真实文件夹，
   // 不在画布删除范围（与 board rm / Delete 键一致），故 menuDeletable 排除之。
-  const menuSel: Element[] =
-    menu && menu.onElement
-      ? scene.elements.filter((e) => selectedIds.has(e.id))
-      : [];
+  const menuSel: Element[] = menu && menu.onElement ? selectedEls : [];
   const menuCanGroup = menuSel.length >= 2;
   const menuCanUngroup = menuSel.some((e) => (e.groupIds?.length ?? 0) > 0);
   const menuDeletable = menuSel.filter(
     (e) => e.type !== 'region' && e.type !== 'folder',
   );
-
-  // 选中的元素 —— 决定是否浮出样式面板。图形 / 手绘自研画布层后也由本面板
-  // 编辑（自研画布层增量5），不再依赖 Excalidraw 属性面板。
-  const styleEl = soloId
-    ? (scene.elements.find(
-        (e) =>
-          e.id === soloId &&
-          (e.type === 'connector' ||
-            e.type === 'file' ||
-            e.type === 'folder' ||
-            e.type === 'region' ||
-            e.type === 'text' ||
-            e.type === 'shape' ||
-            e.type === 'draw'),
-      ) ?? null)
-    : null;
 
   // 变换容器样式 —— 实现 screen = (canvas + scroll) * zoom 的视口变换。
   const transformStyle: React.CSSProperties = {
@@ -2753,12 +2747,18 @@ export function OverlayLayer({
         ) : null}
       </div>
 
-      {/* 样式面板 —— 选中覆盖层元素（连线 / 文件卡 / 文本卡 / 文件夹 / 区域）
-          时浮在画布左上角，与原生属性面板对齐。屏幕定位，不进变换容器。 */}
-      {styleEl ? (
+      {/* 选区面板 —— 左键选中任意元素 / 多选 / 编组后浮在画布右上角：调样式
+          + 编组 / 取消编组。多选时样式改动应用到整个选区。屏幕定位。 */}
+      {selectedEls.length > 0 ? (
         <StylePanel
-          element={styleEl}
-          onChange={(patch) => applyStyle(styleEl.id, patch)}
+          style={selectedEls[0]!.style}
+          count={selectedEls.length}
+          hasFill={selectedEls.some((e) => e.type !== 'connector')}
+          onChange={applyStyleToSelection}
+          canGroup={selCanGroup}
+          canUngroup={selCanUngroup}
+          onGroup={groupSelection}
+          onUngroup={ungroupSelection}
         />
       ) : null}
 
