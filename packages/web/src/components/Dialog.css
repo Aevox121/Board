@@ -1,0 +1,164 @@
+/**
+ * 通用对话框样式 —— Board 应用所有弹窗的统一外观（设计规范见 tokens.css）。
+ *
+ * 与画布层的 .ov-region-dialog 同款 token / 同款配色，区别仅在定位：
+ *  - ov-region-dialog 浮在画布坐标的某个元素旁（绝对定位 + transform）
+ *  - bd-dialog 居中浮在视口中央（fixed + flex center）
+ */
+
+.bd-dialog__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(40, 36, 28, 0.18);
+  font-family: var(--font-ui);
+  animation: bd-dialog-backdrop-in var(--dur-micro) var(--ease);
+}
+
+.bd-dialog {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  min-width: 280px;
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  outline: none;
+  animation: bd-dialog-in var(--dur-layout) var(--ease);
+}
+
+@keyframes bd-dialog-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes bd-dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.bd-dialog__title {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--c-ink);
+}
+
+.bd-dialog__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.bd-dialog__text {
+  font-size: var(--text-sm);
+  color: var(--c-ink-2);
+  line-height: 1.55;
+}
+
+.bd-dialog__label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--c-ink-2);
+  margin-top: var(--space-1);
+}
+
+.bd-dialog__opt {
+  padding: 0 5px;
+  font-size: 11px;
+  color: var(--c-ink-3);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+}
+
+.bd-dialog__input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 7px 9px;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  color: var(--c-ink);
+  background: var(--c-surface-sunken);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  outline: none;
+  transition:
+    background var(--dur-micro) var(--ease),
+    border-color var(--dur-micro) var(--ease);
+}
+
+.bd-dialog__input::placeholder {
+  color: var(--c-ink-3);
+}
+
+.bd-dialog__input:focus {
+  background: var(--c-surface);
+  border-color: var(--c-accent);
+  box-shadow: var(--focus-ring);
+}
+
+.bd-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.bd-dialog__btn {
+  padding: 7px 16px;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  color: var(--c-ink);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--dur-micro) var(--ease);
+}
+
+.bd-dialog__btn:hover:not(:disabled) {
+  background: var(--c-surface-sunken);
+}
+
+.bd-dialog__btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.bd-dialog__btn--primary {
+  color: var(--c-on-accent);
+  background: var(--c-accent);
+  border-color: var(--c-accent);
+}
+
+.bd-dialog__btn--primary:hover:not(:disabled) {
+  background: var(--c-accent-strong);
+  border-color: var(--c-accent-strong);
+}
+
+.bd-dialog__btn--primary.bd-dialog__btn--danger {
+  background: var(--c-danger);
+  border-color: var(--c-danger);
+}
+
+.bd-dialog__btn--primary.bd-dialog__btn--danger:hover:not(:disabled) {
+  background: #993f37; /* danger-strong 暂硬编，token 表未定义 */
+  border-color: #993f37;
+}
+
+.bd-dialog__btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}

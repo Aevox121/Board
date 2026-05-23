@@ -262,43 +262,5 @@
   opacity: 0.5;
 }
 
-/* ── 复原确认弹窗 ───────────────────────────────────────── */
-.sp-modal-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.22);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
-
-.sp-modal {
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-lg);
-  padding: var(--space-4);
-  min-width: 320px;
-  max-width: 400px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16);
-}
-
-.sp-modal__title {
-  font-size: var(--text-base);
-  font-weight: 600;
-  color: var(--c-ink);
-  margin-bottom: var(--space-2);
-}
-
-.sp-modal__body {
-  font-size: var(--text-sm);
-  color: var(--c-ink-2, var(--c-ink-3));
-  margin-bottom: var(--space-3);
-  line-height: 1.5;
-}
-
-.sp-modal__actions {
-  display: flex;
-  gap: var(--space-2);
-  justify-content: flex-end;
-}
+/* 复原 / 删除确认弹窗已迁到通用 <Dialog> 组件（components/Dialog.tsx），
+   不再在本文件维护局部 .sp-modal* 样式。 */

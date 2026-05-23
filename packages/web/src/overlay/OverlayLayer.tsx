@@ -61,6 +61,7 @@ import { TaskCard } from './TaskCard';
 import { SuggestionCard } from './SuggestionCard';
 import { RegionCard, type PointerHandlers } from './RegionCard';
 import { RegionCreateDialog } from './RegionCreateDialog';
+import { ConfirmDialog, PromptDialog } from '../components/Dialog';
 import { ConnectorLayer } from './ConnectorLayer';
 import { ResizeHandles, type ResizeApi } from './ResizeHandles';
 import { StylePanel } from './StylePanel';
@@ -1082,6 +1083,13 @@ export function OverlayLayer({
   const [creating, setCreating] = useState<CreatingState | null>(null);
   // 新建区域弹窗 —— 拖出区域矩形后浮出（画布坐标矩形）；null = 无。
   const [regionDraft, setRegionDraft] = useState<RectLike | null>(null);
+  // 嵌入元素 URL 输入弹窗 —— 工具栏选「嵌入」后开（替代原生 window.prompt）。
+  const [embedUrlOpen, setEmbedUrlOpen] = useState(false);
+  // 区域删除二次确认 —— 多选 Delete 含区域时弹（替代原生 window.confirm）。
+  const [regionDeleteConfirm, setRegionDeleteConfirm] = useState<{
+    regions: RegionElement[];
+    others: Element[];
+  } | null>(null);
 
   // 持有最新场景 / 视口，供事件回调（含挂在 window 上的）读取，避免闭包陈旧。
   const sceneRef = useRef(scene);
@@ -1969,14 +1977,8 @@ export function OverlayLayer({
       };
       inp.click();
     } else {
-      const raw = window.prompt('输入要嵌入的链接 URL');
-      const url = raw ? normalizeUrl(raw) : null;
-      if (url) {
-        const c = viewportCenter();
-        createEmbedAt(url, c.x, c.y);
-      } else if (raw && raw.trim()) {
-        window.alert('不是有效的链接 URL。');
-      }
+      // 嵌入 URL —— 开规范化对话框（替代原生 prompt）
+      setEmbedUrlOpen(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTool]);
@@ -2105,48 +2107,44 @@ export function OverlayLayer({
    *
    * 与单删一致：区域 / 文件夹背后是真实文件夹，不在画布删除范围；连线 / 文本 /
    * 图形 / 手绘一次性从内存场景移除；文件元素背后是真实文件，乐观移除后逐个经
-   * server 移入回收站。removeElement 连带清理指向被删元素的悬空连线。
+   * server 移入回收站。含区域时弹规范化对话框二次确认（状态驱动）。
    */
   async function deleteSelectedSet(ids: ReadonlySet<string>): Promise<void> {
     const cur = sceneRef.current;
     const picked = [...ids]
       .map((id) => cur.elements.find((e) => e.id === id))
       .filter((e): e is Element => !!e && !e.locked);
-    // 区域：级联删除（内部子元素 / 子区域一并删），文件夹移入回收站 ——
-    // 经 server 处理。文件夹（folder）仍不在画布删除范围。
     const regions = picked.filter(
       (e): e is RegionElement => e.type === 'region',
     );
-    const els = picked.filter(
+    const others = picked.filter(
       (e) => e.type !== 'region' && e.type !== 'folder',
     );
     clearSelection();
     if (regions.length > 0) {
       if (connection !== 'connected') {
         window.alert('未连接 board-server，无法删除区域。');
-      } else if (
-        window.confirm(
-          `删除区域「${regions.map((r) => r.label).join('、')}」` +
-            `及其内部全部内容？\n区域文件夹将移入回收站（可恢复）。`,
-        )
-      ) {
-        for (const r of regions) {
-          try {
-            await deleteElement(r.id);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            window.alert(`删除区域「${r.label}」失败：${msg}`);
-          }
-        }
+        return;
       }
+      // 弹规范化确认对话框；确认后由 confirmRegionDelete 走完整删流程。
+      setRegionDeleteConfirm({ regions, others });
+      return;
     }
+    await deleteNonRegionSet(others);
+  }
+
+  /**
+   * 删除「非区域 / 非文件夹」元素子集 —— 提到独立函数，供
+   * deleteSelectedSet 直删与 confirmRegionDelete 接力调用复用。
+   */
+  async function deleteNonRegionSet(els: Element[]): Promise<void> {
     if (els.length === 0) return;
+    const cur = sceneRef.current;
     const files = els.filter((e): e is FileElement => e.type === 'file');
-    const others = els.filter((e) => e.type !== 'file');
+    const otherEls = els.filter((e) => e.type !== 'file');
     const canDeleteFiles = connection === 'connected';
-    // 先在内存场景里移除可删元素（removeElement 连带清理悬空连线引用）。
     let working = cur;
-    for (const e of others) working = removeElement(working, e.id).scene;
+    for (const e of otherEls) working = removeElement(working, e.id).scene;
     if (canDeleteFiles) {
       for (const f of files) working = removeElement(working, f.id).scene;
     }
@@ -2155,7 +2153,6 @@ export function OverlayLayer({
       window.alert('未连接 board-server，文件元素未删除。');
       return;
     }
-    // 文件元素背后是真实文件 —— 逐个经 server 移入回收站。
     for (const f of files) {
       try {
         await deleteElement(f.id);
@@ -2164,6 +2161,22 @@ export function OverlayLayer({
         window.alert(`删除文件「${fileBaseName(f.path)}」失败：${msg}`);
       }
     }
+  }
+
+  /** 用户在区域删除确认对话框点「删除」—— 真删 + 接力删非区域元素。 */
+  async function confirmRegionDelete(): Promise<void> {
+    const pending = regionDeleteConfirm;
+    if (!pending) return;
+    setRegionDeleteConfirm(null);
+    for (const r of pending.regions) {
+      try {
+        await deleteElement(r.id);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        window.alert(`删除区域「${r.label}」失败：${msg}`);
+      }
+    }
+    await deleteNonRegionSet(pending.others);
   }
 
   /**
@@ -4750,6 +4763,60 @@ export function OverlayLayer({
             void submitRegion(rect, name, description);
           }}
           onCancel={() => setRegionDraft(null)}
+        />
+      ) : null}
+      {/* 嵌入元素 URL 输入弹窗（替代 window.prompt）。 */}
+      {embedUrlOpen ? (
+        <PromptDialog
+          title="嵌入网页"
+          body="把任意可访问的网页链接嵌入画布（YouTube、Notion、Figma 等同源策略允许的页面）。"
+          label="链接 URL"
+          required
+          placeholder="https://example.com"
+          confirmLabel="嵌入"
+          onCancel={() => setEmbedUrlOpen(false)}
+          onSubmit={(raw) => {
+            setEmbedUrlOpen(false);
+            const url = normalizeUrl(raw);
+            if (url) {
+              const c = viewportCenter();
+              createEmbedAt(url, c.x, c.y);
+            } else {
+              window.alert('不是有效的链接 URL。');
+            }
+          }}
+        />
+      ) : null}
+      {/* 区域删除确认弹窗（替代 window.confirm）。 */}
+      {regionDeleteConfirm ? (
+        <ConfirmDialog
+          title={
+            regionDeleteConfirm.regions.length === 1
+              ? `删除区域「${regionDeleteConfirm.regions[0]!.label}」？`
+              : `删除 ${regionDeleteConfirm.regions.length} 个区域？`
+          }
+          body={
+            <>
+              <div>
+                {regionDeleteConfirm.regions
+                  .map((r) => `「${r.label}」`)
+                  .join('、')}
+                {regionDeleteConfirm.regions.length > 1 ? ' ' : ''}
+                及其内部全部内容将被删除。
+              </div>
+              <div style={{ marginTop: 4 }}>
+                区域文件夹会移入回收站
+                <code style={{ fontFamily: 'var(--font-mono)' }}>
+                  .runtime/trash/
+                </code>
+                ，可手动恢复。
+              </div>
+            </>
+          }
+          confirmLabel="删除"
+          danger
+          onConfirm={() => void confirmRegionDelete()}
+          onCancel={() => setRegionDeleteConfirm(null)}
         />
       ) : null}
     </div>

@@ -12,6 +12,7 @@ import {
   deleteSnapshotApi,
   restoreSnapshot as apiRestore,
 } from '../server/client';
+import { ConfirmDialog } from './Dialog';
 import './SnapshotPanel.css';
 
 /** 把 ISO 时间串显示为人类可读的「今天 HH:MM / 昨天 HH:MM / YYYY-MM-DD HH:MM」。 */
@@ -50,9 +51,12 @@ export function SnapshotPanel(): JSX.Element {
     b.createdAt.localeCompare(a.createdAt),
   );
   const [busy, setBusy] = useState<string | null>(null); // 当前正在进行的操作（id 或 'create'）
-  const [confirm, setConfirm] = useState<{ id: string; name: string } | null>(
-    null,
-  );
+  // 复原 / 删除确认弹窗 —— kind 区分用途，name 用于文案
+  const [confirm, setConfirm] = useState<
+    | { kind: 'restore'; id: string; name: string }
+    | { kind: 'delete'; id: string; name: string }
+    | null
+  >(null);
   // 新建表单 —— 替换原生 prompt，行内展开在面板底部
   const [creating, setCreating] = useState(false);
   const [draftName, setDraftName] = useState('');
@@ -91,20 +95,24 @@ export function SnapshotPanel(): JSX.Element {
     }
   };
 
-  const onDelete = async (id: string, name: string): Promise<void> => {
-    if (!window.confirm(`删除存档「${name}」？此操作不可撤销。`)) return;
+  const onDeleteConfirm = async (): Promise<void> => {
+    if (!confirm || confirm.kind !== 'delete') return;
+    const id = confirm.id;
     setBusy(id);
+    setConfirm(null);
     try {
       await deleteSnapshotApi(id);
     } catch (err) {
-      window.alert(`删除存档失败：${err instanceof Error ? err.message : String(err)}`);
+      window.alert(
+        `删除存档失败：${err instanceof Error ? err.message : String(err)}`,
+      );
     } finally {
       setBusy(null);
     }
   };
 
   const onRestoreConfirm = async (): Promise<void> => {
-    if (!confirm) return;
+    if (!confirm || confirm.kind !== 'restore') return;
     const id = confirm.id;
     setBusy(id);
     setConfirm(null);
@@ -143,7 +151,9 @@ export function SnapshotPanel(): JSX.Element {
                 type="button"
                 className="btn btn--secondary"
                 disabled={disabled || busy === s.id}
-                onClick={() => setConfirm({ id: s.id, name: s.name })}
+                onClick={() =>
+                  setConfirm({ kind: 'restore', id: s.id, name: s.name })
+                }
               >
                 {busy === s.id ? '复原中…' : '复原'}
               </button>
@@ -151,7 +161,9 @@ export function SnapshotPanel(): JSX.Element {
                 type="button"
                 className="btn btn--ghost"
                 disabled={disabled || busy === s.id}
-                onClick={() => onDelete(s.id, s.name)}
+                onClick={() =>
+                  setConfirm({ kind: 'delete', id: s.id, name: s.name })
+                }
                 title="删除存档"
               >
                 ✕
@@ -222,31 +234,24 @@ export function SnapshotPanel(): JSX.Element {
         )}
       </div>
 
-      {confirm && (
-        <div className="sp-modal-backdrop" onClick={() => setConfirm(null)}>
-          <div className="sp-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="sp-modal__title">复原到「{confirm.name}」？</div>
-            <div className="sp-modal__body">
-              当前状态会先自动存档，可再切回。
-            </div>
-            <div className="sp-modal__actions">
-              <button
-                type="button"
-                className="btn btn--secondary"
-                onClick={() => setConfirm(null)}
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                className="btn btn--primary"
-                onClick={onRestoreConfirm}
-              >
-                复原
-              </button>
-            </div>
-          </div>
-        </div>
+      {confirm?.kind === 'restore' && (
+        <ConfirmDialog
+          title={`复原到「${confirm.name}」？`}
+          body="当前状态会先自动存档，可再切回。"
+          confirmLabel="复原"
+          onConfirm={onRestoreConfirm}
+          onCancel={() => setConfirm(null)}
+        />
+      )}
+      {confirm?.kind === 'delete' && (
+        <ConfirmDialog
+          title={`删除存档「${confirm.name}」？`}
+          body="此操作不可撤销。被删除的存档文件夹会一并从磁盘上移除。"
+          confirmLabel="删除"
+          danger
+          onConfirm={onDeleteConfirm}
+          onCancel={() => setConfirm(null)}
+        />
       )}
     </aside>
   );
