@@ -35,6 +35,7 @@ import { cmdRm } from './rm.js';
 import { cmdSearch } from './search.js';
 import { cmdComment } from './comment.js';
 import { cmdStyle } from './style.js';
+import { cmdText } from './text.js';
 
 /** 由位置参数 / 选项 / 开关构造一个 ParsedArgs（喂给 cmd* 函数）。 */
 function mkArgs(
@@ -303,6 +304,76 @@ export async function runMcpServer(
           ['text', boardPath, a.markdown],
           { at: a.at, actor: a.agent },
           a.draft ? ['draft'] : [],
+        ),
+        port,
+      ),
+  );
+
+  // ── 写：流式文本卡 ──────────────────────────────────────────
+  // 与 board_add_text 区别：先开空卡得 elementId，再多次 append 追加 markdown。
+  // 浏览器看到打字动画 + Agent 焦点光标按行号同步移动（PRD §7.4）。
+  // LLM 流式输出可直接接入：for chunk in stream → board_text_stream_append。
+  server.registerTool(
+    'board_text_stream_create',
+    {
+      description:
+        '开一张空 Markdown 文本卡（流式工作流起手）。返回 elementId，后续用 ' +
+        'board_text_stream_append 多次追加内容。需要 board-server 在运行。',
+      inputSchema: {
+        region: z.string().optional().describe('区域名（卡片归属该区域；不传则落画布顶层）'),
+        at: z
+          .string()
+          .optional()
+          .describe('坐标 "x,y"：带 region 时为区域内偏移，不带时为画布绝对坐标'),
+        size: z.string().optional().describe('大小 "w,h"，默认 480,200'),
+        markdown: z.string().optional().describe('初始 markdown（一般留空，靠 append 喂入）'),
+        agent: z.string().optional().describe('Agent id（写入 createdBy + Agent 焦点光标）'),
+      },
+    },
+    async (a) =>
+      runCmd(
+        'board_text_stream_create',
+        cmdText,
+        mkArgs(
+          ['create'],
+          {
+            region: a.region,
+            at: a.at,
+            size: a.size,
+            markdown: a.markdown,
+            actor: a.agent,
+          },
+        ),
+        port,
+      ),
+  );
+
+  server.registerTool(
+    'board_text_stream_append',
+    {
+      description:
+        '给已存在的文本卡 markdown 追加一段（Y.Text 字符级 CRDT，浏览器看到 ' +
+        '打字动画 + Agent 光标 jitter）。LLM 流式输出的每个 chunk / 段落都可调一次。',
+      inputSchema: {
+        elementId: z.string().describe('文本卡元素 id（board_text_stream_create 返回值）'),
+        chunk: z.string().describe('要追加的文本片段（保留 \\n 等格式字符）'),
+        line: z
+          .number()
+          .optional()
+          .describe('行号（0-indexed）—— 让 Agent 焦点光标钉到该行；缺省自动算'),
+        agent: z.string().optional().describe('Agent id（写入 updatedBy + Agent 焦点光标）'),
+      },
+    },
+    async (a) =>
+      runCmd(
+        'board_text_stream_append',
+        cmdText,
+        mkArgs(
+          ['append', a.elementId, a.chunk],
+          {
+            line: a.line !== undefined ? String(a.line) : undefined,
+            actor: a.agent,
+          },
         ),
         port,
       ),

@@ -19,8 +19,8 @@ import type { Element } from './types.js';
 
 /** 文本卡（`.ov-text`）布局常量 —— 与 overlay.css ov-text* 同步。 */
 const TEXT_LAYOUT = {
-  /** `.ov-text__bar` 顶栏（「文本」标签 + source/preview 切换） 估计高度 */
-  headerHeight: 24,
+  /** 标题栏已移除（透明文本卡），保留字段为 0 以便日后再加 header 时改一处。 */
+  headerHeight: 0,
   /** `.ov-text__body` 内 padding-top（var(--space-2) = 8px） */
   bodyPaddingTop: 8,
   /** `.ov-text__body` 内 padding-left（var(--space-3) = 12px） */

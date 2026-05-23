@@ -727,50 +727,23 @@
 }
 
 /* ── 文本 / Markdown 卡片（.ov-text）──────────────────────────
- * 白板原生 Markdown 卡片（数据模型 §6.4）：手绘质感、source/preview 可切换。 */
+ * 白板原生 Markdown 卡片（数据模型 §6.4）：透明背景，纯文本 / 格式化 Markdown
+ * 直接浮在画布上；无标题栏、无 source/preview 切换。双击进入就地编辑，
+ * 编辑态显示边框与底色，离开编辑后回归透明。 */
 .ov-text {
   display: flex;
   flex-direction: column;
-  background: var(--ov-fill, var(--c-surface));
-  border: var(--ov-stroke-w, 1.5px) var(--ov-stroke-style, solid)
-    var(--ov-stroke, var(--c-ink));
+  background: transparent;
+  border: none;
+  overflow: visible;
+}
+
+.ov-text--editing {
+  background: var(--c-surface);
+  border: 1.5px solid var(--c-accent);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-sm);
   overflow: hidden;
-}
-
-.ov-text__bar {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
-  background: var(--c-surface-sunken);
-  border-bottom: 1px solid var(--c-border);
-}
-
-.ov-text__tag {
-  flex: 1 1 auto;
-  font-family: var(--font-ui);
-  font-size: var(--text-xs);
-  color: var(--c-ink-2);
-}
-
-.ov-text__toggle {
-  flex: 0 0 auto;
-  padding: 1px var(--space-2);
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-sm);
-  font-family: var(--font-ui);
-  font-size: var(--text-xs);
-  color: var(--c-ink);
-  cursor: pointer;
-}
-
-.ov-text__toggle:hover {
-  background: var(--c-accent-tint);
-  border-color: var(--c-accent);
 }
 
 .ov-text__body {
@@ -783,20 +756,12 @@
   color: var(--c-ink);
 }
 
-.ov-text__source {
-  margin: 0;
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
 .ov-text__empty {
   color: var(--c-ink-2);
   font-style: italic;
 }
 
-/* 文本卡就地编辑文本域（自研画布层增量4）—— 复用 .ov-text__body 的盒模型。 */
+/* 文本卡就地编辑文本域 —— 仅编辑态显示，复用 body 盒模型。 */
 .ov-text__editor {
   resize: none;
   border: none;

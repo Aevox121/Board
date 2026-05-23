@@ -27,12 +27,15 @@ import { createReadStream } from 'node:fs';
 import { cp, mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { basename, dirname, join, resolve, sep } from 'node:path';
+import * as Y from 'yjs';
 import {
   acceptSuggestion,
   clampPercent,
   commitDraftElements,
+  computeEditAnchor,
   createRegionElement,
   createTask,
+  createTextElement,
   describeSuggestion,
   growRegions,
   guessMime,
@@ -1395,6 +1398,154 @@ async function handleDeleteElement(
 }
 
 /**
+ * POST /api/elements/text-create —— 创建一个 text 元素（流式工作流的起手）。
+ *
+ * 与 CLI `board add text` 不同：本端点经 Y.Doc 写入而非 fs direct，且专门
+ * 为「先创建空卡 → 多次 text-append 流式追加」设计。返回 elementId。
+ *
+ * 请求体：`{ actor, x?, y?, width?, height?, markdown?, region? }`
+ *  - region：可选，指定区域名，元素归属该区域；x/y 解读为相对区域左上的偏移
+ *  - 不传 region：x/y 为画布绝对坐标
+ */
+async function handleTextCreate(
+  deps: HttpDeps,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch (err) {
+    fail(res, 400, errMsg(err));
+    return;
+  }
+  if (typeof body !== 'object' || body === null) {
+    fail(res, 400, '请求体必须为 JSON 对象');
+    return;
+  }
+  const rec = body as Record<string, unknown>;
+  const actor = typeof rec['actor'] === 'string' ? rec['actor'] : 'u_local';
+  const num = (v: unknown, d: number): number =>
+    typeof v === 'number' && Number.isFinite(v) ? v : d;
+  let x = num(rec['x'], 0);
+  let y = num(rec['y'], 0);
+  const width = Math.max(80, num(rec['width'], 480));
+  const height = Math.max(40, num(rec['height'], 200));
+  const markdown = typeof rec['markdown'] === 'string' ? rec['markdown'] : '';
+  const regionName = typeof rec['region'] === 'string' ? rec['region'] : '';
+
+  let parentId: string | null = null;
+  if (regionName) {
+    const cur = readSnapshot(deps).scene;
+    const r = regionsOf(cur.elements).find((e) => e.label === regionName);
+    if (!r) {
+      fail(res, 404, `未找到区域：${regionName}`);
+      return;
+    }
+    parentId = r.id;
+    // x/y 视为区域内相对偏移
+    x = r.x + (rec['x'] === undefined ? 20 : x);
+    y = r.y + (rec['y'] === undefined ? 60 : y);
+  }
+
+  const el = createTextElement({
+    x,
+    y,
+    width,
+    height,
+    createdBy: actor,
+    parentId,
+    markdown,
+  });
+
+  deps.room.mutate(actor, (scene) => ({
+    ...scene,
+    elements: [...scene.elements, { ...el, z: nextZ(scene.elements) }],
+  }));
+  await deps.recordChange(actor);
+  // Agent 焦点光标飞到新建元素 —— 标准首行锚点
+  pushAgentPresence(deps, actor, el.id, computeEditAnchor(el));
+  ok(res, { elementId: el.id });
+}
+
+/**
+ * POST /api/elements/text-append —— 给 text 元素的 markdown 追加一段内容
+ * （流式工作流核心）。直接走 Y.Text.insert(length, chunk) —— 字符级 CRDT，
+ * 比整场景 PUT 轻量；不同 Agent / Web 客户端可并发追加，按字符位置合并。
+ *
+ * 请求体：`{ actor, elementId, chunk, lineIndex? }`
+ *  - lineIndex 缺省时按追加后总行数自动算（最末行 - 1）；Agent 知道精确行号
+ *    可直接传，浏览器据此把焦点光标钉到对应位置 + jitter。
+ */
+async function handleTextAppend(
+  deps: HttpDeps,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch (err) {
+    fail(res, 400, errMsg(err));
+    return;
+  }
+  if (typeof body !== 'object' || body === null) {
+    fail(res, 400, '请求体必须为 JSON 对象');
+    return;
+  }
+  const rec = body as Record<string, unknown>;
+  const actor = typeof rec['actor'] === 'string' ? rec['actor'] : 'u_local';
+  const elementId =
+    typeof rec['elementId'] === 'string' ? rec['elementId'] : '';
+  const chunk = typeof rec['chunk'] === 'string' ? rec['chunk'] : '';
+  if (!elementId) {
+    fail(res, 400, '缺少 elementId');
+    return;
+  }
+  if (chunk === '') {
+    // 空 chunk 是 no-op；不推 presence 也不写盘
+    ok(res, { ok: true, length: 0 });
+    return;
+  }
+
+  const doc = deps.room.doc;
+  const els = doc.getMap('elements') as Y.Map<Y.Map<unknown>>;
+  const elMap = els.get(elementId);
+  if (!elMap) {
+    fail(res, 404, `元素不存在: ${elementId}`);
+    return;
+  }
+  const elType = elMap.get('type');
+  if (elType !== 'text') {
+    fail(res, 400, `元素 ${elementId} 不是 text 类型（实际：${String(elType)}）`);
+    return;
+  }
+  const md = elMap.get('markdown');
+  if (!(md instanceof Y.Text)) {
+    fail(res, 500, `元素 ${elementId} 的 markdown 字段不是 Y.Text`);
+    return;
+  }
+  doc.transact(() => {
+    md.insert(md.length, chunk);
+    elMap.set('updatedBy', actor);
+    elMap.set('updatedAt', new Date().toISOString());
+  }, actor);
+
+  // 推 Agent 焦点光标 —— lineIndex 缺省时取追加后总行数 - 1
+  const totalLines = md.toString().split('\n').length;
+  const explicitLine = typeof rec['lineIndex'] === 'number' ? rec['lineIndex'] : undefined;
+  const lineIndex = explicitLine ?? Math.max(0, totalLines - 1);
+  const scene = deps.room.getScene();
+  const el = scene.elements.find((e) => e.id === elementId);
+  if (el) {
+    pushAgentPresence(deps, actor, elementId, computeEditAnchor(el, { lineIndex }));
+  }
+
+  await deps.recordChange(actor);
+  ok(res, { ok: true, length: md.length, lineIndex });
+}
+
+/**
  * POST /api/presence —— 上报在场光标 / 显式离开（M4：拟人化光标，PRD §8.2）。
  *
  * 请求体 `{ clientId, name?, color?, cursor?, leaving? }`：
@@ -1898,6 +2049,16 @@ async function route(
   // POST /api/elements/delete —— 删除元素（含 file 移入回收站、连带清引用）
   if (path === '/api/elements/delete' && method === 'POST') {
     await handleDeleteElement(deps, req, res);
+    return;
+  }
+  // POST /api/elements/text-create —— 创建空 text 元素（流式工作流起手）
+  if (path === '/api/elements/text-create' && method === 'POST') {
+    await handleTextCreate(deps, req, res);
+    return;
+  }
+  // POST /api/elements/text-append —— 给 text 元素流式追加 markdown（Y.Text.insert）
+  if (path === '/api/elements/text-append' && method === 'POST') {
+    await handleTextAppend(deps, req, res);
     return;
   }
   // POST /api/regions/reparent —— 区域移入 / 移出区域（子区域嵌套）

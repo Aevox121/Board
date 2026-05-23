@@ -47,8 +47,8 @@ describe('computeEditAnchor', () => {
       editMode: 'preview',
     }) as TextElement;
     const a = computeEditAnchor(el);
-    // header(24) + body padding-top(8) + lineHeight/2(10) = 42
-    assert.equal(a.y, 42);
+    // header(0) + body padding-top(8) + lineHeight/2(10) = 18
+    assert.equal(a.y, 18);
     // body padding-left(12) + insetX(16) = 28
     assert.equal(a.x, 28);
   });
@@ -63,8 +63,8 @@ describe('computeEditAnchor', () => {
       editMode: 'preview',
     }) as TextElement;
     const a3 = computeEditAnchor(el, { lineIndex: 3 });
-    // 42 + 3 * 20 = 102
-    assert.equal(a3.y, 102);
+    // 18 + 3 * 20 = 78
+    assert.equal(a3.y, 78);
   });
 
   it('text: charIndex 按 8px 步进 x', () => {

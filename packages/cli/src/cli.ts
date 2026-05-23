@@ -39,6 +39,7 @@ import { cmdStyle } from './commands/style.js';
 import { runMcpServer } from './commands/mcp.js';
 import { cmdRestore, cmdSnapshot } from './commands/snapshot.js';
 import { cmdShare } from './commands/share.js';
+import { cmdText } from './commands/text.js';
 import { runWatch } from './commands/watch.js';
 
 /** 命令处理函数签名。 */
@@ -65,6 +66,7 @@ const HANDLERS: Record<string, Handler> = {
   snapshot: cmdSnapshot,
   restore: cmdRestore,
   share: cmdShare,
+  text: cmdText,
 };
 
 /** 已登记但尚未实现的命令（规格 §2，逐里程碑补全）。 */
@@ -134,6 +136,8 @@ function printHelp(): void {
   console.log('  snapshot rm <snapshotId>                     删除存档点');
   console.log('  restore <snapshotId>                         复原到指定存档点');
   console.log('  share <路径> [--host <host>] [--port <port>] 生成可分享的白板链接（PRD §4.2）');
+  console.log('  text create [--region <名>] [--at x,y] [--size w,h] [--markdown "<初始>"]  开空文本卡（流式起手）');
+  console.log('  text append <elementId> "<chunk>" [--line N]  追加 markdown（字符级 CRDT，浏览器看到打字 + Agent 光标）');
   console.log('');
   console.log('占位命令 (尚未实现):');
   console.log('  ' + PLACEHOLDER_COMMANDS.join(', '));
