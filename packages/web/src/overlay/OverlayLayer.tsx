@@ -725,38 +725,72 @@ function connectorAnchors(
 }
 
 /**
- * 找出与拖拽中的文件卡重叠面积最大的区域；与任何区域都不重叠则返回 null
- * （落入收件区）。
+ * 找出与拖拽中的卡片重叠的区域；不重叠任何区域返回 null（落入收件区）。
  *
- * 按重叠面积判定而非卡片中心点 —— 中心点可能恰好落在两个相邻区域之间的
- * 间隙里，使卡片明明压在区域上却被误判为收件区、文件被弹到空白画布。
+ *  - 选区按面积判定而非卡片中心点 —— 中心点可能恰好落在两个相邻区域之间的
+ *    间隙里，使卡片明明压在区域上却被误判为收件区、被弹到空白画布。
+ *  - 嵌套区域里取「最内层」 —— 若候选 R 是另一候选 R' 的祖先（R'.path 以
+ *    R.path + '/' 开头），剔除 R。否则当卡片大于内层区域、超出内层边界
+ *    溢出到外层空白时，外层面积更大反胜出，违反「拖到子区域里就归属
+ *    子区域」的直觉。
  */
 function regionForCard(
   card: RectLike,
   regions: RegionElement[],
 ): RegionElement | null {
-  let best: RegionElement | null = null;
-  let bestArea = 0;
-  let bestDepth = -1;
+  const candidates: { region: RegionElement; area: number }[] = [];
   for (const r of regions) {
     const area = intersectionArea(card, r);
-    if (area <= 0) continue;
-    // 路径层级深度 —— 嵌套区域里取最内层（路径段更多者）。
-    const depth = r.path.split('/').length;
-    // 面积更大者胜；面积相当（卡片同时落在嵌套内外区域）时取更深的内层
-    // 区域；再相同取 z 更高者。
+    if (area > 0) candidates.push({ region: r, area });
+  }
+  if (candidates.length === 0) return null;
+  const innermost = candidates.filter(
+    ({ region: a }) =>
+      !candidates.some(
+        ({ region: b }) =>
+          b.id !== a.id && b.path.startsWith(`${a.path}/`),
+      ),
+  );
+  let best: { region: RegionElement; area: number } | null = null;
+  for (const c of innermost) {
+    if (!best) {
+      best = c;
+      continue;
+    }
+    const cd = c.region.path.split('/').length;
+    const bd = best.region.path.split('/').length;
+    // 面积更大者胜；面积相当时按路径深度 / z 解决。
     if (
-      area > bestArea + 0.5 ||
-      (Math.abs(area - bestArea) <= 0.5 &&
-        (depth > bestDepth ||
-          (depth === bestDepth && best !== null && r.z > best.z)))
+      c.area > best.area + 0.5 ||
+      (Math.abs(c.area - best.area) <= 0.5 &&
+        (cd > bd || (cd === bd && c.region.z > best.region.z)))
     ) {
-      best = r;
-      bestArea = area;
-      bestDepth = depth;
+      best = c;
     }
   }
-  return best;
+  return best ? best.region : null;
+}
+
+/**
+ * 区域自身 + 其全部递归后代（按 parentId 链可达者）的 id 集合。区域整体
+ * 平移时一并随之移动，避免「拖父区域时孙辈被甩在原地」。
+ */
+function collectRegionSubtree(
+  elements: readonly Element[],
+  rootId: string,
+): Set<string> {
+  const ids = new Set<string>([rootId]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const e of elements) {
+      if (!ids.has(e.id) && e.parentId && ids.has(e.parentId)) {
+        ids.add(e.id);
+        grew = true;
+      }
+    }
+  }
+  return ids;
 }
 
 /** 按手柄方向与指针位移算出缩放后的矩形（含最小尺寸 / 内容边界 clamp）。 */
@@ -2539,11 +2573,9 @@ export function OverlayLayer({
       }
       window.alert('未连接 board-server，区域归属未更新（仅本地平移）。');
     }
-    // 归属不变（或离线）—— 区域 + 直接子元素整体平移。
-    const ids = new Set<string>([region.id]);
-    for (const e of curScene.elements) {
-      if (e.parentId === region.id) ids.add(e.id);
-    }
+    // 归属不变（或离线）—— 区域 + 全部递归后代整体平移（含嵌套子区域
+    // 及其内容；只收集直接子元素会把孙辈甩在原地）。
+    const ids = collectRegionSubtree(curScene.elements, region.id);
     replaceScene(moveElementsBy(curScene, ids, d.offsetX, d.offsetY), 'canvas');
   }
 
@@ -3135,8 +3167,9 @@ export function OverlayLayer({
     for (const id of [...members]) {
       const m = cur.elements.find((x) => x.id === id);
       if (m?.type === 'region') {
-        for (const c of cur.elements) {
-          if (c.parentId === id) members.add(c.id);
+        // 全部递归后代：嵌套子区域及其内容也要一起跟着父区域走。
+        for (const did of collectRegionSubtree(cur.elements, id)) {
+          members.add(did);
         }
       }
     }
@@ -3269,8 +3302,8 @@ export function OverlayLayer({
     for (const id of [...members]) {
       const m = cur.elements.find((x) => x.id === id);
       if (m?.type === 'region') {
-        for (const c of cur.elements) {
-          if (c.parentId === id) members.add(c.id);
+        for (const did of collectRegionSubtree(cur.elements, id)) {
+          members.add(did);
         }
       }
     }
