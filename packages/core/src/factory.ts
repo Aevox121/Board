@@ -140,7 +140,13 @@ export function createTextElement(
 
 /** 创建区域元素。 */
 export function createRegionElement(
-  init: BaseElementInit & { path: string; label: string; description?: string },
+  init: BaseElementInit & {
+    path: string;
+    label: string;
+    description?: string;
+    /** 软归属人；不传默认归属于 createdBy（PRD §8.3）。 */
+    ownerId?: ParticipantId | null;
+  },
 ): RegionElement {
   return {
     ...baseElement('region', init),
@@ -150,7 +156,7 @@ export function createRegionElement(
     description: init.description ?? '',
     autoFile: true,
     assignedAgentId: null,
-    ownerId: null,
+    ownerId: init.ownerId === undefined ? init.createdBy : init.ownerId,
     collapsed: false,
   };
 }

@@ -474,6 +474,18 @@
   cursor: grab;
 }
 
+/* 区域头部首行：label + 归属徽标 */
+.ov-region__head-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.ov-region__head-row > .ov-region__label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 /* 区域正被拖拽 / 缩放时的光标态 */
 .ov-region--active .ov-region__head {
   cursor: grabbing;

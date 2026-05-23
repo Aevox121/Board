@@ -1036,7 +1036,8 @@ export function OverlayLayer({
   onActiveToolChange,
 }: OverlayLayerProps): JSX.Element {
   const { scrollX, scrollY, zoom } = viewport;
-  const { actorId, connection, serverFiles, tasks, replaceScene } = useBoard();
+  const { actorId, connection, serverFiles, tasks, replaceScene, meta } = useBoard();
+  const participants = meta.participants;
 
   // 连线模式：选中箭头 / 线条工具时为 true —— 卡片停止截获指针（好让箭头能
   // 从任意元素上画起 / 画到），并对可连接元素显示高亮。
@@ -3082,6 +3083,24 @@ export function OverlayLayer({
   }
 
   /**
+   * 区域软归属转让（PRD §8.3）—— 改 `region.ownerId`。
+   * null = 设为公共区域；其它 = 转让给该参与者。
+   */
+  function changeRegionOwner(id: string, nextOwnerId: string | null): void {
+    const cur = sceneRef.current;
+    const ts = new Date().toISOString();
+    const next: BoardScene = {
+      ...cur,
+      elements: cur.elements.map((e): Element =>
+        e.id === id && e.type === 'region'
+          ? ({ ...e, ownerId: nextOwnerId, updatedBy: actorId, updatedAt: ts } as Element)
+          : e,
+      ),
+    };
+    replaceScene(next, 'canvas');
+  }
+
+  /**
    * 图形标签就地编辑提交 —— 写回 `shape.label`；文本去空后为空则置 label
    * 为 null（无标签），否则保留原 label 的其它字段（如 fontSize）。
    */
@@ -4372,6 +4391,9 @@ export function OverlayLayer({
                   highlighted={el.id === dropRegionId}
                   active={regionActive}
                   headerHandlers={headerHandlers}
+                  actorId={actorId}
+                  participants={participants}
+                  onChangeOwner={(next) => changeRegionOwner(el.id, next)}
                 />
               ) : el.type === 'folder' ? (
                 <FolderCard element={el} />

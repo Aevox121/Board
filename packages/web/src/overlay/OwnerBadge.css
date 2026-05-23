@@ -1,0 +1,113 @@
+/**
+ * 区域归属徽标样式 —— PRD §8.3 软归属。
+ * 与 tokens.css 对齐：陶土橙 + 余暖灰；圆角 chip + 浮起菜单。
+ */
+
+.ov-owner-badge-root {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.ov-owner-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 1px 6px 1px 5px;
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  line-height: 1.2;
+  color: var(--c-ink-2);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.ov-owner-badge:hover:not(:disabled) {
+  background: var(--c-surface-sunken);
+  border-color: var(--c-border-strong);
+}
+.ov-owner-badge:disabled,
+.ov-owner-badge--readonly {
+  cursor: default;
+}
+.ov-owner-badge--readonly:hover {
+  background: var(--c-surface);
+  border-color: var(--c-border);
+}
+
+/* 「我的区域」实色突出 */
+.ov-owner-badge--mine {
+  color: var(--c-ink);
+  border-color: var(--c-accent);
+  background: var(--c-accent-tint);
+}
+
+.ov-owner-badge__dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.ov-owner-badge__text {
+  font-weight: 500;
+}
+
+/* ── 转让菜单 ─────────────────────────────────────────── */
+
+.ov-owner-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  min-width: 144px;
+  padding: var(--space-1);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  /* 防止区域头部 cursor:grab 渗透到菜单 */
+  cursor: default;
+}
+
+.ov-owner-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 8px;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--c-ink);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+}
+.ov-owner-menu__item:hover {
+  background: var(--c-surface-sunken);
+}
+.ov-owner-menu__item--mute {
+  color: var(--c-ink-2);
+}
+
+.ov-owner-menu__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  flex: 0 0 auto;
+}
+.ov-owner-menu__dot--empty {
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--c-border-strong);
+}

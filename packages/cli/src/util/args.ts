@@ -90,6 +90,7 @@ export const GLOBAL_VALUE_KEYS: ReadonlySet<string> = new Set([
   'parent',
   'size',
   'agent',
+  'owner',
   'title',
   'step',
   'percent',

@@ -100,6 +100,16 @@ async function regionCreate(args: ParsedArgs): Promise<CmdResult> {
   const x = existing.length * (size.width + REGION_GAP);
   const y = INBOX_RECT.y + INBOX_RECT.height + REGION_GAP;
   const actor = args.options.get('actor') ?? DEFAULT_ACTOR;
+  // 软归属（PRD §8.3）—— `--owner me` / `<id>` / `none`，默认归属创建者。
+  const ownerRaw = args.options.get('owner');
+  const ownerId =
+    ownerRaw === undefined
+      ? actor
+      : ownerRaw === 'me'
+        ? actor
+        : ownerRaw === 'none' || ownerRaw === ''
+          ? null
+          : ownerRaw;
 
   const element = createRegionElement({
     x,
@@ -112,6 +122,7 @@ async function regionCreate(args: ParsedArgs): Promise<CmdResult> {
     path: regionName,
     label: regionName,
     description,
+    ownerId,
   });
 
   scene.elements.push(element);
@@ -142,11 +153,15 @@ async function regionLs(args: ParsedArgs): Promise<CmdResult> {
   const handle = await loadBoard(dir);
   const regions = regionsOf(handle.scene.elements);
 
+  // 归属显示：优先取 participants 里的 name，找不到就回退到 id；无归属 = `（公共）`。
+  const partMap = new Map(handle.meta.participants.map((p) => [p.id, p.name]));
   const list = regions.map((r) => ({
     elementId: r.id,
     label: r.label,
     description: r.description,
     path: `files/${r.path}/`,
+    ownerId: r.ownerId,
+    ownerName: r.ownerId ? partMap.get(r.ownerId) ?? r.ownerId : null,
   }));
 
   const text =
@@ -155,11 +170,72 @@ async function regionLs(args: ParsedArgs): Promise<CmdResult> {
       : list
           .map((r) => {
             const desc = r.description.trim() === '' ? '（无描述）' : r.description;
-            return `${r.label}\n  描述: ${desc}\n  路径: ${r.path}`;
+            const owner = r.ownerName ?? '（公共）';
+            return `${r.label}\n  描述: ${desc}\n  归属: ${owner}\n  路径: ${r.path}`;
           })
           .join('\n');
 
   return { code: EXIT.OK, text, data: { regions: list } };
+}
+
+/**
+ * `board region own <白板路径> <区域名> --owner <id|me|none>`
+ *
+ * 改区域软归属（PRD §8.3）。`me` = 当前 actor，`none` = 取消归属（公共），
+ * 其它 = 指定 participant id。仅改 `ownerId` 字段，不动其他属性。
+ */
+async function regionOwn(args: ParsedArgs): Promise<CmdResult> {
+  const boardPath = args.positionals[0];
+  const regionName = args.positionals[1];
+  if (boardPath === undefined || regionName === undefined) {
+    throw new CliError(
+      '用法: board region own <白板路径> <区域名> --owner <id|me|none>',
+      EXIT.USAGE,
+    );
+  }
+  const ownerRaw = args.options.get('owner');
+  if (ownerRaw === undefined) {
+    throw new CliError(
+      '缺少 --owner。用法: board region own <白板路径> <区域名> --owner <id|me|none>',
+      EXIT.USAGE,
+    );
+  }
+
+  const dir = resolveBoardDir(boardPath, args.options.get('board'));
+  const handle = await loadBoard(dir);
+  const region = regionsOf(handle.scene.elements).find(
+    (r) => r.label === regionName || r.path === regionName,
+  );
+  if (!region) {
+    throw new CliError(`未找到区域：${regionName}`, EXIT.NOT_FOUND);
+  }
+
+  const actor = args.options.get('actor') ?? DEFAULT_ACTOR;
+  const nextOwnerId =
+    ownerRaw === 'me'
+      ? actor
+      : ownerRaw === 'none' || ownerRaw === ''
+        ? null
+        : ownerRaw;
+
+  const ts = new Date().toISOString();
+  const next = handle.scene.elements.map((e) =>
+    e.id === region.id && e.type === 'region'
+      ? { ...e, ownerId: nextOwnerId, updatedBy: actor, updatedAt: ts }
+      : e,
+  );
+  await saveBoard(dir, handle.meta, { ...handle.scene, elements: next });
+
+  const ownerLabel =
+    nextOwnerId === null
+      ? '公共'
+      : handle.meta.participants.find((p) => p.id === nextOwnerId)?.name ??
+        nextOwnerId;
+  return {
+    code: EXIT.OK,
+    text: `已将区域「${region.label}」归属设为：${ownerLabel}`,
+    data: { elementId: region.id, label: region.label, ownerId: nextOwnerId },
+  };
 }
 
 /**
@@ -288,9 +364,11 @@ export async function cmdRegion(args: ParsedArgs): Promise<CmdResult> {
       return regionDescribe(subArgs);
     case 'assign':
       return regionAssign(subArgs);
+    case 'own':
+      return regionOwn(subArgs);
     default:
       throw new CliError(
-        `未知子命令 "region ${sub}"。可用: create, ls, describe, assign`,
+        `未知子命令 "region ${sub}"。可用: create, ls, describe, assign, own`,
         EXIT.USAGE,
       );
   }
