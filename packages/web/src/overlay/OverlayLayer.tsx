@@ -78,6 +78,7 @@ import {
   type RectLike,
 } from './util';
 import { computeSnap, snapResize, type SnapGuide } from './snap';
+import { CommentPopover } from './CommentPopover';
 import './overlay.css';
 
 /** 视口状态 —— 与 canvas/viewport.ts 的 CanvasViewport 同构。 */
@@ -1196,6 +1197,11 @@ export function OverlayLayer({
   );
   // 左键空白处框选的虚线框（画布坐标矩形）；null = 未在框选。
   const [selectMarquee, setSelectMarquee] = useState<RectLike | null>(null);
+  // 评论浮窗（PRD §8.4）—— 点击评论角标打开，记录目标元素 id + 角标屏幕坐标。
+  const [commentOpen, setCommentOpen] = useState<{
+    elementId: string;
+    anchor: { x: number; y: number };
+  } | null>(null);
   // 右键上下文菜单（屏幕坐标 + 作用域）；null = 未显示。
   const [menu, setMenu] = useState<{
     x: number;
@@ -4835,17 +4841,38 @@ export function OverlayLayer({
                   🔒
                 </div>
               ) : null}
-              {/* 评论角标（PRD §8.4）—— 元素有评论时显示条数 */}
-              {(el.comments?.length ?? 0) > 0 ? (
-                <div
-                  className="ov-comment-badge"
-                  title={(el.comments ?? [])
-                    .map((c) => `${c.by}: ${c.text}`)
-                    .join('\n')}
-                >
-                  💬 {el.comments?.length}
-                </div>
-              ) : null}
+              {/* 评论角标（PRD §8.4）—— 元素有评论时显示条数；点击展开浮窗 */}
+              {(el.comments?.length ?? 0) > 0
+                ? (() => {
+                    const all = el.comments ?? [];
+                    const unresolved = all.filter((c) => !c.resolved).length;
+                    return (
+                      <button
+                        type="button"
+                        className={
+                          'ov-comment-badge' +
+                          (unresolved === 0 ? ' ov-comment-badge--all-resolved' : '')
+                        }
+                        title={
+                          unresolved > 0
+                            ? `${unresolved} 条未解决 / 共 ${all.length} 条 —— 点击查看`
+                            : `共 ${all.length} 条（已全部解决）—— 点击查看`
+                        }
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                          setCommentOpen({
+                            elementId: el.id,
+                            anchor: { x: r.right, y: r.bottom },
+                          });
+                        }}
+                      >
+                        💬 {unresolved > 0 ? unresolved : all.length}
+                      </button>
+                    );
+                  })()
+                : null}
             </div>
           );
         })}
@@ -5205,6 +5232,34 @@ export function OverlayLayer({
           onCancel={() => setRegionDeleteConfirm(null)}
         />
       ) : null}
+      {/* 评论浮窗（PRD §8.4）—— 点击元素的评论角标打开 */}
+      {commentOpen
+        ? (() => {
+            const target = sceneRef.current.elements.find(
+              (e) => e.id === commentOpen.elementId,
+            );
+            if (!target) return null;
+            return (
+              <CommentPopover
+                comments={target.comments ?? []}
+                participants={participants}
+                actorId={actorId}
+                anchorScreen={commentOpen.anchor}
+                onClose={() => setCommentOpen(null)}
+                onPatchComments={(next) => {
+                  const cur = sceneRef.current;
+                  const ts = new Date().toISOString();
+                  const updated = cur.elements.map((e) =>
+                    e.id === commentOpen.elementId
+                      ? { ...e, comments: next, updatedBy: actorId, updatedAt: ts }
+                      : e,
+                  );
+                  replaceScene({ ...cur, elements: updated }, 'canvas');
+                }}
+              />
+            );
+          })()
+        : null}
     </div>
   );
 }

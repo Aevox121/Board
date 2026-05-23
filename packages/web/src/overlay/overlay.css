@@ -204,7 +204,16 @@
   box-shadow: var(--shadow-sm);
   pointer-events: auto;
   white-space: nowrap;
-  cursor: help;
+  cursor: pointer;
+  /* 评论角标变可点击按钮（PRD §8.4） */
+}
+.ov-comment-badge:hover {
+  background: var(--c-surface-2, #f4efe6);
+  color: var(--c-ink, #3a342c);
+}
+.ov-comment-badge--all-resolved {
+  /* 全部已解决 —— 角标灰显，不再吸引注意 */
+  opacity: 0.55;
 }
 
 /* 锁定角标 —— 贴在元素左上角的小锁，标示该元素已锁定。 */

@@ -120,6 +120,11 @@ export interface ElementComment {
   by: ParticipantId;
   text: string;
   ts: ISO8601;
+  /**
+   * PRD §8.4：是否已解决（resolved）。已解决的评论 UI 灰显 / 默认折叠，
+   * 不再加入未读数；可重开。缺省 = false（未解决，与历史评论一致）。
+   */
+  resolved?: boolean;
 }
 
 /** 所有元素共享的通用字段。 */
