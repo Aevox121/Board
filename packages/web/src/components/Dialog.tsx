@@ -19,6 +19,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from 'react';
+import { createPortal } from 'react-dom';
 import './Dialog.css';
 
 export interface DialogAction {
@@ -72,7 +73,9 @@ export function Dialog({
     }
   };
 
-  return (
+  // 用 portal 渲到 document.body —— 避免 .ov-root（z-index:3）和工具栏 /
+  // 底栏 / 小地图（z-index>=6）的 stacking context 把弹窗罩住、按钮点不到。
+  return createPortal(
     <div
       className="bd-dialog__backdrop"
       onPointerDown={() => {
@@ -123,7 +126,8 @@ export function Dialog({
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

@@ -2296,7 +2296,18 @@ export function OverlayLayer({
       clearSelection();
       return;
     }
-    if (el.type === 'region' || el.type === 'folder') return;
+    // 文件夹背后是真实文件夹，画布层不删（只能经文件管理 / fs 手段删除）。
+    if (el.type === 'folder') return;
+    // 区域走二次确认弹窗 —— 与 Delete 键路径一致：连同区域子内容一起删，
+    // 区域文件夹移入回收站。橡皮擦点中区域也走这条路。
+    if (el.type === 'region') {
+      if (connection !== 'connected') {
+        toast.warn('未连接 board-server，无法删除区域。');
+        return;
+      }
+      setRegionDeleteConfirm({ regions: [el], others: [] });
+      return;
+    }
     clearSelection();
 
     if (el.type === 'file') {

@@ -8,6 +8,7 @@
  * 提交即 patch 元素 label + description；不重命名文件夹（仅 label 变）。
  */
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 export interface RegionCreateDialogProps {
   /** 弹窗中心的屏幕坐标（区域矩形中心换算所得）。 */
@@ -53,7 +54,9 @@ export function RegionCreateDialog({
     onSubmit(n, desc.trim());
   };
 
-  return (
+  // Portal 到 document.body —— 与 Dialog 一致，避免 .ov-root（z-index:3）
+  // 与工具栏 / 底栏 / 小地图（z-index>=6）的 stacking context 罩住弹窗。
+  return createPortal(
     <>
       <div className="ov-region-dialog__backdrop" onPointerDown={onCancel} />
       <div
@@ -124,6 +127,7 @@ export function RegionCreateDialog({
           </button>
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   );
 }
