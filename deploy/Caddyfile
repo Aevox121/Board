@@ -1,0 +1,29 @@
+# Board 中继服务器 Caddy 配置 —— PRD §4.2
+#
+# Caddy 自动从 Let's Encrypt 取 HTTPS 证书；反向代理 /api 与 /yjs 到
+# board-server:4500（含自动识别 ws Upgrade 头），其余路径作为静态站点
+# serve `packages/web/dist`（在 docker-compose.yml 里映射成 /srv/board-web）。
+#
+# 把下面的域名换成你自己的，重启 caddy 即可。
+
+board.example.com {
+    encode gzip
+
+    # HTTP API
+    handle /api/* {
+        reverse_proxy board-server:4500
+    }
+
+    # Yjs ws —— Caddy v2 的 reverse_proxy 自动认 Upgrade 头，
+    # 不需要单独 transport 配置
+    handle /yjs/* {
+        reverse_proxy board-server:4500
+    }
+
+    # web 静态资源（SPA）—— 命中文件返回文件，其余返回 index.html
+    handle {
+        root * /srv/board-web
+        try_files {path} /index.html
+        file_server
+    }
+}

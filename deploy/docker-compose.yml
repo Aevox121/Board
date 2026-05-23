@@ -1,0 +1,51 @@
+# Board 中继服务器部署 —— PRD §4.2
+#
+# 起两个容器：
+#  - board-server : Node 容器，多 board 模式 + token 鉴权
+#  - caddy        : 自动 HTTPS + 反向代理 HTTP/ws 到 board-server
+#
+# 调整 ① ./boards 卷映射指向你真实的 .board 目录
+#      ② Caddyfile 里的域名换成你自己的
+#      ③ command 中按需追加更多 .board 路径
+
+version: '3.9'
+
+services:
+  board-server:
+    image: node:20-alpine
+    container_name: board-server
+    working_dir: /app
+    volumes:
+      - ../:/app:ro          # 直接挂载源码（生产建议改用 build context + dist 镜像）
+      - ./boards:/boards     # 宿主机上的 boards 目录（含 .board 文件夹）
+    environment:
+      BOARD_HOST: 0.0.0.0
+      BOARD_PORT: '4500'
+      BOARD_REQUIRE_TOKEN: 'true'
+    # 多 board：每个 .board 路径作为一个位置参数
+    command: >
+      node /app/packages/server/dist/index.js
+      /boards/旅行计划.board
+      /boards/菜谱.board
+    expose:
+      - '4500'
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: board-caddy
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../packages/web/dist:/srv/board-web:ro   # 静态托管 web 资源
+      - caddy_data:/data
+      - caddy_config:/config
+    ports:
+      - '80:80'
+      - '443:443'
+    depends_on:
+      - board-server
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

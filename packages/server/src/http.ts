@@ -1641,13 +1641,23 @@ function errMsg(err: unknown): string {
 export type DepsResolver = (boardId: string | null) => HttpDeps | null;
 
 /**
+ * 鉴权回调 —— 给定 deps 和 URL，返回是否允许；返 false 时 server 回 401。
+ *
+ * 由 index.ts 注入，根据 `BOARD_REQUIRE_TOKEN` 环境变量决定策略：
+ *  - 未开（默认）：始终返 true（本地 dev / 单 board 顺手）
+ *  - 开了：必须 `?token=<shareToken>` 或 `Authorization: Bearer <shareToken>`，
+ *    与 board 的 meta.shareToken 严格相等才放行
+ */
+export type AuthChecker = (deps: HttpDeps, url: URL, req: IncomingMessage) => boolean;
+
+/**
  * 创建 HTTP server（未 listen）。host 固定 127.0.0.1。
  *
  * 多 board 路由：路径 `/api/boards/<id>/<rest>` 剥前缀后由 `getDeps(id)`
  * 解析；无前缀的 `/api/<rest>` 由 `getDeps(null)` 解析（默认 board，
  * 用于单 board 部署与既有客户端的向后兼容）。
  */
-export function createHttpServer(getDeps: DepsResolver): Server {
+export function createHttpServer(getDeps: DepsResolver, checkAuth?: AuthChecker): Server {
   const server = createServer((req, res) => {
     // 顶层 try：URL 解析 / decodeURIComponent 在非法序列上会抛同步错误，
     // 不能让单次坏请求崩掉整个进程。任何异常都转成 400，不让冒到 server.
@@ -1678,6 +1688,12 @@ export function createHttpServer(getDeps: DepsResolver): Server {
     const deps = getDeps(boardId);
     if (!deps) {
       fail(res, 404, `未找到白板: ${boardId ?? '(默认)'}`);
+      return;
+    }
+    // 鉴权 —— BOARD_REQUIRE_TOKEN=true 部署时强制；本地 dev 默认放行。
+    // /api/health 例外：开放探活给反向代理 / 部署脚本用。
+    if (checkAuth && url.pathname !== '/api/health' && !checkAuth(deps, url, req)) {
+      fail(res, 401, '需要有效的 token —— 用 ?token=<shareToken> 或 Authorization: Bearer <shareToken>');
       return;
     }
     // 顶层兜底：任何未捕获异常都转成 500，绝不让进程崩溃

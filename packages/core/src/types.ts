@@ -25,6 +25,15 @@ export interface BoardMeta {
   participants: Participant[];
   settings: BoardSettings;
   snapshots: SnapshotIndexEntry[];
+  /**
+   * 分享 token（PRD §4.2 中继服务器，可选）—— 32 字符 hex 随机串。
+   * 当 server 启动时设置 `BOARD_REQUIRE_TOKEN=true`（公网中继部署），
+   * 所有 HTTP / ws 请求都必须带 `?token=<shareToken>` 或
+   * `Authorization: Bearer <shareToken>`。本地 127.0.0.1 默认不强制。
+   *
+   * 老 board 缺该字段时 server 启动期自动补一个并落盘。
+   */
+  shareToken?: string;
 }
 
 export interface BoardSettings {

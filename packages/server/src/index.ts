@@ -13,14 +13,37 @@
  * 通过反向代理 / 显式 `BOARD_HOST` 环境变量改 bind 地址。
  */
 import { basename, resolve } from 'node:path';
+import type { IncomingMessage } from 'node:http';
 import { WebSocketServer } from 'ws';
-import { createHttpServer, HOST as DEFAULT_HOST, type HttpDeps } from './http.js';
+import {
+  createHttpServer,
+  HOST as DEFAULT_HOST,
+  type AuthChecker,
+  type HttpDeps,
+} from './http.js';
 import { createBoardRuntime, type BoardRuntime } from './runtime.js';
 
 /** 默认监听端口，可用 BOARD_PORT 覆盖。 */
 const PORT = Number(process.env.BOARD_PORT ?? 4500);
 /** 默认 bind 地址（PRD §12：127.0.0.1）。中继模式可设为 0.0.0.0。 */
 const HOST = process.env.BOARD_HOST?.trim() || DEFAULT_HOST;
+/**
+ * `BOARD_REQUIRE_TOKEN=true` 时强制 token 鉴权（公网中继部署）。
+ * 默认不强制 —— 本地 dev / 单 board 不必为鉴权操心。
+ */
+const REQUIRE_TOKEN = (process.env.BOARD_REQUIRE_TOKEN ?? '').toLowerCase() === 'true';
+
+/** 从请求里取 token：先看 ?token=，再看 Authorization: Bearer。 */
+function extractToken(url: URL, req: IncomingMessage): string | null {
+  const q = url.searchParams.get('token');
+  if (q && q.trim()) return q.trim();
+  const auth = req.headers['authorization'];
+  if (typeof auth === 'string') {
+    const m = /^Bearer\s+(.+)$/i.exec(auth.trim());
+    if (m) return m[1]!.trim();
+  }
+  return null;
+}
 
 function printUsageAndExit(): never {
   console.error(
@@ -101,12 +124,29 @@ async function main(): Promise<void> {
     return runtimes.get(id)?.deps ?? null;
   };
 
-  const server = createHttpServer(getDeps);
+  /** token 鉴权 —— 仅在 BOARD_REQUIRE_TOKEN=true 时注入到 server。 */
+  const checkAuth: AuthChecker | undefined = REQUIRE_TOKEN
+    ? (deps, url, req) => {
+        const expected = deps.getMeta().shareToken;
+        if (!expected) return true; // 该 board 无 token（极端兜底）—— 放行
+        const token = extractToken(url, req);
+        return token !== null && token === expected;
+      }
+    : undefined;
+
+  const server = createHttpServer(getDeps, checkAuth);
 
   // ws 升级 —— 路径 `/yjs/<id>` 或 `/yjs`（默认 board）。
   const wss = new WebSocketServer({ noServer: true });
   server.on('upgrade', (req, socket, head) => {
-    const rawPath = (req.url ?? '').split('?')[0] ?? '';
+    let url: URL;
+    try {
+      url = new URL(req.url ?? '/', `http://${HOST}`);
+    } catch {
+      socket.destroy();
+      return;
+    }
+    const rawPath = url.pathname;
     let boardId: string | null = null;
     if (rawPath === '/yjs') {
       boardId = null;
@@ -130,6 +170,13 @@ async function main(): Promise<void> {
       socket.destroy();
       return;
     }
+    // ws 鉴权 —— 与 HTTP 同策略：仅 BOARD_REQUIRE_TOKEN=true 时强制
+    if (checkAuth && !checkAuth(rt.deps, url, req)) {
+      // ws 无标准 401 帧；按 RFC 6455 在 upgrade 阶段写 HTTP 401 再断
+      socket.write('HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n');
+      socket.destroy();
+      return;
+    }
     wss.handleUpgrade(req, socket, head, (ws) => {
       rt.room.handleWsConnection(ws);
     });
@@ -144,12 +191,19 @@ async function main(): Promise<void> {
 
   server.listen(PORT, HOST, () => {
     console.log(`[board-server] M4 已启动 http://${HOST}:${PORT}`);
+    console.log(
+      `[board-server] token 鉴权: ${REQUIRE_TOKEN ? '已启用 (BOARD_REQUIRE_TOKEN=true)' : '未启用'}`,
+    );
     console.log(`[board-server] 加载 ${runtimes.size} 个白板（默认: ${defaultBoardId}）：`);
     for (const id of order) {
       const rt = runtimes.get(id)!;
+      const tok = rt.deps.getMeta().shareToken;
       console.log(`  · ${id}  →  ${rt.dir}`);
       console.log(`     HTTP: http://${HOST}:${PORT}/api/boards/${encodeURIComponent(id)}/board`);
       console.log(`     ws:   ws://${HOST}:${PORT}/yjs/${encodeURIComponent(id)}`);
+      if (REQUIRE_TOKEN && tok) {
+        console.log(`     token: ${tok}`);
+      }
     }
     if (runtimes.size === 1) {
       console.log(`[board-server] 单 board 兼容路径仍可用: /api/board · ws:/yjs`);

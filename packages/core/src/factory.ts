@@ -32,7 +32,7 @@ import {
   type EmbedElement,
   type ParticipantId,
 } from './types.js';
-import { newBoardId, newElementId } from './ids.js';
+import { newBoardId, newElementId, newShareToken } from './ids.js';
 import { makeDefaultStyle } from './style.js';
 
 const nowISO = (): string => new Date().toISOString();
@@ -63,6 +63,8 @@ export function createBoardMeta(opts: CreateBoardOptions): BoardMeta {
     participants: opts.participants ?? [],
     settings: { ...DEFAULT_SETTINGS, ...opts.settings },
     snapshots: [],
+    // 默认生成 token；不需要鉴权的部署（本地 dev）忽略它即可。
+    shareToken: newShareToken(),
   };
 }
 

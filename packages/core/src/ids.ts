@@ -27,6 +27,12 @@ export const newSnapshotId = (): string => `snap_${randomHex(4)}`;
 /** Agent 任务 id（Pencil 式过程可视化，PRD §7.4）—— 独立于元素的命名空间。 */
 export const newTaskId = (): string => `task_${randomHex(8)}`;
 
+/**
+ * 白板分享 token（PRD §4.2 中继服务器）—— 32 字符 hex（128 bit 熵）。
+ * 谁有 token 谁就能编辑该白板，没有用户帐号 / RBAC（MVP 软归属语义，PRD §8.3）。
+ */
+export const newShareToken = (): string => randomHex(32);
+
 /** 把名称转为可用于 id 的 slug（保留中文/字母/数字，其余转 `-`）。 */
 export function slug(name: string): string {
   return name

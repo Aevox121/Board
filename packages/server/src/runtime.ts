@@ -15,6 +15,7 @@
  */
 import {
   diffScenes,
+  newShareToken,
   type BoardEventType,
   type BoardMeta,
   type BoardScene,
@@ -67,6 +68,19 @@ export async function createBoardRuntime(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`无法打开白板 ${dir}: ${msg}`);
+  }
+
+  // 老 board 没 shareToken（在该字段引入前创建的）—— 自动补一个并落盘，
+  // 让 BOARD_REQUIRE_TOKEN=true 部署对历史 board 也直接可用。
+  if (!currentMeta.shareToken) {
+    currentMeta = { ...currentMeta, shareToken: newShareToken() };
+    try {
+      await saveBoard(dir, currentMeta, initialScene);
+      console.log(`[board-server:${boardId}] 已补生成 shareToken 并写回 meta.json`);
+    } catch (err) {
+      console.error(`[board-server:${boardId}] 写 shareToken 失败:`, err);
+      // 不阻断启动 —— 内存里的 token 仍可用，下次保存时会顺带落盘
+    }
   }
 
   // Y.Doc 房间 —— 启动期由 board.json 构出运行态权威源，节流投影回 board.json。
