@@ -13,6 +13,8 @@ import './OwnerBadge.css';
 export interface OwnerBadgeProps {
   /** 当前归属参与者；null = 公共区域。 */
   owner: Participant | null;
+  /** 归属人 id（即使 owner 找不到也用得上）。 */
+  ownerId: string | null;
   /** 归属人是否为当前 actor。 */
   isMine: boolean;
   /** 当前操作者 id —— 「设为我的」分支用。 */
@@ -23,14 +25,24 @@ export interface OwnerBadgeProps {
   onChangeOwner?: (nextOwnerId: string | null) => void;
 }
 
-function badgeText(owner: Participant | null, isMine: boolean): string {
-  if (!owner) return '公共区域';
+/**
+ * 优先级：ownerId 缺失 → 公共；ownerId == actor → 我的；其它 → xxx 的。
+ * 当 owner 找不到（participants 列表里没该 id）时，回退用 id 显示，
+ * 不静默退化成「公共」—— 后者会误导。
+ */
+function badgeText(
+  owner: Participant | null,
+  ownerId: string | null,
+  isMine: boolean,
+): string {
+  if (ownerId === null) return '公共区域';
   if (isMine) return '我的区域';
-  return `${owner.name} 的区域`;
+  return owner ? `${owner.name} 的区域` : `${ownerId} 的区域`;
 }
 
 export function OwnerBadge({
   owner,
+  ownerId,
   isMine,
   actorId,
   participants,
@@ -73,7 +85,7 @@ export function OwnerBadge({
       <button
         type="button"
         className={chipClass}
-        title={readonly ? badgeText(owner, isMine) : '点击转让归属'}
+        title={readonly ? badgeText(owner, ownerId, isMine) : '点击转让归属'}
         disabled={readonly}
         onPointerDown={(e) => {
           // 阻止冒泡到区域头部拖拽手柄，避免点击触发区域拖拽。
@@ -89,7 +101,7 @@ export function OwnerBadge({
           style={{ background: chipColor }}
           aria-hidden="true"
         />
-        <span className="ov-owner-badge__text">{badgeText(owner, isMine)}</span>
+        <span className="ov-owner-badge__text">{badgeText(owner, ownerId, isMine)}</span>
       </button>
       {open && !readonly && (
         <div

@@ -90,6 +90,7 @@ export function RegionCard({
           <span className="ov-region__label">{label || '未命名区域'}</span>
           <OwnerBadge
             owner={owner}
+            ownerId={ownerId}
             isMine={isMine}
             actorId={actorId}
             participants={participants}
