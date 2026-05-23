@@ -352,3 +352,29 @@ export async function describeSuggestion(
 ): Promise<void> {
   await postSuggestionOp('describe', { suggestionId, text });
 }
+
+/**
+ * 上传任意文件到 .board/files/（POST /api/files/upload?path=…）。
+ *
+ * @param targetPath 文件在 files/ 下的目标相对路径（含文件名，用 `/` 分隔）。
+ * @param blob       文件二进制内容（File / Blob）。
+ * @returns 服务端返回的实际路径 + 字节数。
+ * @throws ServerError —— 服务不可达 / 路径非法 / 已存在 / 写盘失败。
+ */
+export async function uploadFile(
+  targetPath: string,
+  blob: Blob,
+): Promise<{ path: string; size: number }> {
+  const qs = `?path=${encodeURIComponent(targetPath)}`;
+  const res = await fetchWithTimeout(`/files/upload${qs}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': blob.type || 'application/octet-stream',
+    },
+    body: blob,
+  });
+  return readEnvelope<{ path: string; size: number }>(
+    res,
+    'POST /api/files/upload',
+  );
+}

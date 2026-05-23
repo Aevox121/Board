@@ -427,6 +427,81 @@ async function handleUploadAsset(
 }
 
 /**
+ * POST /api/files/upload?path=<相对路径> —— 把请求体字节写入 files/<path>。
+ *
+ * 请求体：原始字节；Content-Type 任意（仅用于回显，不参与决策）。
+ * `?path=` 是 files/ 下的目标相对路径（含文件名），用 `/` 分隔；server 防
+ * 目录穿越（resolve 后必须仍在 files/ 内、不允许覆盖既有同名文件）。
+ *
+ * 落盘后立即跑一次 reconcile：watcher 同步路径的同时也会经 reconcile 在
+ * scene 里建出 file 元素（含 region 归属自动判定）。
+ */
+async function handleFileUpload(
+  deps: HttpDeps,
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+): Promise<void> {
+  const targetRaw = url.searchParams.get('path')?.trim() ?? '';
+  if (!targetRaw) {
+    fail(res, 400, '缺少 ?path=<files/ 下的相对路径>');
+    return;
+  }
+  // 规范化 + 拒绝穿越。
+  const target = targetRaw.replace(/\\/g, '/').replace(/^\/+/, '');
+  if (
+    target === '' ||
+    target.endsWith('/') ||
+    target.split('/').some((seg) => seg === '..' || seg === '.' || seg === '')
+  ) {
+    fail(res, 400, `非法 path: ${targetRaw}`);
+    return;
+  }
+  const filesRoot = resolve(deps.dir, 'files');
+  const full = resolve(filesRoot, target);
+  if (full !== filesRoot && !full.startsWith(filesRoot + sep)) {
+    fail(res, 400, 'path 越出 files/');
+    return;
+  }
+  // 不允许覆盖既有文件（避免静默丢失 / 引用元素错位）。
+  try {
+    await stat(full);
+    fail(res, 409, `目标已存在: ${target}`);
+    return;
+  } catch {
+    // ENOENT —— 正常路径，继续。
+  }
+
+  let buf: Buffer;
+  try {
+    buf = await readBinaryBody(req);
+  } catch (err) {
+    fail(res, 413, errMsg(err));
+    return;
+  }
+  if (buf.length === 0) {
+    fail(res, 400, '上传体为空');
+    return;
+  }
+
+  try {
+    await mkdir(dirname(full), { recursive: true });
+    await writeFile(full, buf);
+  } catch (err) {
+    fail(res, 500, `写文件失败: ${errMsg(err)}`);
+    return;
+  }
+  // 立刻 reconcile —— 不必等 chokidar 防抖窗口；reconcile 会建出 file 元素 +
+  // 按 path 自动落入所属区域（fs-mapping）。
+  try {
+    await deps.reconcileNow('upload');
+  } catch (err) {
+    console.error('[upload] reconcile 失败:', err);
+  }
+  ok(res, { path: target, size: buf.length });
+}
+
+/**
  * POST /api/regions —— 在画布上创建一个区域。
  *
  * 区域本质是 files/ 下的文件夹（规格 R1）：建 `files/<name>/` 目录 +
@@ -2008,6 +2083,11 @@ async function route(
   // POST /api/files/move —— 文件移动；须先于 /api/files/ 文件读取分支判断
   if (path === '/api/files/move' && method === 'POST') {
     await handleMoveFile(deps, req, res);
+    return;
+  }
+  // POST /api/files/upload?path=<相对路径> —— 上传任意文件到 files/
+  if (path === '/api/files/upload' && method === 'POST') {
+    await handleFileUpload(deps, req, res, url);
     return;
   }
   // POST /api/tasks* —— Agent 任务（Pencil 式过程可视化，PRD §7.4）

@@ -51,7 +51,7 @@ import {
 } from '@board/core';
 import { useBoard } from '../board/BoardContext';
 import { moveFile } from '../server/files';
-import { deleteElement } from '../server/client';
+import { deleteElement, uploadFile } from '../server/client';
 import { apiUrl } from '../server/boardSession';
 import { FileCard } from './FileCard';
 import { FolderCard } from './FolderCard';
@@ -2097,6 +2097,20 @@ export function OverlayLayer({
         void createImageFromBlob(imgFile, pt.x, pt.y);
         return;
       }
+      // 任意文件 —— 上传到 files/，由 reconcile 建出 file 元素。
+      // 落点在某区域内 → 上传到该区域的 files/ 子目录；否则落到 files/ 根。
+      const files = Array.from(dt.files);
+      if (files.length > 0) {
+        e.preventDefault();
+        const regions = regionsOf(sceneRef.current.elements);
+        const region = regionForCard(
+          { x: pt.x, y: pt.y, width: 1, height: 1 },
+          regions,
+        );
+        const prefix = region ? `${region.path}/` : '';
+        void uploadFilesToServer(files, prefix);
+        return;
+      }
       // 链接：text/uri-list 取首个非注释行，回退 text/plain。
       const uriList = dt.getData('text/uri-list');
       const candidate =
@@ -2117,6 +2131,47 @@ export function OverlayLayer({
     // 创建函数闭包稳定（仅依赖 ref / 稳定的 replaceScene / actorId）。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /**
+   * 上传一组 File 到 files/<prefix>/<filename>。
+   * 已存在同名 → server 返 409，client 改名 `name (2).ext` 重试，递增直到成功。
+   * 落盘后 server 经 reconcile 自动把 file 元素加进 scene。
+   */
+  async function uploadFilesToServer(
+    files: File[],
+    prefix: string,
+  ): Promise<void> {
+    if (connection !== 'connected') {
+      toast.warn('未连接 board-server，无法上传文件。');
+      return;
+    }
+    for (const f of files) {
+      const dot = f.name.lastIndexOf('.');
+      const stem = dot > 0 ? f.name.slice(0, dot) : f.name;
+      const ext = dot > 0 ? f.name.slice(dot) : '';
+      let attempt = 1;
+      let last: Error | null = null;
+      while (attempt <= 50) {
+        const fileName =
+          attempt === 1 ? f.name : `${stem} (${attempt})${ext}`;
+        const targetPath = `${prefix}${fileName}`.replace(/\\/g, '/');
+        try {
+          await uploadFile(targetPath, f);
+          last = null;
+          break;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (/目标已存在|已存在/.test(msg) || /409/.test(msg)) {
+            attempt += 1;
+            continue;
+          }
+          last = err instanceof Error ? err : new Error(String(err));
+          break;
+        }
+      }
+      if (last) toast.error(`上传 ${f.name} 失败：${last.message}`);
+    }
+  }
 
   // 粘贴（Ctrl+V）统一分发：图片素材 → 图片元素，链接 → 嵌入元素，
   // 带前缀标记的文本 → 应用内元素粘贴。新元素落在视口中心。

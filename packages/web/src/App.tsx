@@ -29,7 +29,7 @@ import { toast } from './components/toast';
 import { downloadBoardJSON, pickAndParseBoardJSON } from './board/boardFile';
 import { exportBoardImage } from './board/exportImage';
 import { BoardParseError } from '@board/core';
-import { checkHealth, fetchBoard, ServerError } from './server/client';
+import { checkHealth, fetchBoard, ServerError, uploadFile } from './server/client';
 import { subscribeBoardEvents } from './server/events';
 import { presenceStore, type RemotePresence } from './presence/presenceStore';
 import './App.css';
@@ -155,6 +155,43 @@ function BoardApp(): JSX.Element {
     }
   }, [replaceScene]);
 
+  // ── 「上传文件」按钮（PRD §6.4）—— 文件落进 .board/files/，server reconcile
+  // 自动建出 file 元素。已存在同名 → 自动改名 `name (2).ext` 重试至成功。
+  const handleUploadFiles = useCallback(
+    async (files: File[]) => {
+      if (connection !== 'connected') {
+        toast.warn('未连接 board-server，无法上传文件。');
+        return;
+      }
+      for (const f of files) {
+        const dot = f.name.lastIndexOf('.');
+        const stem = dot > 0 ? f.name.slice(0, dot) : f.name;
+        const ext = dot > 0 ? f.name.slice(dot) : '';
+        let attempt = 1;
+        let last: Error | null = null;
+        while (attempt <= 50) {
+          const targetPath =
+            attempt === 1 ? f.name : `${stem} (${attempt})${ext}`;
+          try {
+            await uploadFile(targetPath, f);
+            last = null;
+            break;
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (/目标已存在|已存在|409/.test(msg)) {
+              attempt += 1;
+              continue;
+            }
+            last = err instanceof Error ? err : new Error(String(err));
+            break;
+          }
+        }
+        if (last) toast.error(`上传 ${f.name} 失败：${last.message}`);
+      }
+    },
+    [connection],
+  );
+
   // ── 「保存」按钮 —— Yjs 模式下变更自动同步，按下即时显示「已保存」反馈 ─
   const handleSave = useCallback(() => {
     if (connection !== 'connected') return;
@@ -171,6 +208,7 @@ function BoardApp(): JSX.Element {
         onExport={handleExport}
         onExportImage={handleExportImage}
         onSave={handleSave}
+        onUploadFiles={(files) => void handleUploadFiles(files)}
         elementCount={scene.elements.length}
         connection={connection}
         probing={probing}

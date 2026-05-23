@@ -9,7 +9,7 @@
  *  - 已连接模式：显示「保存」按钮（PUT /api/board 落盘）。
  *  - 始终保留「导入 / 导出 board.json」作为离线兜底。
  */
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { ConnectionMode } from '../board/BoardContext';
 import './TopBar.css';
 
@@ -25,6 +25,8 @@ export interface TopBarProps {
   onExportImage: (format: 'png' | 'svg') => void;
   /** 触发保存到 server（仅已连接模式有效）。 */
   onSave: () => void;
+  /** 选文件上传到 files/（PRD §6.4）；仅已连接模式可用。 */
+  onUploadFiles: (files: File[]) => void;
   /** 元素计数，仅作轻量状态提示。 */
   elementCount: number;
   /** 当前连接模式。 */
@@ -62,6 +64,7 @@ export function TopBar({
   onExport,
   onExportImage,
   onSave,
+  onUploadFiles,
   elementCount,
   connection,
   probing,
@@ -77,6 +80,8 @@ export function TopBar({
   const [draft, setDraft] = useState(boardName);
   // 「导出」下拉菜单开合。
   const [exportOpen, setExportOpen] = useState(false);
+  // 隐藏 <input type="file" multiple>，点上传按钮即触发它。
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const commitName = (): void => {
     const next = draft.trim();
@@ -199,6 +204,30 @@ export function TopBar({
             {SAVE_LABEL[saveState]}
           </button>
         )}
+
+        {/* 上传文件（PRD §6.4）—— 仅已连接模式可用，落进 .board/files/ */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const list = e.target.files;
+            if (!list || list.length === 0) return;
+            onUploadFiles(Array.from(list));
+            // 重置 value 让同一文件可重复选择。
+            e.target.value = '';
+          }}
+        />
+        <button
+          type="button"
+          className="btn btn--secondary"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={!connected}
+          title={connected ? '上传文件到白板（落进 files/）' : '需连接 board-server'}
+        >
+          ⤴ 上传文件
+        </button>
 
         {/* 导入 / 导出始终保留作为离线兜底 */}
         <button type="button" className="btn btn--secondary" onClick={onImport}>
