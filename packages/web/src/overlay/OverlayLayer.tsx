@@ -1429,21 +1429,57 @@ export function OverlayLayer({
     [scene.elements],
   );
 
-  // 建议 → 目标的连线（画布坐标，中心到中心；目标已删除则不连）。
+  // 建议 → 目标的连线（画布坐标）—— 从建议卡边缘射向目标卡边缘的箭头线
+  // （PRD §7.3 "一眼能看出这是针对谁的建议"）。
+  //
+  // 端点按"中心连线与对方 bbox 边的交点"裁切 —— 不进卡片内部，箭头正好
+  // 顶在目标边缘上；目标已删除则不连。
   const suggestionLinks = useMemo<
     { id: string; x1: number; y1: number; x2: number; y2: number }[]
   >(() => {
+    /** 从 (cx,cy) 沿方向 (dx,dy) 射出，到 rect 边界的出口点；dx/dy 全 0 退化为中心。 */
+    function exitOnRect(
+      cx: number,
+      cy: number,
+      dx: number,
+      dy: number,
+      rect: { x: number; y: number; width: number; height: number },
+    ): { x: number; y: number } {
+      if (dx === 0 && dy === 0) return { x: cx, y: cy };
+      const tx =
+        dx > 0
+          ? (rect.x + rect.width - cx) / dx
+          : dx < 0
+            ? (rect.x - cx) / dx
+            : Infinity;
+      const ty =
+        dy > 0
+          ? (rect.y + rect.height - cy) / dy
+          : dy < 0
+            ? (rect.y - cy) / dy
+            : Infinity;
+      const t = Math.max(0, Math.min(tx, ty));
+      return { x: cx + dx * t, y: cy + dy * t };
+    }
+
     const links: { id: string; x1: number; y1: number; x2: number; y2: number }[] =
       [];
     for (const s of suggestions) {
       const target = scene.elements.find((e) => e.id === s.targetId);
       if (!target) continue;
+      const sCx = s.x + s.width / 2;
+      const sCy = s.y + s.height / 2;
+      const tCx = target.x + target.width / 2;
+      const tCy = target.y + target.height / 2;
+      // 从建议中心朝目标方向出建议 bbox；从目标中心朝建议方向出目标 bbox。
+      const start = exitOnRect(sCx, sCy, tCx - sCx, tCy - sCy, s);
+      const end = exitOnRect(tCx, tCy, sCx - tCx, sCy - tCy, target);
       links.push({
         id: s.id,
-        x1: target.x + target.width / 2,
-        y1: target.y + target.height / 2,
-        x2: s.x + s.width / 2,
-        y2: s.y + s.height / 2,
+        x1: start.x,
+        y1: start.y,
+        x2: end.x,
+        y2: end.y,
       });
     }
     return links;
@@ -4576,9 +4612,24 @@ export function OverlayLayer({
       }
     >
       <div className="ov-transform" style={transformStyle}>
-        {/* 建议 → 目标的连线 —— 置于卡片之下，只露出卡片之间的连接段 */}
+        {/* 建议 → 目标的连线 —— 建议卡 → 目标卡的箭头线，端点裁到 bbox 边
+            而非中心，箭头尖正好顶在目标边上。置于卡片之下，只露出卡片之间
+            的连接段。 */}
         {suggestionLinks.length > 0 ? (
           <svg className="ov-links" width="0" height="0" aria-hidden="true">
+            <defs>
+              <marker
+                id="ov-suggest-arrow"
+                viewBox="0 0 10 10"
+                refX="9"
+                refY="5"
+                markerWidth="6"
+                markerHeight="6"
+                orient="auto-start-reverse"
+              >
+                <path d="M0,0 L10,5 L0,10 Z" fill="var(--c-accent)" />
+              </marker>
+            </defs>
             {suggestionLinks.map((l) => (
               <line
                 key={l.id}
@@ -4587,6 +4638,7 @@ export function OverlayLayer({
                 y1={l.y1}
                 x2={l.x2}
                 y2={l.y2}
+                markerEnd="url(#ov-suggest-arrow)"
               />
             ))}
           </svg>
