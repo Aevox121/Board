@@ -747,13 +747,17 @@
 }
 
 .ov-text__body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
+  /* 文本卡按内容自适应：不滚动、不剪裁，bbox 会跟着内容生长（OverlayLayer
+     用 ResizeObserver 把测得的实际高度写回 element.height）。 */
+  flex: 0 0 auto;
+  overflow: visible;
   padding: var(--space-2) var(--space-3);
   font-size: var(--text-sm);
   line-height: 1.5;
   color: var(--c-ink);
+  /* break-word 保证长链接 / 长单词不撑爆 slot 横向；只让纵向生长 */
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .ov-text__empty {

@@ -3084,6 +3084,26 @@ export function OverlayLayer({
   }
 
   /**
+   * 文本卡按测得的渲染高度撑高 / 缩短自身 element.height（数据模型 §6.4
+   * 自适应）。Agent 流式追加时浏览器测得的高度变化通过此回调写回 Y.Doc，
+   * 不卡顿（每次只改 height 字段）。无需推 updatedBy，渲染层的尺寸跟随
+   * 是「装载性变化」不算 Agent 操作。
+   */
+  function resizeTextElement(id: string, height: number): void {
+    const cur = sceneRef.current;
+    const target = cur.elements.find((e) => e.id === id);
+    if (!target || target.type !== 'text') return;
+    if (Math.abs(target.height - height) <= 4) return;
+    const next: BoardScene = {
+      ...cur,
+      elements: cur.elements.map((e): Element =>
+        e.id === id && e.type === 'text' ? ({ ...e, height } as Element) : e,
+      ),
+    };
+    replaceScene(next, 'canvas');
+  }
+
+  /**
    * 区域软归属转让（PRD §8.3）—— 改 `region.ownerId`。
    * null = 设为公共区域；其它 = 转让给该参与者。
    */
@@ -4402,6 +4422,7 @@ export function OverlayLayer({
                 <TextCard
                   element={el}
                   onCommit={(md) => commitTextMarkdown(el.id, md)}
+                  onResize={(h) => resizeTextElement(el.id, h)}
                 />
               ) : el.type === 'shape' ? (
                 <ShapeView

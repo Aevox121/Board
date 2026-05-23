@@ -26,15 +26,54 @@ export interface TextCardProps {
   element: TextElement;
   /** 就地编辑提交正文 —— 由 OverlayLayer 写回场景；缺省则不可编辑。 */
   onCommit?: (markdown: string) => void;
+  /**
+   * 内容高度变化回调（PRD §6.4：文本卡按内容自适应）。
+   * 当渲染后的 body 高度与 element.height 偏差超 4px 时回调，OverlayLayer
+   * 据此把新高度写回 element.height（含 ResizeObserver 的字号 / 内容变化）。
+   * 不传则不自动撑高。
+   */
+  onResize?: (height: number) => void;
 }
 
-export function TextCard({ element, onCommit }: TextCardProps): JSX.Element {
+export function TextCard({ element, onCommit, onResize }: TextCardProps): JSX.Element {
   const { markdown } = element;
   // 就地编辑态：editing=true 时正文区换成文本域。
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(markdown);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const bodyRef = useRef<HTMLElement | null>(null);
   const rotation = cardRotation(element.id);
+
+  // 自适应高度：ResizeObserver 观察 body 实际高度，与 element.height 偏差
+  // 超过 4px 即回调（防抖由 OverlayLayer 端做）。编辑态不上报 —— textarea
+  // 的尺寸是 fixed 高度，不参与 fit。
+  useEffect(() => {
+    if (!onResize || editing) return;
+    const el = bodyRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const h = Math.ceil(entry.contentRect.height + entry.contentRect.top);
+        // contentRect.top 是 body 相对 .ov-text 顶部的偏移（含 padding-top 已
+        // 在 entry.contentRect.height 内）。padding-top 已是 body 的一部分。
+        // 直接 body 自身高度 + body 在 ov-text 内的 offsetTop
+        const fullH = (el as HTMLElement).offsetTop + (el as HTMLElement).offsetHeight;
+        if (Math.abs(fullH - element.height) > 4) onResize(fullH);
+        void h;
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [onResize, editing, element.height]);
+
+  // marked 的输出可能在异步 / 字体加载后才稳定布局；mount 后再测一次兜底
+  useEffect(() => {
+    if (!onResize || editing) return;
+    const el = bodyRef.current as HTMLElement | null;
+    if (!el) return;
+    const fullH = el.offsetTop + el.offsetHeight;
+    if (Math.abs(fullH - element.height) > 4) onResize(fullH);
+  }, [markdown, onResize, editing, element.height]);
 
   // marked.parse 同步返回 string（未启用 async 选项）。
   const html = markdown ? (marked.parse(markdown) as string) : '';
@@ -94,6 +133,7 @@ export function TextCard({ element, onCommit }: TextCardProps): JSX.Element {
         />
       ) : markdown ? (
         <div
+          ref={(el) => (bodyRef.current = el)}
           className="ov-text__body ov-md"
           style={bodyStyle}
           onDoubleClick={beginEdit}
@@ -102,6 +142,7 @@ export function TextCard({ element, onCommit }: TextCardProps): JSX.Element {
         />
       ) : (
         <div
+          ref={(el) => (bodyRef.current = el)}
           className="ov-text__body ov-text__empty"
           style={bodyStyle}
           onDoubleClick={beginEdit}

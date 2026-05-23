@@ -318,14 +318,25 @@ export async function runMcpServer(
     {
       description:
         '开一张空 Markdown 文本卡（流式工作流起手）。返回 elementId，后续用 ' +
-        'board_text_stream_append 多次追加内容。需要 board-server 在运行。',
+        'board_text_stream_append 多次追加内容。' +
+        '\n\n⚠️ 关键约束：**文本卡 bbox 会随内容生长（高度自适应，不会滚动）**。' +
+        '宽度按你指定的 width 固定（用于文字换行）；高度自动撑大到容纳全部行。' +
+        '所以摆放时 **务必估算最终行数 × 20px 余量**：要写 N 行就在该卡下方至少留 ' +
+        'N × 22px 的纵向空间，否则会与下方元素重叠。' +
+        '需要 board-server 在运行。',
       inputSchema: {
         region: z.string().optional().describe('区域名（卡片归属该区域；不传则落画布顶层）'),
         at: z
           .string()
           .optional()
           .describe('坐标 "x,y"：带 region 时为区域内偏移，不带时为画布绝对坐标'),
-        size: z.string().optional().describe('大小 "w,h"，默认 480,200'),
+        size: z
+          .string()
+          .optional()
+          .describe(
+            '大小 "w,h"，默认 480,200。h 是初始高度，实际会按内容自适应增长。' +
+              'w 决定文字换行，要为预期最长行留够宽度。',
+          ),
         markdown: z.string().optional().describe('初始 markdown（一般留空，靠 append 喂入）'),
         agent: z.string().optional().describe('Agent id（写入 createdBy + Agent 焦点光标）'),
       },
@@ -353,7 +364,10 @@ export async function runMcpServer(
     {
       description:
         '给已存在的文本卡 markdown 追加一段（Y.Text 字符级 CRDT，浏览器看到 ' +
-        '打字动画 + Agent 光标 jitter）。LLM 流式输出的每个 chunk / 段落都可调一次。',
+        '打字动画 + Agent 光标 jitter）。LLM 流式输出的每个 chunk / 段落都可调一次。' +
+        '\n\n⚠️ 追加会导致文本卡高度增长（向下扩展）；如果下方紧邻其它元素会' +
+        '产生视觉重叠 —— 摆位时应预留余量，或在追加前用 board_add_text / ' +
+        '其它工具调整周围元素位置。',
       inputSchema: {
         elementId: z.string().describe('文本卡元素 id（board_text_stream_create 返回值）'),
         chunk: z.string().describe('要追加的文本片段（保留 \\n 等格式字符）'),
