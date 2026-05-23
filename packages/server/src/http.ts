@@ -586,6 +586,8 @@ async function handleCreateRegion(
     fail(res, 500, `写入区域失败: ${errMsg(err)}`);
     return;
   }
+  // Agent presence —— 围绕新建区域转一下（PRD §7.4 / §8.2）
+  pushAgentPresence(deps, actor, element.id);
   ok(res, {
     elementId: element.id,
     path: element.path,
@@ -962,6 +964,8 @@ async function handleCreateTask(
     region: regionName || null,
   });
   deps.sse.broadcast({ type: 'board-changed' });
+  // Agent presence —— 围绕任务所在区域转（无 region 时不画轨道）
+  pushAgentPresence(deps, agentId, regionId);
   ok(res, { taskId: task.id, task });
 }
 
@@ -1007,6 +1011,8 @@ async function handleTaskProgress(
     percent: next.percent,
   });
   deps.sse.broadcast({ type: 'board-changed' });
+  // Agent presence —— 任务进度时刷新 Agent 焦点（围绕任务区域转）
+  pushAgentPresence(deps, next.agentId, next.regionId);
   ok(res, { task: next });
 }
 
@@ -1075,6 +1081,8 @@ async function handleTaskFinish(
   } else {
     deps.sse.broadcast({ type: 'board-changed' });
   }
+  // Agent presence —— 任务完成时再围绕区域转一圈，最后由 STALE_MS 自然消退
+  pushAgentPresence(deps, task.agentId, next.regionId);
   ok(res, { task: next });
 }
 
@@ -1397,6 +1405,35 @@ async function handleDeleteElement(
  *
  * Presence 是纯瞬时态：不落 board.json、不进事件日志、不触发 recordChange。
  */
+/**
+ * 推一帧 Agent presence —— Agent 操作时浏览器据此画「围绕目标元素轨道运动」
+ * 的光标（PRD §7.4 / §8.2）。
+ *
+ * Agent 不像人类那样持续上报光标，而是在 server 端某个操作发生时被动注入。
+ * clientId 直接复用 participant id（如 `a_travis`），name/color 从
+ * meta.participants 取；若 actorId 不在 participants 中（如 `u_local`），跳过。
+ */
+function pushAgentPresence(
+  deps: HttpDeps,
+  actorId: string,
+  targetElementId: string | null,
+  targetOffset?: { x: number; y: number },
+): void {
+  const p = deps.getMeta().participants.find((x) => x.id === actorId);
+  if (!p || p.type !== 'agent') return;
+  const entry = deps.presence.update({
+    clientId: p.id,
+    name: p.name,
+    color: p.color,
+    cursor: null,
+    targetElementId: targetElementId ?? undefined,
+    targetOffset,
+    isAgent: true,
+  });
+  const frame = { type: 'presence', client: entry };
+  deps.sse.broadcast(frame);
+}
+
 function handlePresence(
   deps: HttpDeps,
   body: unknown,
@@ -1437,7 +1474,34 @@ function handlePresence(
       cursor = { x: c['x'], y: c['y'] };
     }
   }
-  const entry = deps.presence.update({ clientId, name, color, cursor });
+  // Agent 专用字段：targetElementId / targetOffset / isAgent
+  const targetElementId =
+    typeof rec['targetElementId'] === 'string' && rec['targetElementId']
+      ? rec['targetElementId']
+      : undefined;
+  let targetOffset: { x: number; y: number } | undefined;
+  const rawOffset = rec['targetOffset'];
+  if (typeof rawOffset === 'object' && rawOffset !== null) {
+    const o = rawOffset as Record<string, unknown>;
+    if (
+      typeof o['x'] === 'number' &&
+      typeof o['y'] === 'number' &&
+      Number.isFinite(o['x']) &&
+      Number.isFinite(o['y'])
+    ) {
+      targetOffset = { x: o['x'], y: o['y'] };
+    }
+  }
+  const isAgent = rec['isAgent'] === true;
+  const entry = deps.presence.update({
+    clientId,
+    name,
+    color,
+    cursor,
+    targetElementId,
+    targetOffset,
+    isAgent,
+  });
   const frame = { type: 'presence', client: entry };
   deps.sse.broadcast(frame);
   ok(res, { ok: true });

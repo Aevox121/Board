@@ -16,6 +16,15 @@ export interface RemotePresence {
   /** 画布坐标的光标位置；null = 在场但光标未知 */
   cursor: { x: number; y: number } | null;
   ts: number;
+  /**
+   * Agent 当前操作的焦点元素 id（PRD §7.4 / §8.2）。设置后浏览器把 Agent
+   * 光标钉在该元素的 `targetOffset` 处 + 小幅 jitter；不设则按 cursor 显示。
+   */
+  targetElementId?: string;
+  /** 元素本地坐标的偏移（左上 = 0,0）；默认元素中心。让 Agent 精确到行/字符。 */
+  targetOffset?: { x: number; y: number };
+  /** 是否 Agent，浏览器据此渲染 jitter 工作光标。 */
+  isAgent?: boolean;
 }
 
 /** 当前在场列表 —— 仅在变化时换新引用，满足 useSyncExternalStore 的稳定快照要求。 */

@@ -14,6 +14,7 @@ import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { SESSION } from '../session';
 import { sendPresence } from '../server/client';
 import { presenceStore } from './presenceStore';
+import { useBoard } from '../board/BoardContext';
 import type { OverlayViewport } from '../overlay/OverlayLayer';
 import './presence.css';
 
@@ -33,6 +34,9 @@ export function PresenceLayer({ viewport }: PresenceLayerProps): JSX.Element {
     presenceStore.subscribe,
     presenceStore.getSnapshot,
   );
+  const { scene } = useBoard();
+  // 给 Agent 轨道光标用 —— Agent 的 targetElementId 解析为 bbox
+  const elementById = new Map(scene.elements.map((e) => [e.id, e]));
   const rootRef = useRef<HTMLDivElement>(null);
   // 视口随平移 / 缩放变化，用 ref 让上报回调读到最新值。
   const vpRef = useRef(viewport);
@@ -112,8 +116,65 @@ export function PresenceLayer({ viewport }: PresenceLayerProps): JSX.Element {
   const { scrollX, scrollY, zoom } = viewport;
   return (
     <div className="presence-layer" ref={rootRef}>
-      {users.map((u) =>
-        u.clientId === SESSION.clientId || !u.cursor ? null : (
+      {users.map((u) => {
+        if (u.clientId === SESSION.clientId) return null;
+        // Agent 轨道光标 —— targetElementId 命中场景元素时，围绕该元素 bbox 运动
+        if (u.targetElementId) {
+          const target = elementById.get(u.targetElementId);
+          if (target) {
+            // Agent 焦点点 = element 本地坐标的 targetOffset；缺省取元素中心。
+            // 用 element 本地坐标 + zoom 换算到屏幕坐标。
+            const offset = u.targetOffset ?? {
+              x: target.width / 2,
+              y: target.height / 2,
+            };
+            const cx = (target.x + offset.x + scrollX) * zoom;
+            const cy = (target.y + offset.y + scrollY) * zoom;
+            // 让不同 client 的 jitter 不同步 —— 给每个 cursor 一个独立 phase
+            // delay（基于 clientId 简单哈希）。
+            let phase = 0;
+            for (let i = 0; i < u.clientId.length; i += 1) {
+              phase = (phase * 31 + u.clientId.charCodeAt(i)) >>> 0;
+            }
+            const phaseSec = -((phase % 5000) / 1000); // 负值让 phase 在过去
+            return (
+              <div
+                key={u.clientId}
+                className="presence-focus"
+                style={{ left: `${cx}px`, top: `${cy}px` }}
+              >
+                <div
+                  className="presence-focus__cursor"
+                  style={{
+                    ['--c' as string]: u.color,
+                    ['--jitter-phase' as string]: `${phaseSec.toFixed(2)}s`,
+                  }}
+                >
+                  <svg viewBox="0 0 24 24" width="22" height="22">
+                    <path
+                      d="M5 3 L5 19 L9.6 14.7 L12.6 21 L15.2 19.8 L12.2 13.6 L18.4 13.6 Z"
+                      fill={u.color}
+                      stroke="#ffffff"
+                      strokeWidth="1.4"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  <span
+                    className="presence-focus__name"
+                    style={{ background: u.color }}
+                  >
+                    ◆ {u.name}
+                  </span>
+                </div>
+              </div>
+            );
+          }
+          // target 找不到 —— 静默忽略，等下一帧 presence 更新或 target 出现在场景
+          return null;
+        }
+        // 普通人类光标 —— 静态箭头
+        if (!u.cursor) return null;
+        return (
           <div
             key={u.clientId}
             className="presence-cursor"
@@ -141,8 +202,8 @@ export function PresenceLayer({ viewport }: PresenceLayerProps): JSX.Element {
               {u.name}
             </span>
           </div>
-        ),
-      )}
+        );
+      })}
     </div>
   );
 }

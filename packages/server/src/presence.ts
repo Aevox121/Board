@@ -14,7 +14,7 @@ export interface PresenceCursor {
 
 /** 一个在场参与者。 */
 export interface PresenceUser {
-  /** 客户端会话 id */
+  /** 客户端会话 id（Agent 用 participant id，如 `a_travis`） */
   clientId: string;
   /** 显示名 */
   name: string;
@@ -24,6 +24,22 @@ export interface PresenceUser {
   cursor: PresenceCursor | null;
   /** 最近一次上报的 epoch 毫秒 */
   ts: number;
+  /**
+   * Agent 当前操作的焦点元素 id（PRD §7.4 / §8.2）—— 浏览器据此把 Agent
+   * 光标钉在该元素附近，视觉上「Agent 正在编辑这里」。人类用户通常不设。
+   */
+  targetElementId?: string;
+  /**
+   * 元素内部相对偏移（元素本地坐标系，左上 = 0,0）—— 允许 Agent 把光标
+   * 精确钉到「正在编辑的第 N 行 / 第 M 字符」。缺省 = 元素中心。
+   * 浏览器会在此基础上叠加小范围 jitter 抖动。
+   */
+  targetOffset?: { x: number; y: number };
+  /**
+   * 是否 Agent —— 浏览器据此调整光标样式（jitter 抖动 / 不同图标）。
+   * 默认 false（人类用户）。
+   */
+  isAgent?: boolean;
 }
 
 /** 超过此时长未上报即视为离线（毫秒）。 */

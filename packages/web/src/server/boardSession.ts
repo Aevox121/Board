@@ -53,16 +53,31 @@ export function apiUrl(sub: string): string {
 }
 
 /**
- * Yjs ws URL —— 与当前页同源（同 host:port），路径 `/yjs[/<boardId>]`。
+ * Yjs ws URL —— 路径 `/yjs[/<boardId>]`。
  *
- * dev 模式下 vite (4510) 转发 `/yjs` ws 到 board-server (4500)；生产同源
- * 部署或反向代理时也透明工作。分享链接可直接复制 URL 给协作者，无需
- * 关心端口暴露细节。token 若存在则自动追加 `?token=` 查询。
+ * 生产 / 反向代理：走同源 `loc.host`，路径透传到 server。
+ * dev：vite 5.x 的 ws proxy 偶发 ECONNABORTED 导致 yjs sync 失败 ——
+ *   默认直连 board-server 端口（4500），bypass vite ws proxy。
+ *   通过 VITE_BOARD_WS_PORT 环境变量覆盖端口（如多 board server 调试）。
+ *
+ * token 若存在则自动追加 `?token=` 查询。
  */
 export function yjsWsUrl(): string {
   const loc = window.location;
   const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
-  const base = `${proto}//${loc.host}/yjs`;
+  // vite 注入的 import.meta.env.DEV 在 dev 模式为 true、prod 为 false
+  // VITE_BOARD_WS_PORT 是显式 dev 端口 override（启动 vite 时设环境变量）
+  const env = (import.meta as ImportMeta & { env?: Record<string, string> }).env;
+  const devPortOverride = env?.['VITE_BOARD_WS_PORT'];
+  const isDev = !!env?.['DEV'];
+  let base: string;
+  if (devPortOverride) {
+    base = `${proto}//${loc.hostname}:${devPortOverride}/yjs`;
+  } else if (isDev) {
+    base = `${proto}//${loc.hostname}:4500/yjs`;
+  } else {
+    base = `${proto}//${loc.host}/yjs`;
+  }
   const path =
     ACTIVE_BOARD_ID === null
       ? base

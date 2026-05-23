@@ -36,3 +36,85 @@
   white-space: nowrap;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
 }
+
+/*
+ * Agent 焦点光标（PRD §7.4 / §8.2）—— 「Agent 正在编辑这里」。
+ *
+ * 位置：由 PresenceLayer 钉在目标元素的 `targetOffset` 处（缺省元素中心）。
+ *       Agent 可针对多行文本编辑 / 字符级流式输出动态推 targetOffset，光标
+ *       就会精确停在「正在写的那一行」附近。
+ *
+ * 运动：±7px 范围内非线性 jitter —— 模拟手在颤动 / 思考时的微动，不旋转、
+ *       不公转。jitter 的 keyframes 时间点不均匀 + ease-in-out 过渡，呈现
+ *       自然的非线性感。每个 client 用 clientId 哈希派生独立 phase delay，
+ *       多 Agent 同框时抖动不同步。
+ */
+.presence-focus {
+  position: absolute;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: 51;
+}
+
+.presence-focus__cursor {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  animation: presence-jitter 4.6s ease-in-out infinite;
+  animation-delay: var(--jitter-phase, 0s);
+  /* 颜色光晕 —— 强化「Agent 在工作」的呼吸感 */
+  filter: drop-shadow(0 0 4px var(--c, #1971c2))
+    drop-shadow(0 0 10px color-mix(in srgb, var(--c, #1971c2) 45%, transparent));
+}
+.presence-focus__cursor svg {
+  display: block;
+  /* svg 中心对齐到光标定位点；不旋转 */
+  transform: translate(-12px, -12px);
+}
+
+.presence-focus__name {
+  position: absolute;
+  left: 14px;
+  top: -2px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
+}
+
+/*
+ * Jitter keyframes —— ±7px 范围、14 个不均匀时间点、ease-in-out 过渡。
+ * 时间点故意不等距（7, 11, 19, 24, 31, 38, 44, 53, 59, 67, 74, 82, 89, 95），
+ * 让动作看起来有「停顿 / 急动」的非线性节奏，像手在斟酌时的微抖。
+ */
+@keyframes presence-jitter {
+  0%, 100% { transform: translate( 0px,  0px); }
+  7%       { transform: translate( 4px, -3px); }
+  11%      { transform: translate( 2px,  1px); }
+  19%      { transform: translate(-3px,  5px); }
+  24%      { transform: translate( 1px,  6px); }
+  31%      { transform: translate( 6px,  2px); }
+  38%      { transform: translate( 5px, -4px); }
+  44%      { transform: translate(-1px, -5px); }
+  53%      { transform: translate(-5px, -2px); }
+  59%      { transform: translate(-6px,  3px); }
+  67%      { transform: translate(-2px,  6px); }
+  74%      { transform: translate( 3px,  4px); }
+  82%      { transform: translate( 5px,  0px); }
+  89%      { transform: translate( 3px, -2px); }
+  95%      { transform: translate( 1px, -1px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .presence-focus__cursor {
+    /* 减弱但不关停 —— 这是 Agent 在工作的核心信号 */
+    animation-duration: 14s;
+  }
+}
