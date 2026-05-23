@@ -1160,11 +1160,25 @@ export function OverlayLayer({
     setSelectedIds((prev) => (prev.size === 0 ? prev : new Set()));
   }
 
-  // 筛出画布元素并按 z 升序排序 —— 字典序即层级序（与 factory.nextZ 同构）。
+  // 筛出画布元素并按层级序排：
+  //  - 区域始终在底层 —— 半透明背景不再盖在区域内元素上方（即便区域 z 更高
+  //    也强制下沉）。区域之间再按路径深度排（外层在内层下方）。
+  //  - 非区域元素在区域之上，组内按 z 字典序（与 factory.nextZ 同构、
+  //    保留图层顺序操作的语义）。
   const canvasElements = useMemo<CanvasElement[]>(() => {
-    return scene.elements
-      .filter(isCanvasElement)
-      .sort((a, b) => (a.z < b.z ? -1 : a.z > b.z ? 1 : 0));
+    const cmpZ = (a: CanvasElement, b: CanvasElement) =>
+      a.z < b.z ? -1 : a.z > b.z ? 1 : 0;
+    return scene.elements.filter(isCanvasElement).sort((a, b) => {
+      const ar = a.type === 'region' ? 0 : 1;
+      const br = b.type === 'region' ? 0 : 1;
+      if (ar !== br) return ar - br;
+      if (ar === 0) {
+        const ad = (a as RegionElement).path.split('/').length;
+        const bd = (b as RegionElement).path.split('/').length;
+        if (ad !== bd) return ad - bd;
+      }
+      return cmpZ(a, b);
+    });
   }, [scene.elements]);
 
   // 手绘元素的命中裁剪 path —— id → `path('<轮廓>')`，供卡槽 clip-path 把
