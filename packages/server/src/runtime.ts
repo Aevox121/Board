@@ -23,6 +23,12 @@ import {
 import { listBoardFiles, loadBoard, saveBoard } from '@board/core/node';
 import { createEventLog } from './events.js';
 import type { HttpDeps } from './http.js';
+import {
+  createOpLog,
+  OP_CHANGE,
+  OP_RECONCILE,
+  type OpLog,
+} from './oplog.js';
 import { createPresenceHub } from './presence.js';
 import { runReconcile } from './reconcile.js';
 import { createSseHub } from './sse.js';
@@ -98,6 +104,7 @@ export async function createBoardRuntime(
   const tasks = await createTaskStore(dir);
   // 事件日志。
   const events = createEventLog();
+  const opLog: OpLog = await createOpLog(dir);
   // 在场注册表（光标）。
   const presence = createPresenceHub();
   const presencePrune = setInterval(() => {
@@ -126,15 +133,23 @@ export async function createBoardRuntime(
   // 事件 diff 的基线场景 —— 启动 reconcile 之后的场景。
   let lastScene: BoardScene = room.getScene();
 
-  /** 比对 Y.Doc 当前场景与基线，产事件流事件并广播。 */
-  async function syncSceneEvents(actor: string): Promise<void> {
+  /**
+   * 比对 Y.Doc 当前场景与基线，产事件流事件并广播；同时返回事件计数摘要
+   * 用于 oplog 写入。
+   */
+  async function syncSceneEvents(actor: string): Promise<{ count: number; types: string[] }> {
     try {
       const cur = room.getScene();
       const drafts = diffScenes(lastScene, cur, actor);
       lastScene = cur;
       for (const evt of events.append(drafts)) sse.broadcast(evt);
+      return {
+        count: drafts.length,
+        types: Array.from(new Set(drafts.map((d) => d.type))),
+      };
     } catch (err) {
       console.error(`[board-server:${boardId}] 记录变更事件失败:`, err);
+      return { count: 0, types: [] };
     }
   }
 
@@ -147,7 +162,15 @@ export async function createBoardRuntime(
 
   function recordChange(actor: string): Promise<void> {
     return serialize(async () => {
-      await syncSceneEvents(actor);
+      const summary = await syncSceneEvents(actor);
+      // 写 oplog —— 只在确有变更时落盘，跳过空 diff 的「无操作」回调。
+      if (summary.count > 0) {
+        await opLog.append({
+          actor,
+          op: actor === SYSTEM_ACTOR ? OP_RECONCILE : OP_CHANGE,
+          details: { count: summary.count, types: summary.types },
+        });
+      }
       sse.broadcast({ type: 'board-changed' });
     });
   }
@@ -214,6 +237,7 @@ export async function createBoardRuntime(
     presence,
     recordChange,
     emitEvent,
+    opLog,
     room,
     getMeta: () => currentMeta,
     setMeta: (next) => {

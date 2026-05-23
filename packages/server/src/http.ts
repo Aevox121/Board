@@ -53,6 +53,7 @@ import {
   type SuggestionResult,
 } from '@board/core';
 import type { EventLog } from './events.js';
+import type { OpLog } from './oplog.js';
 import type { PresenceHub } from './presence.js';
 import {
   createSnapshot,
@@ -102,6 +103,8 @@ export interface HttpDeps {
     actor: string,
     payload: Record<string, unknown>,
   ): void;
+  /** 操作日志 —— PRD §6.9 `history/oplog.jsonl`。 */
+  opLog: OpLog;
   /** Yjs 房间 —— 权威 Y.Doc，所有场景读写经此（M4 增量2）。 */
   room: YjsRoom;
   /** 当前 meta。 */
@@ -1689,6 +1692,24 @@ function handleEventLog(deps: HttpDeps, res: ServerResponse, url: URL): void {
   ok(res, { events: list, cursor: deps.events.cursor() });
 }
 
+/**
+ * GET /api/oplog?tail=<n> —— 取末尾 n 条 oplog（PRD §6.9）。
+ *
+ * oplog 不是事件流的替代品；事件流是内存环 + SSE 实时推送，oplog 是磁盘
+ * append-only 流水，用于审计 / 离线复盘。默认 tail=100，上限 1000。
+ */
+async function handleOpLog(
+  deps: HttpDeps,
+  res: ServerResponse,
+  url: URL,
+): Promise<void> {
+  const raw = url.searchParams.get('tail');
+  const n = raw !== null && Number.isFinite(Number(raw)) ? Number(raw) : 100;
+  const cap = Math.min(Math.max(1, n | 0), 1000);
+  const entries = await deps.opLog.tail(cap);
+  ok(res, { entries, path: deps.opLog.path });
+}
+
 // ───────────────────── 快照 / 复原（PRD §8.5）─────────────────────
 
 /** GET /api/snapshots —— 列出当前所有存档点（从 meta 读）。 */
@@ -1977,6 +1998,11 @@ async function route(
   }
   if (path === '/api/events' && method === 'GET') {
     handleEvents(deps, req, res);
+    return;
+  }
+  // GET /api/oplog —— PRD §6.9 操作日志（磁盘 append-only）
+  if (path === '/api/oplog' && method === 'GET') {
+    await handleOpLog(deps, res, url);
     return;
   }
   // POST /api/files/move —— 文件移动；须先于 /api/files/ 文件读取分支判断

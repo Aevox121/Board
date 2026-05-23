@@ -44,6 +44,7 @@ import { runWatch } from './commands/watch.js';
 import { cmdExport } from './commands/export.js';
 import { cmdImport } from './commands/import.js';
 import { cmdServe } from './commands/serve.js';
+import { cmdLog } from './commands/log.js';
 
 /** 命令处理函数签名。 */
 type Handler = (args: ParsedArgs) => Promise<CmdResult>;
@@ -73,6 +74,7 @@ const HANDLERS: Record<string, Handler> = {
   export: cmdExport,
   import: cmdImport,
   serve: cmdServe,
+  log: cmdLog,
 };
 
 /** 已登记但尚未实现的命令（规格 §2，逐里程碑补全）。 */
@@ -146,6 +148,7 @@ function printHelp(): void {
   console.log('  export <路径> [--json|--zip] [--out <文件>]   导出白板 JSON / zip（spec §2.6；--png/--svg/--html 暂未实现）');
   console.log('  import <zip 路径> [--name <名>] [--dir <父>]  从 zip 还原一个 .board');
   console.log('  serve <路径> [<路径>...] [--port <n>] [--host <addr>]  启动 board-server（多 .board 列出即中继）');
+  console.log('  log <路径> [--tail <n>] [--port <p>] [--host <h>]  读取 oplog（PRD §6.9，server 不在跑时回退磁盘直读）');
   console.log('');
   console.log('占位命令 (尚未实现):');
   console.log('  ' + PLACEHOLDER_COMMANDS.join(', '));

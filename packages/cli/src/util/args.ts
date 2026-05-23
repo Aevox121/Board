@@ -94,6 +94,7 @@ export const GLOBAL_VALUE_KEYS: ReadonlySet<string> = new Set([
   'owner',
   'line',
   'markdown',
+  'tail',
   'title',
   'step',
   'percent',
