@@ -70,11 +70,11 @@ async function main(): Promise<void> {
   const dir = resolveBoardDir();
 
   // 启动前先验证白板可读，失败则给出清晰错误并退出（不崩栈）
-  let initialMeta: BoardMeta;
+  let currentMeta: BoardMeta;
   let initialScene: BoardScene;
   try {
     const handle = await loadBoard(dir);
-    initialMeta = handle.meta;
+    currentMeta = handle.meta;
     initialScene = handle.scene;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -91,7 +91,7 @@ async function main(): Promise<void> {
     dir,
     initialScene,
     saveScene: async (scene) => {
-      await saveBoard(dir, initialMeta, scene);
+      await saveBoard(dir, currentMeta, scene);
       savedSceneRef = scene;
     },
   });
@@ -123,7 +123,7 @@ async function main(): Promise<void> {
     const result = await runReconcile({
       dir,
       scene: room.getScene(),
-      previewLimitMB: initialMeta.settings.previewSizeLimitMB,
+      previewLimitMB: currentMeta.settings.previewSizeLimitMB,
       actor: SYSTEM_ACTOR,
     });
     if (result.changed) {
@@ -183,7 +183,7 @@ async function main(): Promise<void> {
       const result = await runReconcile({
         dir,
         scene: room.getScene(),
-        previewLimitMB: initialMeta.settings.previewSizeLimitMB,
+        previewLimitMB: currentMeta.settings.previewSizeLimitMB,
         actor: SYSTEM_ACTOR,
       });
       if (result.changed) {
@@ -231,7 +231,10 @@ async function main(): Promise<void> {
     recordChange,
     emitEvent,
     room,
-    getMeta: () => initialMeta,
+    getMeta: () => currentMeta,
+    setMeta: (next) => { currentMeta = next; },
+    pauseWatcher: () => watcher.pause(),
+    resumeWatcher: (files) => watcher.resume(files),
   };
   const server = createHttpServer(deps);
 

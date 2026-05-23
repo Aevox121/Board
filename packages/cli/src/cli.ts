@@ -37,6 +37,7 @@ import { cmdSearch } from './commands/search.js';
 import { cmdComment } from './commands/comment.js';
 import { cmdStyle } from './commands/style.js';
 import { runMcpServer } from './commands/mcp.js';
+import { cmdRestore, cmdSnapshot } from './commands/snapshot.js';
 import { runWatch } from './commands/watch.js';
 
 /** 命令处理函数签名。 */
@@ -60,6 +61,8 @@ const HANDLERS: Record<string, Handler> = {
   search: cmdSearch,
   comment: cmdComment,
   style: cmdStyle,
+  snapshot: cmdSnapshot,
+  restore: cmdRestore,
 };
 
 /** 已登记但尚未实现的命令（规格 §2，逐里程碑补全）。 */
@@ -67,8 +70,6 @@ const PLACEHOLDER_COMMANDS = [
   'open',
   'serve',
   'agent',
-  'snapshot',
-  'restore',
   'export',
   'import',
   'share',
@@ -127,6 +128,10 @@ function printHelp(): void {
   console.log('');
   console.log('已实现命令 (M4，需 board-server 在运行):');
   console.log('  watch [--region <名>] [--since <seq>]         订阅白板事件流（NDJSON）');
+  console.log('  snapshot create [--name "<名>"]               建一份存档点（PRD §8.5）');
+  console.log('  snapshot ls                                  列出存档点');
+  console.log('  snapshot rm <snapshotId>                     删除存档点');
+  console.log('  restore <snapshotId>                         复原到指定存档点');
   console.log('');
   console.log('占位命令 (尚未实现):');
   console.log('  ' + PLACEHOLDER_COMMANDS.join(', '));

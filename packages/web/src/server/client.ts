@@ -19,6 +19,7 @@ import {
   type BoardScene,
   type BoardMeta,
   type BoardTask,
+  type SnapshotIndexEntry,
   parseScene,
   parseMeta,
   serializeScene,
@@ -170,6 +171,65 @@ export async function fetchBoard(): Promise<BoardData> {
     : [];
 
   return { meta, scene, files, tasks };
+}
+
+// ───────────────────── 快照 / 复原（PRD §8.5）─────────────────────
+
+/** 列出当前所有存档点。 */
+export async function listSnapshots(): Promise<SnapshotIndexEntry[]> {
+  const res = await fetchWithTimeout('/snapshots');
+  const data = await readEnvelope<{ snapshots: SnapshotIndexEntry[] }>(
+    res,
+    'GET /api/snapshots',
+  );
+  return data.snapshots;
+}
+
+/** 建一份手动存档点（PRD §8.5）。 */
+export async function createSnapshot(
+  name: string | null,
+  actor = 'u_local',
+): Promise<SnapshotIndexEntry> {
+  const res = await fetchWithTimeout('/snapshots', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, actor }),
+  });
+  const data = await readEnvelope<{ snapshot: SnapshotIndexEntry }>(
+    res,
+    'POST /api/snapshots',
+  );
+  return data.snapshot;
+}
+
+/** 删除一份存档点。 */
+export async function deleteSnapshotApi(snapshotId: string): Promise<void> {
+  const res = await fetchWithTimeout(
+    `/snapshots/${encodeURIComponent(snapshotId)}`,
+    { method: 'DELETE' },
+  );
+  await readEnvelope<{ removed: string }>(
+    res,
+    `DELETE /api/snapshots/${snapshotId}`,
+  );
+}
+
+/** 一键复原 —— server 自动建 pre-restore 档后复原。返回 pre-restore id。 */
+export async function restoreSnapshot(
+  snapshotId: string,
+  actor = 'u_local',
+): Promise<{ preRestoreSnapshotId: string }> {
+  const res = await fetchWithTimeout(
+    `/snapshots/${encodeURIComponent(snapshotId)}/restore`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ actor }),
+    },
+  );
+  return await readEnvelope<{
+    preRestoreSnapshotId: string;
+  }>(res, `POST /api/snapshots/${snapshotId}/restore`);
 }
 
 /**

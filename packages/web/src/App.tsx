@@ -22,6 +22,7 @@ import { BoardProvider, useBoard } from './board/BoardContext';
 import { TopBar, type SaveState } from './components/TopBar';
 import { CanvasShell } from './canvas/CanvasShell';
 import { FolderPanel } from './components/FolderPanel';
+import { SnapshotPanel } from './components/SnapshotPanel';
 import { downloadBoardJSON, pickAndParseBoardJSON } from './board/boardFile';
 import { exportBoardImage } from './board/exportImage';
 import { BoardParseError } from '@board/core';
@@ -45,6 +46,7 @@ function BoardApp(): JSX.Element {
   const [saveState, setSaveState] = useState<SaveState>('idle');
   const [probing, setProbing] = useState(true);
   const [folderViewOpen, setFolderViewOpen] = useState(false);
+  const [snapshotViewOpen, setSnapshotViewOpen] = useState(false);
   const probedRef = useRef(false);
   const loadFromServerRef = useRef(loadFromServer);
   loadFromServerRef.current = loadFromServer;
@@ -154,9 +156,12 @@ function BoardApp(): JSX.Element {
         saveState={saveState}
         folderViewOpen={folderViewOpen}
         onToggleFolderView={() => setFolderViewOpen((v) => !v)}
+        snapshotViewOpen={snapshotViewOpen}
+        onToggleSnapshotView={() => setSnapshotViewOpen((v) => !v)}
       />
       <div className="app-body">
         {folderViewOpen && <FolderPanel />}
+        {snapshotViewOpen && <SnapshotPanel />}
         <CanvasShell />
       </div>
     </div>

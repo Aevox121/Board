@@ -1,0 +1,152 @@
+/**
+ * 存档点面板样式 —— PRD §8.5 / 线框图 §4，与 FolderPanel 同款暖色 UI。
+ */
+
+.sp {
+  flex: 0 0 280px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--c-surface);
+  border-right: 1px solid var(--c-border);
+  font-family: var(--font-ui);
+}
+
+.sp-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-3) var(--space-2);
+  border-bottom: 1px solid var(--c-border);
+}
+
+.sp-title {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--c-ink);
+}
+
+.sp-sub {
+  font-size: var(--text-xs);
+  color: var(--c-ink-3);
+}
+
+.sp-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-2);
+}
+
+.sp-empty {
+  padding: var(--space-3);
+  color: var(--c-ink-3);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+.sp-item {
+  padding: var(--space-2) var(--space-2);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-2);
+  background: var(--c-surface);
+  transition: border-color 120ms;
+}
+
+.sp-item:hover {
+  border-color: var(--c-accent);
+}
+
+.sp-item__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+}
+
+.sp-item__marker {
+  font-size: var(--text-sm);
+  color: var(--c-accent);
+}
+
+.sp-item__name {
+  flex: 1 1 auto;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--c-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sp-item__meta {
+  margin-top: 2px;
+  font-size: var(--text-xs);
+  color: var(--c-ink-3);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sp-dot {
+  color: var(--c-ink-3);
+}
+
+.sp-item__actions {
+  margin-top: var(--space-2);
+  display: flex;
+  gap: var(--space-1);
+  justify-content: flex-end;
+}
+
+.sp-foot {
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  border-top: 1px solid var(--c-border);
+}
+
+.sp-foot .btn {
+  width: 100%;
+}
+
+/* ── 复原确认弹窗 ───────────────────────────────────────── */
+.sp-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.22);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.sp-modal {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  min-width: 320px;
+  max-width: 400px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16);
+}
+
+.sp-modal__title {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--c-ink);
+  margin-bottom: var(--space-2);
+}
+
+.sp-modal__body {
+  font-size: var(--text-sm);
+  color: var(--c-ink-2, var(--c-ink-3));
+  margin-bottom: var(--space-3);
+  line-height: 1.5;
+}
+
+.sp-modal__actions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}

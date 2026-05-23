@@ -37,6 +37,10 @@ export interface TopBarProps {
   folderViewOpen: boolean;
   /** 切换文件结构面板。 */
   onToggleFolderView: () => void;
+  /** 存档点面板是否展开。 */
+  snapshotViewOpen: boolean;
+  /** 切换存档点面板。 */
+  onToggleSnapshotView: () => void;
 }
 
 /** 「保存」按钮在各状态下的文案。 */
@@ -60,6 +64,8 @@ export function TopBar({
   saveState,
   folderViewOpen,
   onToggleFolderView,
+  snapshotViewOpen,
+  onToggleSnapshotView,
 }: TopBarProps): JSX.Element {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(boardName);
@@ -135,6 +141,17 @@ export function TopBar({
           aria-pressed={folderViewOpen}
         >
           📁 文件结构
+        </button>
+
+        {/* 存档点面板开关（PRD §8.5） */}
+        <button
+          type="button"
+          className={`btn btn--secondary${snapshotViewOpen ? ' is-active' : ''}`}
+          onClick={onToggleSnapshotView}
+          title="存档点 / 一键复原（PRD §8.5）"
+          aria-pressed={snapshotViewOpen}
+        >
+          📜 存档
         </button>
       </div>
 

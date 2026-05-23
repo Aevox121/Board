@@ -51,6 +51,12 @@ import {
 } from '@board/core';
 import type { EventLog } from './events.js';
 import type { PresenceHub } from './presence.js';
+import {
+  createSnapshot,
+  deleteSnapshot,
+  listSnapshots,
+  restoreSnapshot,
+} from './snapshots.js';
 import type { SseHub } from './sse.js';
 import type { TaskStore } from './tasks.js';
 import type { YjsRoom } from './yjs-room.js';
@@ -95,8 +101,14 @@ export interface HttpDeps {
   ): void;
   /** Yjs 房间 —— 权威 Y.Doc，所有场景读写经此（M4 增量2）。 */
   room: YjsRoom;
-  /** 当前 meta —— index.ts 在启动时加载、运行期不变。 */
+  /** 当前 meta。 */
   getMeta(): BoardMeta;
+  /** 替换当前 meta（快照创建 / 删除 / 复原后调用 —— meta.snapshots 改变）。 */
+  setMeta(next: BoardMeta): void;
+  /** 暂停文件监听（快照复原期间整盘换 files/ 用）。 */
+  pauseWatcher(): void;
+  /** 恢复文件监听 + 把内存集合对齐到磁盘当前实际文件。 */
+  resumeWatcher(currentDiskFiles: string[]): void;
 }
 
 const HOST = '127.0.0.1';
@@ -1462,6 +1474,143 @@ function handleEventLog(deps: HttpDeps, res: ServerResponse, url: URL): void {
   ok(res, { events: list, cursor: deps.events.cursor() });
 }
 
+// ───────────────────── 快照 / 复原（PRD §8.5）─────────────────────
+
+/** GET /api/snapshots —— 列出当前所有存档点（从 meta 读）。 */
+async function handleListSnapshots(
+  deps: HttpDeps,
+  res: ServerResponse,
+): Promise<void> {
+  try {
+    const list = await listSnapshots(deps.dir);
+    ok(res, { snapshots: list });
+  } catch (err) {
+    fail(res, 500, `读取存档列表失败: ${errMsg(err)}`);
+  }
+}
+
+/** POST /api/snapshots —— 建一份新存档点（手动；可带名字）。 */
+async function handleCreateSnapshot(
+  deps: HttpDeps,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  let body: unknown = {};
+  try {
+    body = await readJsonBody(req);
+  } catch {
+    /* 允许空请求体 */
+  }
+  const rec = (body ?? {}) as Record<string, unknown>;
+  const name = typeof rec['name'] === 'string' ? rec['name'].trim() : null;
+  const actor =
+    typeof rec['actor'] === 'string' && rec['actor'] ? rec['actor'] : 'u_local';
+  try {
+    // 关停 Y.Doc 节流落盘，避免在我们刚 cp 完 board.json 后 server 立刻
+    // 把当前内存 Y.Doc 投影回来覆盖 —— 那样快照里的 board.json 就和
+    // 当前一致而非「拍下当时」。flushToDisk 强制把 pending 落盘后再 cp。
+    await deps.room.flushToDisk();
+    const result = await createSnapshot({ dir: deps.dir, name, actor, auto: false });
+    deps.setMeta(result.meta);
+    deps.emitEvent('snapshot.created', actor, { snapshotId: result.entry.id });
+    // 广播 board-changed，让 web 端 refetch /api/board 获取新 meta.snapshots
+    await deps.recordChange(actor);
+    ok(res, { snapshot: result.entry });
+  } catch (err) {
+    fail(res, 500, `创建存档失败: ${errMsg(err)}`);
+  }
+}
+
+/** DELETE /api/snapshots/<id> —— 删除一份存档（含磁盘目录 + meta 索引）。 */
+async function handleDeleteSnapshot(
+  deps: HttpDeps,
+  res: ServerResponse,
+  id: string,
+  actor: string,
+): Promise<void> {
+  if (!id) {
+    fail(res, 400, '缺少 snapshotId');
+    return;
+  }
+  try {
+    const result = await deleteSnapshot({ dir: deps.dir, snapshotId: id });
+    if (!result.removed) {
+      fail(res, 404, `未找到存档：${id}`);
+      return;
+    }
+    deps.setMeta(result.meta);
+    deps.emitEvent('snapshot.created', actor, { snapshotId: id, deleted: true });
+    await deps.recordChange(actor);
+    ok(res, { removed: id });
+  } catch (err) {
+    fail(res, 500, `删除存档失败: ${errMsg(err)}`);
+  }
+}
+
+/**
+ * POST /api/snapshots/<id>/restore —— 复原到一个存档点。
+ *
+ * 流程：flushToDisk → pauseWatcher → restoreSnapshot（自动建 pre 档 +
+ * 文件整盘换 + 覆盖 board.json / meta.json）→ room.mutate(scene) →
+ * setMeta → resumeWatcher → recordChange + 广播 board-changed。
+ */
+async function handleRestoreSnapshot(
+  deps: HttpDeps,
+  req: IncomingMessage,
+  res: ServerResponse,
+  id: string,
+): Promise<void> {
+  if (!id) {
+    fail(res, 400, '缺少 snapshotId');
+    return;
+  }
+  let body: unknown = {};
+  try {
+    body = await readJsonBody(req);
+  } catch {
+    /* 空请求体允许 */
+  }
+  const rec = (body ?? {}) as Record<string, unknown>;
+  const actor =
+    typeof rec['actor'] === 'string' && rec['actor'] ? rec['actor'] : 'u_local';
+  try {
+    // 落盘当前 Y.Doc → pre-restore 自动档拍的是「真实当前」
+    await deps.room.flushToDisk();
+    deps.pauseWatcher();
+    let result;
+    try {
+      result = await restoreSnapshot({
+        dir: deps.dir,
+        snapshotId: id,
+        actor,
+      });
+    } finally {
+      // 即便 restoreSnapshot 抛错，也要恢复 watcher（保 server 健康）
+      try {
+        deps.resumeWatcher(deps.getFiles());
+      } catch {
+        /* ignore */
+      }
+    }
+    // 把新场景写进 Y.Doc —— applySceneDiff 算出最小 op 集广播给所有 ws
+    deps.room.mutate(actor, () => result.scene);
+    deps.setMeta(result.meta);
+    // 对齐 watcher 的内存文件集合（restoreSnapshot 已整盘换 files/）
+    deps.resumeWatcher(result.files);
+    await deps.recordChange(actor);
+    deps.emitEvent('snapshot.restored', actor, {
+      snapshotId: id,
+      preRestoreSnapshotId: result.preRestoreSnapshotId,
+    });
+    ok(res, {
+      restored: id,
+      preRestoreSnapshotId: result.preRestoreSnapshotId,
+    });
+  } catch (err) {
+    fail(res, 500, `复原失败: ${errMsg(err)}`);
+  }
+}
+
 /** 轻量结构校验：判断一个值是否像 BoardScene。 */
 function isBoardScene(v: unknown): v is BoardScene {
   if (typeof v !== 'object' || v === null) return false;
@@ -1572,6 +1721,32 @@ async function route(
   // POST /api/refresh —— 外部写入后主动触发同步（事件流 + board-changed）
   if (path === '/api/refresh' && method === 'POST') {
     await handleRefresh(deps, req, res);
+    return;
+  }
+  // 快照 / 复原（PRD §8.5）—— ls / create / restore / delete
+  if (path === '/api/snapshots' && method === 'GET') {
+    await handleListSnapshots(deps, res);
+    return;
+  }
+  if (path === '/api/snapshots' && method === 'POST') {
+    await handleCreateSnapshot(deps, req, res);
+    return;
+  }
+  // POST /api/snapshots/<id>/restore
+  if (
+    path.startsWith('/api/snapshots/') &&
+    path.endsWith('/restore') &&
+    method === 'POST'
+  ) {
+    const id = path.slice('/api/snapshots/'.length, -'/restore'.length);
+    await handleRestoreSnapshot(deps, req, res, id);
+    return;
+  }
+  if (path.startsWith('/api/snapshots/') && method === 'DELETE') {
+    const id = path.slice('/api/snapshots/'.length);
+    // actor 由 query 或 default
+    const actorQ = url.searchParams.get('actor');
+    await handleDeleteSnapshot(deps, res, id, actorQ ?? 'u_local');
     return;
   }
   // POST /api/suggestions/<op> —— 建议机制三操作（M3，PRD §7.3）

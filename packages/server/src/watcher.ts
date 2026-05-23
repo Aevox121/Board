@@ -22,6 +22,11 @@ export interface FileChangeEvent {
 export interface BoardWatcher {
   /** 返回当前内存中的文件列表快照（已排序的相对路径数组）。 */
   getFiles(): string[];
+  /** 暂停事件分发（chokidar 仍在监听，但不回调 onChange）。
+   *  快照复原期间用 —— 整盘换 files/ 时不让 reconcile 拿到中间态。 */
+  pause(): void;
+  /** 恢复事件分发，并把暂停期间的文件集合状态对齐到磁盘当前实际状态。 */
+  resume(currentDiskFiles: string[]): void;
   /** 停止监听并释放资源。 */
   close(): Promise<void>;
 }
@@ -42,6 +47,8 @@ export function startWatcher(
 
   // 内存中的文件集合；用 Set 保证去重，对外返回时排序成数组
   const files = new Set<string>(initial);
+  // pause 期间事件不分发（不动 files 集合，避免影响 getFiles 一致性）
+  let paused = false;
 
   /** 把 chokidar 给出的绝对路径转成规范化的 files/ 相对路径。 */
   function toRelPath(absPath: string): string {
@@ -57,6 +64,7 @@ export function startWatcher(
 
   /** 处理一次文件增删改，更新内存列表并打印 + 回调。 */
   function handle(type: FileChangeType, absPath: string): void {
+    if (paused) return; // 复原等批量操作期间静默
     const rel = toRelPath(absPath);
     // 剔除规格 R7 的忽略项（.runtime/、隐藏文件、README.md 等）
     if (!rel || isIgnoredPath(rel)) return;
@@ -102,6 +110,13 @@ export function startWatcher(
 
   return {
     getFiles: () => [...files].sort(),
+    pause: () => { paused = true; },
+    resume: (currentDiskFiles: string[]) => {
+      // 把内存集合对齐到磁盘当前状态（暂停期间可能整盘换 files/）
+      files.clear();
+      for (const f of currentDiskFiles) files.add(f);
+      paused = false;
+    },
     close: () => watcher.close(),
   };
 }
