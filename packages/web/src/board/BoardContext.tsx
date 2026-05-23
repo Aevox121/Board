@@ -11,9 +11,12 @@
  * 连接模式 —— 当 yjs-client 连上且 HTTP /api/board 元数据已载入时为
  * 'connected'；任一未就绪则 'offline'。
  *
- * 撤销 / 重做（按 2026-05-23 决策「先单端」）：栈在 BoardContext 维护，
- * 每个浏览器 tab 各持一份；撤销时把旧场景经 diff 应用回 Y.Doc 同步给所有
- * 端。同一人多端不共享撤销栈、撤销可能覆盖其它端的并发改动 —— 已接受。
+ * 撤销 / 重做（PRD §8.5「每人独立 undo/redo」）：用 Y.UndoManager 接管。
+ * trackedOrigins 仅含 'local-edit' —— 撤销只回退**本地用户的本地操作**，
+ * 不动远端（其他人 / Agent 流式 / 服务端 reconcile）的并发改动。撤销栈
+ * 在 BoardContext 维护，每个浏览器 tab 各持一份（同一人多 tab 不共享，
+ * 但因 UndoManager 按 op 反向、不再整场景覆盖，多 tab 之间也不会互相
+ * 抹掉对方的改动）。
  */
 import {
   createContext,
@@ -46,8 +49,21 @@ export const LOCAL_USER_ID: ParticipantId = 'u_local';
 /** 连接模式。 */
 export type ConnectionMode = 'offline' | 'connected';
 
-/** 撤销 / 重做历史栈的最大深度。 */
-const HISTORY_CAP = 100;
+/**
+ * 本地编辑的 origin —— 经 Y.Doc.transact(..., LOCAL_EDIT_ORIGIN) 落入文档。
+ * UndoManager 仅追踪此 origin 的 op，保证 undo 不动远端并发改动。
+ */
+const LOCAL_EDIT_ORIGIN = 'local-edit';
+/** 非本地导入 / 重置场景的 origin —— 不入 undo（导入是新起点）。 */
+const LOCAL_IMPORT_ORIGIN = 'local-import';
+
+/**
+ * Y.UndoManager 把短时窗内的连续 op 合并为同一撤销组的窗口（毫秒）。
+ * 一次 replaceScene 已经是一个 transact —— 此值只影响多次快速 replaceScene
+ * 合并到一起的行为；500ms 与 Y 默认一致，足够把"拖动结束"和"立刻又一次微调"
+ * 合并，不至于让用户多按几下 Ctrl+Z。
+ */
+const UNDO_CAPTURE_MS = 500;
 
 export interface BoardContextValue {
   scene: BoardScene;
@@ -161,17 +177,47 @@ export function BoardProvider({
   }, [client]);
   const connection: ConnectionMode = wsStatus === 'connected' ? 'connected' : 'offline';
 
-  // 撤销 / 重做：场景快照栈（按你 2026-05-23 决策「先单端」）
-  const undoRef = useRef<BoardScene[]>([]);
-  const redoRef = useRef<BoardScene[]>([]);
-  const [histTick, setHistTick] = useState(0);
+  // 撤销 / 重做：Y.UndoManager（PRD §8.5）
+  //
+  // 只追踪本地 'local-edit' origin —— 远端 / Agent / server reconcile 的并发
+  // op 不进栈；undo 反向回放本地 op，不会动到别人的工作。
+  //
+  // typeScope = 'elements' map —— 不含 viewport（视口是局部状态，不应被撤销
+  // 反弹）；UndoManager 自动跟踪嵌套（每个元素自身的 Y.Map / 内嵌 Y.Text）。
+  const undoManagerRef = useRef<Y.UndoManager | null>(null);
+  if (undoManagerRef.current === null) {
+    undoManagerRef.current = new Y.UndoManager(
+      client.doc.getMap<Y.Map<unknown>>('elements'),
+      {
+        trackedOrigins: new Set([LOCAL_EDIT_ORIGIN]),
+        captureTimeout: UNDO_CAPTURE_MS,
+      },
+    );
+  }
+  const undoManager = undoManagerRef.current;
+  // canUndo / canRedo 由栈长度派生 —— 监 stack-item-added / popped / cleared。
+  const [stackSize, setStackSize] = useState<{ undo: number; redo: number }>({
+    undo: 0,
+    redo: 0,
+  });
+  useEffect(() => {
+    const refresh = (): void => {
+      setStackSize({
+        undo: undoManager.undoStack.length,
+        redo: undoManager.redoStack.length,
+      });
+    };
+    undoManager.on('stack-item-added', refresh);
+    undoManager.on('stack-item-popped', refresh);
+    undoManager.on('stack-cleared', refresh);
+    return () => {
+      undoManager.off('stack-item-added', refresh);
+      undoManager.off('stack-item-popped', refresh);
+      undoManager.off('stack-cleared', refresh);
+    };
+  }, [undoManager]);
 
-  // 远端改动经 Y.Doc 进来时（origin 不是 'local-edit'），不应进撤销栈，
-  // 也不应触发"导入"语义。但我们需要让 importTick 在元数据被替换时（如
-  // server 端 refresh）才自增。所以远端 Y.Doc 更新只刷场景、不动栈与 tick。
-  // 这里不需要额外 hook —— sceneCacheRef + useSyncExternalStore 已处理。
-
-  /** 内部：把新场景 diff 进 Y.Doc，origin 标记 'local-edit'。 */
+  /** 内部：把新场景 diff 进 Y.Doc。origin 决定是否进 UndoManager 栈。 */
   const applyToYDoc = useCallback(
     (next: BoardScene, origin: string): void => {
       const old = sceneCacheRef.current;
@@ -184,39 +230,31 @@ export function BoardProvider({
 
   const replaceScene = useCallback(
     (next: BoardScene, source: 'canvas' | 'import') => {
-      const cur = sceneCacheRef.current;
-      if (source === 'canvas') {
-        undoRef.current.push(cur);
-        if (undoRef.current.length > HISTORY_CAP) undoRef.current.shift();
-        redoRef.current = [];
-        setHistTick((t) => t + 1);
+      if (source === 'import') {
+        // 导入 = 新起点：先 clear undo 栈，再以非追踪 origin 落入。
+        undoManager.clear();
       }
-      applyToYDoc(next, source === 'import' ? 'local-import' : 'local-edit');
+      applyToYDoc(
+        next,
+        source === 'import' ? LOCAL_IMPORT_ORIGIN : LOCAL_EDIT_ORIGIN,
+      );
       setMeta((m) => ({ ...m, updatedAt: new Date().toISOString() }));
       if (source === 'import') {
         setImportState((s) => ({ tick: s.tick + 1, fit: true }));
       }
     },
-    [applyToYDoc],
+    [applyToYDoc, undoManager],
   );
 
   const undo = useCallback(() => {
-    const prev = undoRef.current.pop();
-    if (!prev) return;
-    redoRef.current.push(sceneCacheRef.current);
-    applyToYDoc(prev, 'local-undo');
+    undoManager.undo();
     setMeta((m) => ({ ...m, updatedAt: new Date().toISOString() }));
-    setHistTick((t) => t + 1);
-  }, [applyToYDoc]);
+  }, [undoManager]);
 
   const redo = useCallback(() => {
-    const next = redoRef.current.pop();
-    if (!next) return;
-    undoRef.current.push(sceneCacheRef.current);
-    applyToYDoc(next, 'local-redo');
+    undoManager.redo();
     setMeta((m) => ({ ...m, updatedAt: new Date().toISOString() }));
-    setHistTick((t) => t + 1);
-  }, [applyToYDoc]);
+  }, [undoManager]);
 
   const renameBoard = useCallback((name: string) => {
     setMeta((m) => ({ ...m, name, updatedAt: new Date().toISOString() }));
@@ -233,13 +271,12 @@ export function BoardProvider({
       setServerFiles(files);
       setTasks(nextTasks);
       if (mode === 'initial') {
-        undoRef.current = [];
-        redoRef.current = [];
-        setHistTick((t) => t + 1);
+        // 首次连入 server：清空 UndoManager 栈（避免上一会话遗留）。
+        undoManager.clear();
       }
       setImportState((s) => ({ tick: s.tick + 1, fit: mode === 'initial' }));
     },
-    [],
+    [undoManager],
   );
 
   const value = useMemo<BoardContextValue>(
@@ -257,8 +294,8 @@ export function BoardProvider({
       importFit: importState.fit,
       undo,
       redo,
-      canUndo: undoRef.current.length > 0,
-      canRedo: redoRef.current.length > 0,
+      canUndo: stackSize.undo > 0,
+      canRedo: stackSize.redo > 0,
       yDoc: client.doc,
     }),
     [
@@ -273,7 +310,7 @@ export function BoardProvider({
       importState,
       undo,
       redo,
-      histTick,
+      stackSize,
       client,
     ],
   );
