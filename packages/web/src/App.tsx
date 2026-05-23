@@ -53,6 +53,24 @@ function BoardApp(): JSX.Element {
   const loadFromServerRef = useRef(loadFromServer);
   loadFromServerRef.current = loadFromServer;
 
+  // ── 全局拦截 Ctrl/⌘+滚轮 —— 任何位置都不允许浏览器整体缩放 ───────
+  // 画布外（StylePanel / 工具栏 / 文件夹面板 / 浮层等）触发的 Ctrl+滚轮
+  // 默认会让浏览器整体放大缩小，破坏白板布局。这里在 window 捕获阶段一律
+  // preventDefault；画布层自己的 ctrl+wheel 缩放在 surface 上单独处理，
+  // preventDefault 不影响后续 listener 调用。
+  useEffect(() => {
+    const onGlobalWheel = (e: WheelEvent): void => {
+      if (e.ctrlKey || e.metaKey) e.preventDefault();
+    };
+    window.addEventListener('wheel', onGlobalWheel, {
+      capture: true,
+      passive: false,
+    });
+    return () => {
+      window.removeEventListener('wheel', onGlobalWheel, { capture: true });
+    };
+  }, []);
+
   // ── 启动时探测 board-server 元数据（场景由 yjs-client 经 ws 自动同步）──
   useEffect(() => {
     if (probedRef.current) return;

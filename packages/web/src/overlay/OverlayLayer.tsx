@@ -428,6 +428,8 @@ const MARQUEE_TYPES: ReadonlySet<string> = new Set([
   'text',
   'file',
   'folder',
+  'image',
+  'embed',
 ]);
 
 /**
@@ -674,6 +676,30 @@ interface CreatingState {
   /** freedraw 采样点（画布坐标）与逐点压感。 */
   points: Array<[number, number]>;
   pressures: number[];
+  /**
+   * Shift 是否按住 —— 创建形状 / 区域时把矩形约束为正方形（圆 / 菱形同步变正）。
+   * onCreateMove 每帧从 PointerEvent 读取，预览与提交都看这个标志。
+   */
+  shiftKey: boolean;
+}
+
+/**
+ * Shift 约束：把矩形的两边对齐到较长的一边，确保正方形 / 正圆 / 正菱形。
+ * 锚点用 `startX/startY` —— 矩形从起点向当前点伸展，约束后保持起点固定，
+ * 让另一边追上较长边的长度（方向跟着指针走）。
+ */
+function squareFromStart(
+  startX: number,
+  startY: number,
+  curX: number,
+  curY: number,
+): { startX: number; startY: number; curX: number; curY: number } {
+  const dx = curX - startX;
+  const dy = curY - startY;
+  const side = Math.max(Math.abs(dx), Math.abs(dy));
+  const sx = dx >= 0 ? 1 : -1;
+  const sy = dy >= 0 ? 1 : -1;
+  return { startX, startY, curX: startX + sx * side, curY: startY + sy * side };
 }
 
 /** 由两个对角点构造规范化矩形（画布坐标）。 */
@@ -805,6 +831,7 @@ function computeRotatedResize(
   r: ResizeState,
   dx: number,
   dy: number,
+  shiftKey: boolean,
 ): { x: number; y: number; w: number; h: number } {
   const cos = Math.cos(r.angle);
   const sin = Math.sin(r.angle);
@@ -827,6 +854,12 @@ function computeRotatedResize(
   else if (r.hy === -1) h = r.h0 - ldy;
   w = Math.max(w, r.minW);
   h = Math.max(h, r.minH);
+  // Shift 角手柄 —— 强制正方形（取大边、上调小边到等长）。
+  if (shiftKey && r.hx !== 0 && r.hy !== 0) {
+    const side = Math.max(w, h);
+    w = side;
+    h = side;
+  }
   // 新锚点本地偏移（相对新中心）→ 反推新中心，使锚点世界坐标不变。
   const nax = (-r.hx * w) / 2;
   const nay = (-r.hy * h) / 2;
@@ -839,9 +872,10 @@ function computeResize(
   r: ResizeState,
   dx: number,
   dy: number,
+  shiftKey: boolean,
 ): { x: number; y: number; w: number; h: number } {
   // 旋转元素 —— 走本地坐标系换算（内容边界 clamp 仅区域有，区域不旋转）。
-  if (r.angle) return computeRotatedResize(r, dx, dy);
+  if (r.angle) return computeRotatedResize(r, dx, dy, shiftKey);
   const left0 = r.x0;
   const right0 = r.x0 + r.w0;
   const top0 = r.y0;
@@ -871,6 +905,26 @@ function computeResize(
     const top = Math.min(top0 + dy, r.minTop, bottom0 - r.minH);
     y = top;
     h = bottom0 - top;
+  }
+
+  // Shift 角手柄 —— 强制正方形：取大边、对侧角作锚点不动。
+  if (shiftKey && r.hx !== 0 && r.hy !== 0) {
+    const side = Math.max(w, h);
+    // 锚点 = 与 (hx,hy) 相对的角；让另一对角线沿主轴方向延伸至 `side`。
+    if (r.hx === 1) {
+      x = left0;
+      w = side;
+    } else {
+      x = right0 - side;
+      w = side;
+    }
+    if (r.hy === 1) {
+      y = top0;
+      h = side;
+    } else {
+      y = bottom0 - side;
+      h = side;
+    }
   }
   return { x, y, w, h };
 }
@@ -909,8 +963,8 @@ function delMenuLabel(el: Element): string {
 /** 菜单项「整理」的文案，随作用域而变。 */
 function menuLabel(scope: MenuScope): string {
   if (scope.kind === 'region') return `整理「${scope.label}」`;
-  if (scope.kind === 'inbox') return '整理白板背景文件';
-  return `整理选中的 ${scope.fileIds.length} 个文件`;
+  if (scope.kind === 'inbox') return '整理白板背景卡片';
+  return `整理选中的 ${scope.fileIds.length} 张卡片`;
 }
 
 /**
@@ -984,10 +1038,19 @@ function CreationPreview({
       </div>
     );
   }
-  const x = Math.min(state.startX, state.curX);
-  const y = Math.min(state.startY, state.curY);
-  const w = Math.max(1, Math.abs(state.curX - state.startX));
-  const h = Math.max(1, Math.abs(state.curY - state.startY));
+  // Shift 按住 —— 把矩形约束为正方形（圆 / 菱形 / 区域同步变正）。
+  const shaped =
+    state.shiftKey &&
+    (state.tool === 'rectangle' ||
+      state.tool === 'ellipse' ||
+      state.tool === 'diamond' ||
+      state.tool === 'region')
+      ? squareFromStart(state.startX, state.startY, state.curX, state.curY)
+      : state;
+  const x = Math.min(shaped.startX, shaped.curX);
+  const y = Math.min(shaped.startY, shaped.curY);
+  const w = Math.max(1, Math.abs(shaped.curX - shaped.startX));
+  const h = Math.max(1, Math.abs(shaped.curY - shaped.startY));
   if (state.tool === 'region') {
     // 区域创建预览 —— 虚线矩形框。
     return (
@@ -1458,6 +1521,7 @@ export function OverlayLayer({
         curY: cy,
         points: tool === 'freedraw' ? [[cx, cy]] : [],
         pressures: tool === 'freedraw' ? [pressure || 0.5] : [],
+        shiftKey: false,
       };
       creatingRef.current = st;
       setCreating(st);
@@ -1466,7 +1530,12 @@ export function OverlayLayer({
       const st = creatingRef.current;
       if (!st || e.pointerId !== st.pointerId) return;
       const c = toCanvas(e.clientX, e.clientY);
-      const next: CreatingState = { ...st, curX: c.x, curY: c.y };
+      const next: CreatingState = {
+        ...st,
+        curX: c.x,
+        curY: c.y,
+        shiftKey: e.shiftKey,
+      };
       if (st.tool === 'freedraw') {
         next.points = [...st.points, [c.x, c.y]];
         next.pressures = [...st.pressures, e.pressure || 0.5];
@@ -1521,7 +1590,15 @@ export function OverlayLayer({
         const c = toCanvas(e.clientX, e.clientY);
         const box = normRect(p.startCX, p.startCY, c.x, c.y);
         const ids = sceneRef.current.elements
-          .filter((el) => el.type === 'file' && intersectionArea(box, el) > 0)
+          .filter(
+            (el) =>
+              (el.type === 'file' ||
+                el.type === 'text' ||
+                el.type === 'folder' ||
+                el.type === 'image' ||
+                el.type === 'embed') &&
+              intersectionArea(box, el) > 0,
+          )
           .map((el) => el.id);
         if (ids.length === 0) {
           setMarquee(null);
@@ -2788,10 +2865,14 @@ export function OverlayLayer({
       st.tool === 'ellipse' ||
       st.tool === 'diamond'
     ) {
-      let x = Math.min(st.startX, st.curX);
-      let y = Math.min(st.startY, st.curY);
-      let w = Math.abs(st.curX - st.startX);
-      let h = Math.abs(st.curY - st.startY);
+      // Shift 按住 —— 约束为正方形 / 正圆 / 正菱形（与 CreationPreview 同步）。
+      const s = st.shiftKey
+        ? squareFromStart(st.startX, st.startY, st.curX, st.curY)
+        : st;
+      let x = Math.min(s.startX, s.curX);
+      let y = Math.min(s.startY, s.curY);
+      let w = Math.abs(s.curX - s.startX);
+      let h = Math.abs(s.curY - s.startY);
       if (w < CREATE_MIN_DRAG && h < CREATE_MIN_DRAG) {
         // 点击而非拖拽 —— 用默认尺寸，以落点为左上角。
         x = st.startX;
@@ -2832,10 +2913,14 @@ export function OverlayLayer({
       });
     } else if (st.tool === 'region') {
       // 区域 —— 拖出矩形区域，弹名称输入后经 server 建文件夹 + 区域元素。
-      let x = Math.min(st.startX, st.curX);
-      let y = Math.min(st.startY, st.curY);
-      let w = Math.abs(st.curX - st.startX);
-      let h = Math.abs(st.curY - st.startY);
+      // Shift 按住 —— 约束为正方形（与 CreationPreview 同步）。
+      const s = st.shiftKey
+        ? squareFromStart(st.startX, st.startY, st.curX, st.curY)
+        : st;
+      let x = Math.min(s.startX, s.curX);
+      let y = Math.min(s.startY, s.curY);
+      let w = Math.abs(s.curX - s.startX);
+      let h = Math.abs(s.curY - s.startY);
       if (w < CREATE_MIN_DRAG && h < CREATE_MIN_DRAG) {
         x = st.startX;
         y = st.startY;
@@ -3487,11 +3572,12 @@ export function OverlayLayer({
 
   /** 缩放手柄移动 —— 按指针位移更新区域矩形（clamp 到内容边界）。 */
   function handleResizeMove(e: React.PointerEvent<HTMLDivElement>): void {
+    const shiftKey = e.shiftKey;
     setResize((r) => {
       if (!r || r.pointerId !== e.pointerId) return r;
       const dx = (e.clientX - r.startScreenX) / zoom;
       const dy = (e.clientY - r.startScreenY) / zoom;
-      return { ...r, ...computeResize(r, dx, dy) };
+      return { ...r, ...computeResize(r, dx, dy, shiftKey) };
     });
   }
 
@@ -3652,6 +3738,7 @@ export function OverlayLayer({
   function handleGroupResizeMove(
     e: React.PointerEvent<HTMLDivElement>,
   ): void {
+    const shiftKey = e.shiftKey;
     setGroupResize((r) => {
       if (!r || r.pointerId !== e.pointerId) return r;
       const dx = (e.clientX - r.startScreenX) / zoom;
@@ -3673,6 +3760,28 @@ export function OverlayLayer({
         const top = Math.min(r.by0 + dy, r.by0 + r.bh0 - GROUP_MIN);
         by = top;
         bh = r.by0 + r.bh0 - top;
+      }
+      // Shift 角手柄 —— 成组缩放强制保持原始宽高比，避免多选拖角时变形。
+      if (shiftKey && r.hx !== 0 && r.hy !== 0 && r.bw0 > 0 && r.bh0 > 0) {
+        const sx = bw / r.bw0;
+        const sy = bh / r.bh0;
+        const s = Math.max(sx, sy);
+        const newW = r.bw0 * s;
+        const newH = r.bh0 * s;
+        if (r.hx === 1) {
+          bx = r.bx0;
+          bw = newW;
+        } else {
+          bx = r.bx0 + r.bw0 - newW;
+          bw = newW;
+        }
+        if (r.hy === 1) {
+          by = r.by0;
+          bh = newH;
+        } else {
+          by = r.by0 + r.bh0 - newH;
+          bh = newH;
+        }
       }
       return { ...r, bx, by, bw, bh };
     });

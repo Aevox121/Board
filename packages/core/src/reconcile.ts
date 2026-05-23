@@ -233,7 +233,7 @@ export function growRegions(elements: Element[]): {
   return { elements: next, changed };
 }
 
-/** `arrangeScene` 的作用域选项 —— 不给则整理全部容器的全部文件。 */
+/** `arrangeScene` 的作用域选项 —— 不给则整理全部容器的全部卡片元素。 */
 export interface ArrangeOptions {
   /**
    * 限定只整理这些容器：传 region id，或 `null` 表示收件区。
@@ -241,10 +241,27 @@ export interface ArrangeOptions {
    */
   containers?: ReadonlyArray<string | null>;
   /**
-   * 限定只重排这些 file 元素 id；其余文件保持原位但计入碰撞占位。
-   * 不给 = 容器内全部文件参与重排。
+   * 限定只重排这些卡片元素 id（file/text/folder/image/embed）；
+   * 其余同容器卡片保持原位但计入碰撞占位。
+   * 不给 = 容器内全部卡片参与重排。
    */
   fileIds?: ReadonlySet<string>;
+}
+
+/**
+ * 「卡片型元素」—— 整理时按矩形网格落位的元素集合。
+ * file/text/folder/image/embed 均有内容矩形，可与文件卡同款网格排布。
+ * shape/draw/connector/region/suggestion 排除（自由图形 / 容器 / 协作元素）。
+ */
+const CARD_TYPES: ReadonlySet<Element['type']> = new Set<Element['type']>([
+  'file',
+  'text',
+  'folder',
+  'image',
+  'embed',
+]);
+function isCardElement(e: Element): boolean {
+  return CARD_TYPES.has(e.type);
 }
 
 /**
@@ -280,19 +297,18 @@ export function arrangeScene(
 
   const placed = new Map<string, { x: number; y: number }>();
   for (const container of containers) {
-    const files = scene.elements.filter(
-      (e): e is FileElement =>
-        e.type === 'file' && (e.parentId ?? null) === container.id,
+    const cards = scene.elements.filter(
+      (e) => isCardElement(e) && (e.parentId ?? null) === container.id,
     );
-    // 本次要重排的文件；不给 fileIds 则容器内全部参与。
-    const toMove = fileIds ? files.filter((f) => fileIds.has(f.id)) : files;
+    // 本次要重排的卡片；不给 fileIds 则容器内全部参与。
+    const toMove = fileIds ? cards.filter((f) => fileIds.has(f.id)) : cards;
     if (toMove.length === 0) continue;
-    // 占位：本容器内不重排的文件保持原位、计入碰撞规避。
+    // 占位：本容器内不重排的卡片保持原位、计入碰撞规避。
     const moveSet = new Set(toMove.map((f) => f.id));
-    const occupied: Rect[] = files
+    const occupied: Rect[] = cards
       .filter((f) => !moveSet.has(f.id))
       .map((f) => ({ x: f.x, y: f.y, width: f.width, height: f.height }));
-    // 待重排文件按当前位置排序，保留大致顺序。
+    // 待重排卡片按当前位置排序，保留大致顺序。
     const sorted = [...toMove].sort((a, b) => a.y - b.y || a.x - b.x);
     for (const f of sorted) {
       const size = { width: f.width, height: f.height };
