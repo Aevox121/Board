@@ -13,6 +13,7 @@ import {
   restoreSnapshot as apiRestore,
 } from '../server/client';
 import { ConfirmDialog } from './Dialog';
+import { toast } from './toast';
 import './SnapshotPanel.css';
 
 /** 把 ISO 时间串显示为人类可读的「今天 HH:MM / 昨天 HH:MM / YYYY-MM-DD HH:MM」。 */
@@ -87,7 +88,7 @@ export function SnapshotPanel(): JSX.Element {
       setCreating(false);
       setDraftName('');
     } catch (err) {
-      window.alert(
+      toast.error(
         `新建存档失败：${err instanceof Error ? err.message : String(err)}`,
       );
     } finally {
@@ -103,7 +104,7 @@ export function SnapshotPanel(): JSX.Element {
     try {
       await deleteSnapshotApi(id);
     } catch (err) {
-      window.alert(
+      toast.error(
         `删除存档失败：${err instanceof Error ? err.message : String(err)}`,
       );
     } finally {
@@ -119,7 +120,7 @@ export function SnapshotPanel(): JSX.Element {
     try {
       await apiRestore(id, actorId);
     } catch (err) {
-      window.alert(`复原失败：${err instanceof Error ? err.message : String(err)}`);
+      toast.error(`复原失败：${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setBusy(null);
     }

@@ -23,6 +23,8 @@ import { TopBar, type SaveState } from './components/TopBar';
 import { CanvasShell } from './canvas/CanvasShell';
 import { FolderPanel } from './components/FolderPanel';
 import { SnapshotPanel } from './components/SnapshotPanel';
+import { ToastContainer } from './components/ToastContainer';
+import { toast } from './components/toast';
 import { downloadBoardJSON, pickAndParseBoardJSON } from './board/boardFile';
 import { exportBoardImage } from './board/exportImage';
 import { BoardParseError } from '@board/core';
@@ -114,7 +116,7 @@ function BoardApp(): JSX.Element {
       try {
         await exportBoardImage(scene, format, safe);
       } catch (e) {
-        window.alert(`导出失败：${e instanceof Error ? e.message : String(e)}`);
+        toast.error(`导出失败：${e instanceof Error ? e.message : String(e)}`);
       }
     },
     [scene, meta.name],
@@ -129,8 +131,7 @@ function BoardApp(): JSX.Element {
     } catch (e) {
       const msg =
         e instanceof BoardParseError ? e.message : `导入失败：${String(e)}`;
-      // M1 用原生 alert 反馈错误；后续里程碑替换为外壳风格的 toast。
-      window.alert(msg);
+      toast.error(msg);
     }
   }, [replaceScene]);
 
@@ -164,6 +165,7 @@ function BoardApp(): JSX.Element {
         {snapshotViewOpen && <SnapshotPanel />}
         <CanvasShell />
       </div>
+      <ToastContainer />
     </div>
   );
 }

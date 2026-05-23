@@ -62,6 +62,7 @@ import { SuggestionCard } from './SuggestionCard';
 import { RegionCard, type PointerHandlers } from './RegionCard';
 import { RegionCreateDialog } from './RegionCreateDialog';
 import { ConfirmDialog, PromptDialog } from '../components/Dialog';
+import { toast } from '../components/toast';
 import { ConnectorLayer } from './ConnectorLayer';
 import { ResizeHandles, type ResizeApi } from './ResizeHandles';
 import { StylePanel } from './StylePanel';
@@ -2077,7 +2078,7 @@ export function OverlayLayer({
 
     if (el.type === 'file') {
       if (connection !== 'connected') {
-        window.alert('未连接 board-server，无法删除文件元素。');
+        toast.warn('未连接 board-server，无法删除文件元素。');
         return;
       }
       // 乐观更新：先本地移除 —— UI 即时反馈，且本地场景不再残留该元素，
@@ -2092,7 +2093,7 @@ export function OverlayLayer({
       } catch (err) {
         replaceScene(cur, 'canvas');
         const msg = err instanceof Error ? err.message : String(err);
-        window.alert(`删除失败：${msg}`);
+        toast.error(`删除失败：${msg}`);
       }
       return;
     }
@@ -2123,7 +2124,7 @@ export function OverlayLayer({
     clearSelection();
     if (regions.length > 0) {
       if (connection !== 'connected') {
-        window.alert('未连接 board-server，无法删除区域。');
+        toast.warn('未连接 board-server，无法删除区域。');
         return;
       }
       // 弹规范化确认对话框；确认后由 confirmRegionDelete 走完整删流程。
@@ -2150,7 +2151,7 @@ export function OverlayLayer({
     }
     if (working !== cur) replaceScene(working, 'canvas');
     if (files.length > 0 && !canDeleteFiles) {
-      window.alert('未连接 board-server，文件元素未删除。');
+      toast.warn('未连接 board-server，文件元素未删除。');
       return;
     }
     for (const f of files) {
@@ -2158,7 +2159,7 @@ export function OverlayLayer({
         await deleteElement(f.id);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        window.alert(`删除文件「${fileBaseName(f.path)}」失败：${msg}`);
+        toast.error(`删除文件「${fileBaseName(f.path)}」失败：${msg}`);
       }
     }
   }
@@ -2173,7 +2174,7 @@ export function OverlayLayer({
         await deleteElement(r.id);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        window.alert(`删除区域「${r.label}」失败：${msg}`);
+        toast.error(`删除区域「${r.label}」失败：${msg}`);
       }
     }
     await deleteNonRegionSet(pending.others);
@@ -2511,7 +2512,7 @@ export function OverlayLayer({
       // 失败：回滚到拖拽前场景并提示原因（如目标区域已有同名文件）。
       replaceScene(base, 'canvas');
       const msg = err instanceof Error ? err.message : String(err);
-      window.alert(`移动文件失败：${msg}`);
+      toast.error(`移动文件失败：${msg}`);
     }
   }
 
@@ -2544,7 +2545,7 @@ export function OverlayLayer({
 
     // 跨区域 —— 改变文件归属，须经 server 移动真实文件。
     if (connection !== 'connected') {
-      window.alert('未连接 board-server，无法改变文件归属。');
+      toast.warn('未连接 board-server，无法改变文件归属。');
       return;
     }
     const baseName = fileBaseName(el.path);
@@ -2598,7 +2599,7 @@ export function OverlayLayer({
         void reparentRegion(region.id, newParent, d.offsetX, d.offsetY);
         return;
       }
-      window.alert('未连接 board-server，区域归属未更新（仅本地平移）。');
+      toast.warn('未连接 board-server，区域归属未更新（仅本地平移）。');
     }
     // 归属不变（或离线）—— 区域 + 全部递归后代整体平移（含嵌套子区域
     // 及其内容；只收集直接子元素会把孙辈甩在原地）。
@@ -2621,10 +2622,10 @@ export function OverlayLayer({
       });
       const json = (await resp.json()) as { ok?: boolean; error?: string };
       if (!resp.ok || !json.ok) {
-        window.alert(`移动区域失败：${json.error ?? resp.status}`);
+        toast.error(`移动区域失败：${json.error ?? resp.status}`);
       }
     } catch (err) {
-      window.alert(
+      toast.error(
         `移动区域失败：${err instanceof Error ? err.message : String(err)}`,
       );
     }
@@ -2748,7 +2749,7 @@ export function OverlayLayer({
     // 4. 文件改变归属 —— 经 server 移动磁盘上的真实文件（SSE 刷回权威场景）。
     if (fileMoves.length > 0) {
       if (connection !== 'connected') {
-        window.alert('未连接 board-server，文件元素的归属未在磁盘上同步。');
+        toast.warn('未连接 board-server，文件元素的归属未在磁盘上同步。');
         return;
       }
       for (const { el, target } of fileMoves) {
@@ -2756,7 +2757,7 @@ export function OverlayLayer({
         const to = target ? `${target.path}/${baseName}` : baseName;
         void moveFile(el.path, to, el.x, el.y).catch((err) => {
           const msg = err instanceof Error ? err.message : String(err);
-          window.alert(`移动文件「${baseName}」失败：${msg}`);
+          toast.error(`移动文件「${baseName}」失败：${msg}`);
         });
       }
     }
@@ -3031,7 +3032,7 @@ export function OverlayLayer({
     description: string,
   ): Promise<void> {
     if (name.includes('/') || name.includes('\\') || name.includes('..')) {
-      window.alert('区域名不能包含路径分隔符或 ".."。');
+      toast.warn('区域名不能包含路径分隔符或 ".."。');
       return;
     }
     try {
@@ -3053,13 +3054,13 @@ export function OverlayLayer({
         error?: string;
       };
       if (!resp.ok || !json.ok) {
-        window.alert(`创建区域失败：${json.error ?? resp.status}`);
+        toast.error(`创建区域失败：${json.error ?? resp.status}`);
         return;
       }
       // 服务端已写 board.json + 广播；选中新区域（SSE 重载后该 id 即在场景中）。
       if (json.data?.elementId) selectOnly(json.data.elementId);
     } catch (err) {
-      window.alert(
+      toast.error(
         `创建区域失败：${err instanceof Error ? err.message : String(err)}`,
       );
     }
@@ -4782,7 +4783,7 @@ export function OverlayLayer({
               const c = viewportCenter();
               createEmbedAt(url, c.x, c.y);
             } else {
-              window.alert('不是有效的链接 URL。');
+              toast.warn('不是有效的链接 URL。');
             }
           }}
         />

@@ -20,6 +20,7 @@ import {
   describeSuggestion,
   rejectSuggestion,
 } from '../server/client';
+import { toast } from '../components/toast';
 
 export interface SuggestionCardProps {
   element: SuggestionElement;
@@ -57,7 +58,7 @@ export function SuggestionCard({ element }: SuggestionCardProps): JSX.Element {
       // 成功后 server 广播 board-changed → SSE 刷新；本卡片随场景更新/移除。
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      window.alert(`${what}失败：${msg}`);
+      toast.error(`${what}失败：${msg}`);
     } finally {
       setBusy(false);
     }

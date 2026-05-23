@@ -1,0 +1,134 @@
+/**
+ * Toast 样式 —— 右上角浮层，与 Dialog / RegionCreateDialog 同款 token /
+ * 同款配色（设计规范见 tokens.css）。
+ */
+
+.bd-toast-stack {
+  position: fixed;
+  top: 64px; /* 避开顶栏，约 56px topbar + 8px gap */
+  right: 16px;
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  pointer-events: none; /* 容器透传，单条 toast 自己开 pointer */
+}
+
+.bd-toast {
+  pointer-events: auto;
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 240px;
+  max-width: 360px;
+  padding: 10px 12px 10px 14px;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  color: var(--c-ink);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-left-width: 4px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  animation: bd-toast-in var(--dur-layout) var(--ease);
+}
+
+@keyframes bd-toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* ── 类型变体（左侧 4px 色条 + 图标色）─────────────────── */
+.bd-toast--error {
+  border-left-color: var(--c-danger);
+}
+.bd-toast--error .bd-toast__icon {
+  background: var(--c-danger);
+}
+
+.bd-toast--warn {
+  border-left-color: var(--c-warning);
+}
+.bd-toast--warn .bd-toast__icon {
+  background: var(--c-warning);
+}
+
+.bd-toast--info {
+  border-left-color: var(--c-info);
+}
+.bd-toast--info .bd-toast__icon {
+  background: var(--c-info);
+}
+
+.bd-toast--success {
+  border-left-color: var(--c-success);
+}
+.bd-toast--success .bd-toast__icon {
+  background: var(--c-success);
+}
+
+/* ── 图标圆点（类型色背景 + 白色字符）─────────────────── */
+.bd-toast__icon {
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+  border-radius: 50%;
+}
+
+.bd-toast__text {
+  flex: 1 1 auto;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.bd-toast__count {
+  flex: 0 0 auto;
+  align-self: center;
+  margin-left: var(--space-1);
+  padding: 1px 6px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--c-ink-2);
+  background: var(--c-surface-sunken);
+  border-radius: var(--radius-pill);
+}
+
+.bd-toast__close {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  margin: -2px -4px 0 var(--space-1);
+  padding: 4px 6px;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--c-ink-3);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--dur-micro) var(--ease);
+}
+
+.bd-toast__close:hover {
+  color: var(--c-ink);
+  background: var(--c-surface-sunken);
+}
+
+.bd-toast__close:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
