@@ -41,6 +41,9 @@ import { cmdRestore, cmdSnapshot } from './commands/snapshot.js';
 import { cmdShare } from './commands/share.js';
 import { cmdText } from './commands/text.js';
 import { runWatch } from './commands/watch.js';
+import { cmdExport } from './commands/export.js';
+import { cmdImport } from './commands/import.js';
+import { cmdServe } from './commands/serve.js';
 
 /** 命令处理函数签名。 */
 type Handler = (args: ParsedArgs) => Promise<CmdResult>;
@@ -67,15 +70,15 @@ const HANDLERS: Record<string, Handler> = {
   restore: cmdRestore,
   share: cmdShare,
   text: cmdText,
+  export: cmdExport,
+  import: cmdImport,
+  serve: cmdServe,
 };
 
 /** 已登记但尚未实现的命令（规格 §2，逐里程碑补全）。 */
 const PLACEHOLDER_COMMANDS = [
   'open',
-  'serve',
   'agent',
-  'export',
-  'import',
   'sync',
 ] as const;
 
@@ -138,6 +141,11 @@ function printHelp(): void {
   console.log('  share <路径> [--host <host>] [--port <port>] 生成可分享的白板链接（PRD §4.2）');
   console.log('  text create [--region <名>] [--at x,y] [--size w,h] [--markdown "<初始>"]  开空文本卡（流式起手）');
   console.log('  text append <elementId> "<chunk>" [--line N]  追加 markdown（字符级 CRDT，浏览器看到打字 + Agent 光标）');
+  console.log('');
+  console.log('已实现命令 (打包 / 导入 / 起服务):');
+  console.log('  export <路径> [--json|--zip] [--out <文件>]   导出白板 JSON / zip（spec §2.6；--png/--svg/--html 暂未实现）');
+  console.log('  import <zip 路径> [--name <名>] [--dir <父>]  从 zip 还原一个 .board');
+  console.log('  serve <路径> [<路径>...] [--port <n>] [--host <addr>]  启动 board-server（多 .board 列出即中继）');
   console.log('');
   console.log('占位命令 (尚未实现):');
   console.log('  ' + PLACEHOLDER_COMMANDS.join(', '));
