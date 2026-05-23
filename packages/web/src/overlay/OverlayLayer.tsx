@@ -3670,30 +3670,33 @@ export function OverlayLayer({
     const rect: RectLike = { x: c.x, y: c.y, width: c.w, height: c.h };
     const snap = snapResize(rect, r.hx, r.hy, refs, SNAP_THRESHOLD_PX / zoom);
     let { x, y, w, h } = c;
+    // 内容边界约束方向 —— 与 computeResize 对齐：
+    //  maxRight / maxBottom 是「右 / 下边」的**下界**（防止区域压住子元素）；
+    //  minLeft  / minTop    是「左 / 上边」的**上界**。
+    //  无子元素时 maxRight/maxBottom = -Infinity（被 Math.max 自然忽略），
+    //  minLeft / minTop = +Infinity（被 Math.min 自然忽略）。
+    //  之前写成 Math.min(r.maxRight - x, ...) / Math.max(r.minLeft, ...) 是
+    //  方向反了 —— 非区域元素被压成 minW 宽 / -Infinity 宽，导致白屏。
     if (snap.dx !== 0) {
       if (r.hx === 1) {
-        // 右边动：宽度 += dx，限制最大右界 / 最小宽。
-        w = Math.max(r.minW, Math.min(r.maxRight - x, w + snap.dx));
+        // 右边动：right = max(old + dx, maxRight, x + minW)。
+        const newRight = Math.max(x + w + snap.dx, r.maxRight, x + r.minW);
+        w = newRight - x;
       } else if (r.hx === -1) {
-        // 左边动：保持右界不动，左界右推。
+        // 左边动：保持右界，left = min(x + dx, minLeft, right - minW)。
         const right = x + w;
-        const newLeft = Math.max(
-          r.minLeft,
-          Math.min(right - r.minW, x + snap.dx),
-        );
+        const newLeft = Math.min(x + snap.dx, r.minLeft, right - r.minW);
         x = newLeft;
         w = right - newLeft;
       }
     }
     if (snap.dy !== 0) {
       if (r.hy === 1) {
-        h = Math.max(r.minH, Math.min(r.maxBottom - y, h + snap.dy));
+        const newBottom = Math.max(y + h + snap.dy, r.maxBottom, y + r.minH);
+        h = newBottom - y;
       } else if (r.hy === -1) {
         const bottom = y + h;
-        const newTop = Math.max(
-          r.minTop,
-          Math.min(bottom - r.minH, y + snap.dy),
-        );
+        const newTop = Math.min(y + snap.dy, r.minTop, bottom - r.minH);
         y = newTop;
         h = bottom - newTop;
       }

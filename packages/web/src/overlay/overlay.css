@@ -71,6 +71,9 @@
 .ov-image {
   width: 100%;
   height: 100%;
+  /* 拖动 / 框选时禁用浏览器原生选中态（防止图片上出现蓝色选择高亮）。 */
+  user-select: none;
+  -webkit-user-select: none;
 }
 .ov-image__img {
   width: 100%;
@@ -84,6 +87,12 @@
     var(--ov-stroke, transparent);
   box-sizing: border-box;
   background: var(--ov-fill, transparent);
+  /* 禁用浏览器原生图片拖拽（与 ImageView 的 draggable={false} 同步）+
+     某些浏览器对 <img> 的隐式 selectable 行为。 */
+  -webkit-user-drag: none;
+  user-select: none;
+  -webkit-user-select: none;
+  pointer-events: none;
 }
 .ov-image__missing {
   display: flex;
@@ -111,6 +120,9 @@
     var(--ov-stroke-style, solid)
     var(--ov-stroke, var(--c-border, #d8cfc2));
   border-radius: 8px;
+  /* 拖动 / 框选时禁用浏览器原生文本选中（host / url 行不被高亮）。 */
+  user-select: none;
+  -webkit-user-select: none;
 }
 .ov-embed--card {
   display: flex;
