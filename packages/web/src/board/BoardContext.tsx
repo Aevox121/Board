@@ -91,6 +91,13 @@ export interface BoardContextValue {
   /** 「导入版本号」—— 用户导入 / 首次连接时自增，让 CanvasShell 聚焦视野。 */
   importTick: number;
   importFit: boolean;
+  /**
+   * 「导航请求」—— OutlinePanel / 搜索结果等任意 UI 请求把视口跳到某元素。
+   * 自增 tick + 设 target id；CanvasShell 监听 tick 变化即把视口居中到该元素。
+   */
+  navTick: number;
+  navTargetId: string | null;
+  requestNavigateToElement: (elementId: string) => void;
   undo: () => void;
   redo: () => void;
   canUndo: boolean;
@@ -167,6 +174,10 @@ export function BoardProvider({
   const [importState, setImportState] = useState<{ tick: number; fit: boolean }>(
     { tick: 0, fit: false },
   );
+  const [navState, setNavState] = useState<{
+    tick: number;
+    targetId: string | null;
+  }>({ tick: 0, targetId: null });
   const [serverFiles, setServerFiles] = useState<string[]>([]);
   const [tasks, setTasks] = useState<BoardTask[]>([]);
 
@@ -260,6 +271,10 @@ export function BoardProvider({
     setMeta((m) => ({ ...m, name, updatedAt: new Date().toISOString() }));
   }, []);
 
+  const requestNavigateToElement = useCallback((elementId: string) => {
+    setNavState((s) => ({ tick: s.tick + 1, targetId: elementId }));
+  }, []);
+
   const loadFromServer = useCallback(
     (
       nextMeta: BoardMeta,
@@ -292,6 +307,9 @@ export function BoardProvider({
       loadFromServer,
       importTick: importState.tick,
       importFit: importState.fit,
+      navTick: navState.tick,
+      navTargetId: navState.targetId,
+      requestNavigateToElement,
       undo,
       redo,
       canUndo: stackSize.undo > 0,
@@ -308,6 +326,8 @@ export function BoardProvider({
       renameBoard,
       loadFromServer,
       importState,
+      navState,
+      requestNavigateToElement,
       undo,
       redo,
       stackSize,

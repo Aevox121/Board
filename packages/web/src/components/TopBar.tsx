@@ -37,6 +37,10 @@ export interface TopBarProps {
   folderViewOpen: boolean;
   /** 切换文件结构面板。 */
   onToggleFolderView: () => void;
+  /** 大纲 / 搜索面板是否展开。 */
+  outlineViewOpen: boolean;
+  /** 切换大纲 / 搜索面板。 */
+  onToggleOutlineView: () => void;
   /** 存档点面板是否展开。 */
   snapshotViewOpen: boolean;
   /** 切换存档点面板。 */
@@ -64,6 +68,8 @@ export function TopBar({
   saveState,
   folderViewOpen,
   onToggleFolderView,
+  outlineViewOpen,
+  onToggleOutlineView,
   snapshotViewOpen,
   onToggleSnapshotView,
 }: TopBarProps): JSX.Element {
@@ -131,6 +137,17 @@ export function TopBar({
           </button>
         )}
         <span className="topbar__meta">{elementCount} 个元素</span>
+
+        {/* 大纲 / 搜索面板开关（PRD §6.8） */}
+        <button
+          type="button"
+          className={`btn btn--secondary${outlineViewOpen ? ' is-active' : ''}`}
+          onClick={onToggleOutlineView}
+          title="大纲 / 全局搜索（区域 → 卡片，按字段过滤）"
+          aria-pressed={outlineViewOpen}
+        >
+          🗂 大纲 / 搜索
+        </button>
 
         {/* 文件结构面板开关 */}
         <button

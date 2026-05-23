@@ -32,8 +32,17 @@ const ZOOM_STEP = 1.2;
 
 /** 画布外壳。 */
 export function CanvasShell(): JSX.Element {
-  const { scene, importTick, importFit, undo, redo, canUndo, canRedo } =
-    useBoard();
+  const {
+    scene,
+    importTick,
+    importFit,
+    navTick,
+    navTargetId,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+  } = useBoard();
   // 视口真相源。
   const [viewport, setViewport] = useState<CanvasViewport>(INITIAL_VIEWPORT);
   // 当前工具 —— 由工具栏选择，覆盖层据此进入创建 / 连线 / 橡皮擦模式。
@@ -58,6 +67,27 @@ export function CanvasShell(): JSX.Element {
     const r = el.getBoundingClientRect();
     setViewport(fitToContent(scene.elements, r.width, r.height));
   }, [importTick, importFit, scene]);
+
+  // 「导航请求」—— OutlinePanel / 搜索结果点击元素时把视口居中到该元素。
+  // navTick 每次自增即响应一次（同一元素可重复跳转）。
+  const navTickRef = useRef(0);
+  useEffect(() => {
+    if (navTick === 0 || navTick === navTickRef.current) return;
+    navTickRef.current = navTick;
+    if (!navTargetId) return;
+    const target = scene.elements.find((e) => e.id === navTargetId);
+    if (!target) return;
+    const sh = shellRef.current;
+    if (!sh) return;
+    const r = sh.getBoundingClientRect();
+    const cx = target.x + target.width / 2;
+    const cy = target.y + target.height / 2;
+    setViewport((vp) => ({
+      scrollX: r.width / 2 / vp.zoom - cx,
+      scrollY: r.height / 2 / vp.zoom - cy,
+      zoom: vp.zoom,
+    }));
+  }, [navTick, navTargetId, scene]);
 
   // 撤销 / 重做快捷键 —— Ctrl/⌘+Z 撤销，Ctrl/⌘+Shift+Z 或 Ctrl/⌘+Y 重做。
   useEffect(() => {

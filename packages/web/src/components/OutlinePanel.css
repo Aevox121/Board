@@ -1,0 +1,159 @@
+/**
+ * 大纲面板样式 —— 与 FolderPanel 同形（左侧 280px 抽屉）。
+ *
+ * 视觉:
+ *  - 暖色底纸感（与白板同色系），柔和边框；
+ *  - 搜索框上下贴边，输入即时过滤；
+ *  - 命中行陶土橙左边条提示；
+ *  - 区域 / 卡片节点用不同图标 + 字号区分。
+ */
+.op-panel {
+  display: flex;
+  flex-direction: column;
+  width: 280px;
+  height: 100%;
+  background: var(--c-surface, #fff);
+  border-right: 1px solid var(--c-border, #d8cfc2);
+  color: var(--c-text, #3a342c);
+  overflow: hidden;
+}
+
+.op-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--c-border, #d8cfc2);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-ink, #3a342c);
+  background: var(--c-surface-2, #f4efe6);
+}
+.op-title {
+  flex: 1;
+}
+.op-stat {
+  font-size: 11px;
+  color: var(--c-text-dim, #9b8e80);
+  font-weight: 400;
+}
+
+.op-search {
+  display: flex;
+  align-items: center;
+  padding: 8px 10px;
+  gap: 6px;
+  border-bottom: 1px solid var(--c-border, #d8cfc2);
+}
+.op-search__input {
+  flex: 1;
+  font-size: 12px;
+  padding: 6px 10px;
+  border: 1px solid var(--c-border, #d8cfc2);
+  border-radius: 6px;
+  background: var(--c-surface, #fff);
+  color: var(--c-text, #3a342c);
+  outline: none;
+  transition: border-color 100ms;
+}
+.op-search__input:focus {
+  border-color: var(--c-accent, #d97757);
+}
+.op-search__clear {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  font-size: 16px;
+  line-height: 1;
+  border: 1px solid var(--c-border, #d8cfc2);
+  border-radius: 4px;
+  background: var(--c-surface, #fff);
+  color: var(--c-text-dim, #9b8e80);
+  cursor: pointer;
+}
+.op-search__clear:hover {
+  color: var(--c-ink, #3a342c);
+  border-color: var(--c-ink, #3a342c);
+}
+
+.op-tree {
+  flex: 1;
+  overflow: auto;
+  padding: 6px 0;
+}
+.op-empty {
+  padding: 24px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--c-text-dim, #9b8e80);
+}
+
+.op-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px 4px 0;
+  font-size: 12.5px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  white-space: nowrap;
+}
+.op-row:hover {
+  background: var(--c-surface-2, #f4efe6);
+}
+.op-row--region {
+  font-weight: 500;
+}
+.op-row--card {
+  color: var(--c-text, #3a342c);
+}
+.op-row--hit {
+  border-left-color: var(--c-accent, #d97757);
+  background: rgba(217, 119, 87, 0.06);
+}
+.op-row--card-suggestion {
+  font-style: italic;
+  color: var(--c-text-dim, #9b8e80);
+}
+
+.op-caret {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  color: var(--c-text-dim, #9b8e80);
+  font-size: 10px;
+}
+.op-caret--leaf {
+  opacity: 0.4;
+}
+.op-glyph {
+  flex: none;
+  width: 18px;
+  text-align: center;
+  font-size: 13px;
+}
+.op-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.op-jump {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--c-text-dim, #9b8e80);
+  font-size: 13px;
+  cursor: pointer;
+}
+.op-row:hover .op-jump {
+  color: var(--c-ink, #3a342c);
+  border-color: var(--c-border, #d8cfc2);
+}
+.op-jump:hover {
+  background: var(--c-accent, #d97757);
+  color: #fff;
+  border-color: var(--c-accent, #d97757);
+}

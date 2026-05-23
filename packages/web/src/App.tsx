@@ -22,6 +22,7 @@ import { BoardProvider, useBoard } from './board/BoardContext';
 import { TopBar, type SaveState } from './components/TopBar';
 import { CanvasShell } from './canvas/CanvasShell';
 import { FolderPanel } from './components/FolderPanel';
+import { OutlinePanel } from './components/OutlinePanel';
 import { SnapshotPanel } from './components/SnapshotPanel';
 import { ToastContainer } from './components/ToastContainer';
 import { toast } from './components/toast';
@@ -48,6 +49,7 @@ function BoardApp(): JSX.Element {
   const [saveState, setSaveState] = useState<SaveState>('idle');
   const [probing, setProbing] = useState(true);
   const [folderViewOpen, setFolderViewOpen] = useState(false);
+  const [outlineViewOpen, setOutlineViewOpen] = useState(false);
   const [snapshotViewOpen, setSnapshotViewOpen] = useState(false);
   const probedRef = useRef(false);
   const loadFromServerRef = useRef(loadFromServer);
@@ -175,10 +177,13 @@ function BoardApp(): JSX.Element {
         saveState={saveState}
         folderViewOpen={folderViewOpen}
         onToggleFolderView={() => setFolderViewOpen((v) => !v)}
+        outlineViewOpen={outlineViewOpen}
+        onToggleOutlineView={() => setOutlineViewOpen((v) => !v)}
         snapshotViewOpen={snapshotViewOpen}
         onToggleSnapshotView={() => setSnapshotViewOpen((v) => !v)}
       />
       <div className="app-body">
+        {outlineViewOpen && <OutlinePanel />}
         {folderViewOpen && <FolderPanel />}
         {snapshotViewOpen && <SnapshotPanel />}
         <CanvasShell />
