@@ -13,7 +13,7 @@
  *
  * `highlighted`：拖拽文件卡悬停到本区域上方时为 true —— 高亮边框提示落点。
  */
-import type { CSSProperties, PointerEventHandler } from 'react';
+import type { CSSProperties, MouseEventHandler, PointerEventHandler } from 'react';
 import type { Participant, RegionElement } from '@board/core';
 import { cardRotation } from './util';
 import { OwnerBadge } from './OwnerBadge';
@@ -24,6 +24,8 @@ export interface PointerHandlers {
   onPointerMove: PointerEventHandler<HTMLDivElement>;
   onPointerUp: PointerEventHandler<HTMLDivElement>;
   onPointerCancel: PointerEventHandler<HTMLDivElement>;
+  /** 双击 —— 编辑 label/description 入口（PRD §6.6）。锁定区域时省略。 */
+  onDoubleClick?: MouseEventHandler<HTMLDivElement>;
 }
 
 export interface RegionCardProps {

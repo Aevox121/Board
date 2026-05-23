@@ -1,8 +1,11 @@
 /**
- * 新建区域弹窗 —— 拖出区域矩形后，在该区域中心浮出的创建表单。
+ * 区域弹窗 —— 新建（无 initial 值）/ 编辑（带 initial 值）共用。
  *
  * 含「名称」（必填）与「描述」（选填）两栏。名称即 `files/` 下的文件夹名。
  * Enter 提交、Esc 取消；点遮罩取消。屏幕定位（不随画布缩放）。
+ *
+ * 编辑模式（PRD §6.6）：双击区域头部打开，名称 / 描述预填当前值，
+ * 提交即 patch 元素 label + description；不重命名文件夹（仅 label 变）。
  */
 import { useEffect, useRef, useState } from 'react';
 
@@ -14,6 +17,13 @@ export interface RegionCreateDialogProps {
   onSubmit: (name: string, description: string) => void;
   /** 取消。 */
   onCancel: () => void;
+  /** 编辑模式：名称 / 描述初值；不传则按「新建」处理。 */
+  initialName?: string;
+  initialDescription?: string;
+  /** 标题文案；缺省 = "新建区域"。 */
+  title?: string;
+  /** 主按钮文案；缺省 = "创建"。 */
+  submitLabel?: string;
 }
 
 export function RegionCreateDialog({
@@ -21,9 +31,13 @@ export function RegionCreateDialog({
   screenY,
   onSubmit,
   onCancel,
+  initialName,
+  initialDescription,
+  title,
+  submitLabel,
 }: RegionCreateDialogProps): JSX.Element {
-  const [name, setName] = useState('');
-  const [desc, setDesc] = useState('');
+  const [name, setName] = useState(initialName ?? '');
+  const [desc, setDesc] = useState(initialDescription ?? '');
   const nameRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -47,7 +61,7 @@ export function RegionCreateDialog({
         style={{ left: `${screenX}px`, top: `${screenY}px` }}
         onPointerDown={(e) => e.stopPropagation()}
       >
-        <div className="ov-region-dialog__title">新建区域</div>
+        <div className="ov-region-dialog__title">{title ?? '新建区域'}</div>
 
         <label className="ov-region-dialog__label" htmlFor="ov-region-name">
           名称
@@ -106,7 +120,7 @@ export function RegionCreateDialog({
             onClick={submit}
             disabled={name.trim() === ''}
           >
-            创建
+            {submitLabel ?? '创建'}
           </button>
         </div>
       </div>

@@ -1180,6 +1180,12 @@ export function OverlayLayer({
   // 正在就地编辑标签的图形 id —— 双击图形进入；null = 无。双击事件经指针
   // 捕获落在卡槽上，故由卡槽 onDoubleClick 触发、状态提到本层。
   const [editingLabelId, setEditingLabelId] = useState<string | null>(null);
+  // 正在就地编辑正文的文本卡 id —— 双击文本卡进入；null = 无。
+  // 同样由卡槽 onDoubleClick 触发（slot 抢占 pointer capture 后，内层 body 的
+  // dblclick 不再可达），状态提到本层、传 TextCard 受控渲染。
+  const [editingTextId, setEditingTextId] = useState<string | null>(null);
+  // 正在编辑 label / description 的区域 id —— 双击区域头部打开编辑弹窗（PRD §6.6）。
+  const [editingRegionId, setEditingRegionId] = useState<string | null>(null);
   const [resize, setResize] = useState<ResizeState | null>(null);
   // 旋转瞬时状态；null = 未在旋转。
   const [rotate, setRotate] = useState<RotateState | null>(null);
@@ -1368,6 +1374,8 @@ export function OverlayLayer({
       if (resize && resize.elementId === el.id) return true;
       if (rotate && rotate.elementId === el.id) return true;
       if (editingLabelId === el.id) return true;
+      if (editingTextId === el.id) return true;
+      if (editingRegionId === el.id) return true;
       // 轴对齐包围盒与视口盒相交即保留。
       return !(
         el.x + el.width < vx ||
@@ -1387,6 +1395,8 @@ export function OverlayLayer({
     resize,
     rotate,
     editingLabelId,
+    editingTextId,
+    editingRegionId,
   ]);
 
   // 手绘元素的命中裁剪 path —— id → `path('<轮廓>')`，供卡槽 clip-path 把
@@ -4669,6 +4679,11 @@ export function OverlayLayer({
               onPointerMove: handlePointerMove,
               onPointerUp: handlePointerUp,
               onPointerCancel: handlePointerCancel,
+              // 双击区域头部 —— 进编辑 label/description 弹窗（PRD §6.6）。
+              // 锁定区域不可编辑。
+              onDoubleClick: region.locked
+                ? undefined
+                : () => setEditingRegionId(region.id),
             };
           }
           // 八向缩放 API —— 文件 / 文本 / 文件夹 / 区域所有内容卡通用。
@@ -4725,11 +4740,18 @@ export function OverlayLayer({
                     beginDrag(e, el, dragKind);
                   }
                 };
-          // 双击图形 —— 进入标签就地编辑。锁定元素不可编辑。
-          const slotDoubleClick =
-            isShape && !el.locked
+          // 双击 —— 锁定元素不可编辑。
+          //   图形 → 标签就地编辑（editingLabelId）
+          //   文本 → 正文就地编辑（editingTextId）—— slot 抢占 pointer
+          //          capture 后内层 body 的 dblclick 不再可达，必须由 slot
+          //          承接才能进编辑态。
+          const slotDoubleClick = el.locked
+            ? undefined
+            : isShape
               ? (): void => setEditingLabelId(el.id)
-              : undefined;
+              : isText
+                ? (): void => setEditingTextId(el.id)
+                : undefined;
 
           return (
             <div
@@ -4770,6 +4792,10 @@ export function OverlayLayer({
                   element={el}
                   onCommit={(md) => commitTextMarkdown(el.id, md)}
                   onResize={(h) => resizeTextElement(el.id, h)}
+                  editing={editingTextId === el.id}
+                  onEditingChange={(next) =>
+                    setEditingTextId(next ? el.id : null)
+                  }
                 />
               ) : el.type === 'shape' ? (
                 <ShapeView
@@ -5178,6 +5204,46 @@ export function OverlayLayer({
           onCancel={() => setRegionDraft(null)}
         />
       ) : null}
+      {/* 编辑区域弹窗（PRD §6.6）—— 双击区域头部打开，预填当前 label/description。
+          只 patch 元素字段；不重命名 files/ 文件夹（label 与文件夹名解耦后只
+          影响 UI 显示，文件夹路径稳定）。 */}
+      {editingRegionId
+        ? (() => {
+            const target = sceneRef.current.elements.find(
+              (e) => e.id === editingRegionId && e.type === 'region',
+            ) as RegionElement | undefined;
+            if (!target) return null;
+            return (
+              <RegionCreateDialog
+                screenX={(target.x + target.width / 2 + scrollX) * zoom}
+                screenY={(target.y + target.height / 2 + scrollY) * zoom}
+                title="编辑区域"
+                submitLabel="保存"
+                initialName={target.label || ''}
+                initialDescription={target.description || ''}
+                onSubmit={(name, description) => {
+                  const cur = sceneRef.current;
+                  const ts = new Date().toISOString();
+                  const updated: Element[] = cur.elements.map((e) => {
+                    if (e.id !== editingRegionId || e.type !== 'region') {
+                      return e;
+                    }
+                    return {
+                      ...e,
+                      label: name,
+                      description,
+                      updatedBy: actorId,
+                      updatedAt: ts,
+                    };
+                  });
+                  replaceScene({ ...cur, elements: updated }, 'canvas');
+                  setEditingRegionId(null);
+                }}
+                onCancel={() => setEditingRegionId(null)}
+              />
+            );
+          })()
+        : null}
       {/* 嵌入元素 URL 输入弹窗（替代 window.prompt）。 */}
       {embedUrlOpen ? (
         <PromptDialog

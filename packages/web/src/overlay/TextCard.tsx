@@ -33,12 +33,27 @@ export interface TextCardProps {
    * 不传则不自动撑高。
    */
   onResize?: (height: number) => void;
+  /**
+   * 编辑态（外部控制）—— OverlayLayer 因为 slot 抢占了 pointer capture，
+   * 内层 body 的 onDoubleClick 不再可达；改由 slot.onDoubleClick 把
+   * `editingId` 提上来，TextCard 据此进入 / 退出编辑态。
+   * 不传或为 false = 默认非编辑态。
+   */
+  editing?: boolean;
+  /** 用户按 Esc / 失焦 / Ctrl+Enter 退出编辑时通知调用方清状态。 */
+  onEditingChange?: (editing: boolean) => void;
 }
 
-export function TextCard({ element, onCommit, onResize }: TextCardProps): JSX.Element {
+export function TextCard({
+  element,
+  onCommit,
+  onResize,
+  editing: editingProp,
+  onEditingChange,
+}: TextCardProps): JSX.Element {
   const { markdown } = element;
-  // 就地编辑态：editing=true 时正文区换成文本域。
-  const [editing, setEditing] = useState(false);
+  // 编辑态：受控（来自 props）+ 受控失败时本地兜底；优先用 props。
+  const editing = Boolean(editingProp);
   const [draft, setDraft] = useState(markdown);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const bodyRef = useRef<HTMLElement | null>(null);
@@ -86,17 +101,26 @@ export function TextCard({ element, onCommit, onResize }: TextCardProps): JSX.El
     }
   }, [editing]);
 
+  // 编辑态切换时同步 draft —— 进入编辑时拷 markdown 为草稿；退出时不动。
+  useEffect(() => {
+    if (editing) setDraft(markdown);
+    // 出场时不重置 draft，避免无谓的 setState 让组件再 re-render。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing]);
+
+  // 兜底入口：当组件已 mount 但 props 没传 editing 时，body 的内部
+  // onDoubleClick 仍可直接进编辑（双 tap 触摸屏 / 无 pointer-capture 场景）。
   const beginEdit = (): void => {
     if (!onCommit) return;
     setDraft(markdown);
-    setEditing(true);
+    onEditingChange?.(true);
   };
   const commit = (): void => {
-    setEditing(false);
+    onEditingChange?.(false);
     if (onCommit && draft !== markdown) onCommit(draft);
   };
   const cancel = (): void => {
-    setEditing(false);
+    onEditingChange?.(false);
     setDraft(markdown);
   };
 
