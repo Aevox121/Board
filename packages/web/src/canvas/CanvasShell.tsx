@@ -17,6 +17,7 @@ import { OverlayLayer } from '../overlay/OverlayLayer';
 import { PresenceLayer } from '../presence/PresenceLayer';
 import { CanvasGrid } from './CanvasGrid';
 import { Toolbar, TOOL_SHORTCUTS } from './Toolbar';
+import { Minimap } from './Minimap';
 import { useViewportGestures } from './useViewportGestures';
 import {
   INITIAL_VIEWPORT,
@@ -123,6 +124,26 @@ export function CanvasShell(): JSX.Element {
     const r = el.getBoundingClientRect();
     setViewport((vp) => zoomAt(vp, 1, r.width / 2, r.height / 2));
   }, []);
+  // 「回到全部内容」按钮 + 快捷键 —— 把视口聚焦到当前所有元素（fitToContent）。
+  const fitAll = useCallback(() => {
+    const el = shellRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setViewport(fitToContent(scene.elements, r.width, r.height));
+  }, [scene.elements]);
+  // 小地图点击 —— 把指定的画布坐标置于视口中心。
+  const jumpToCanvasPoint = useCallback((cx: number, cy: number) => {
+    const el = shellRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setViewport((vp) => ({
+      scrollX: r.width / 2 / vp.zoom - cx,
+      scrollY: r.height / 2 / vp.zoom - cy,
+      zoom: vp.zoom,
+    }));
+  }, []);
+  // 「适配选中」—— 但选区由 OverlayLayer 持有，目前没向上暴露；先不做按钮，
+  // 仅留 fitAll，「适配选中」放后续。
 
   return (
     <div
@@ -140,6 +161,17 @@ export function CanvasShell(): JSX.Element {
         <PresenceLayer viewport={viewport} />
       </div>
       <Toolbar activeTool={activeTool} onSelect={setActiveTool} />
+      <Minimap
+        elements={scene.elements}
+        viewport={viewport}
+        getViewSize={() => {
+          const el = shellRef.current;
+          if (!el) return { width: 0, height: 0 };
+          const r = el.getBoundingClientRect();
+          return { width: r.width, height: r.height };
+        }}
+        onJump={jumpToCanvasPoint}
+      />
       <div className="cv-bottombar">
         <div className="cv-pill" role="group" aria-label="撤销重做">
           <button
@@ -190,6 +222,16 @@ export function CanvasShell(): JSX.Element {
             aria-label="放大"
           >
             +
+          </button>
+          <button
+            type="button"
+            className="cv-pill__btn"
+            onClick={fitAll}
+            disabled={scene.elements.length === 0}
+            title="回到全部内容（聚焦到所有元素）"
+            aria-label="回到全部内容"
+          >
+            ⊡
           </button>
         </div>
       </div>

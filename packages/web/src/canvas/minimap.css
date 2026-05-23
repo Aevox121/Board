@@ -1,0 +1,63 @@
+/**
+ * 小地图样式 —— 右下角浮起，与底部 cv-bottombar 错开。
+ *
+ * 视觉:
+ *  - 暖色底纸感（与画布同色系）+ 柔和投影 + 圆角；
+ *  - 元素缩略统一陶土橙描边 / 半透明底；
+ *  - 视口框白色描边 + 微微发光，标"我在哪"；
+ *  - 空白板时整张缩略图淡出（0.5 透明度），不抢视觉。
+ */
+.cv-minimap {
+  position: absolute;
+  right: 16px;
+  bottom: 80px;
+  background: var(--c-surface, #fff);
+  border: 1px solid var(--c-border, #d8cfc2);
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+  cursor: pointer;
+  z-index: 10;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: opacity 200ms;
+}
+.cv-minimap--empty {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+/* 元素缩略 —— 默认所有类型；按 type 修饰区分颜色。 */
+.cv-minimap__el {
+  position: absolute;
+  background: rgba(217, 119, 87, 0.35);
+  border: 1px solid rgba(217, 119, 87, 0.6);
+  box-sizing: border-box;
+  pointer-events: none;
+}
+.cv-minimap__el--region {
+  background: rgba(217, 119, 87, 0.12);
+  border-color: rgba(217, 119, 87, 0.45);
+  border-radius: 2px;
+}
+.cv-minimap__el--connector,
+.cv-minimap__el--draw {
+  background: transparent;
+  border: none;
+  /* 用一个小圆点示意端点位置 —— 缩略图里连线 / 手绘呈现为点 */
+  width: 3px !important;
+  height: 3px !important;
+  border-radius: 50%;
+  background: var(--c-ink, #3a342c);
+}
+
+/* 视口框 —— 当前主视口范围 */
+.cv-minimap__view {
+  position: absolute;
+  border: 1.5px solid var(--c-ink, #3a342c);
+  background: rgba(58, 52, 44, 0.04);
+  box-sizing: border-box;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.6);
+  border-radius: 2px;
+}
