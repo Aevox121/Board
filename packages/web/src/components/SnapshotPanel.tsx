@@ -5,7 +5,7 @@
  * 操作：新建 / 复原 / 删除 都经 server HTTP，server 完成后广播
  * board-changed，App 自动 refetch 元数据使本面板刷新。
  */
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useBoard } from '../board/BoardContext';
 import {
   createSnapshot as apiCreate,
@@ -53,16 +53,39 @@ export function SnapshotPanel(): JSX.Element {
   const [confirm, setConfirm] = useState<{ id: string; name: string } | null>(
     null,
   );
+  // 新建表单 —— 替换原生 prompt，行内展开在面板底部
+  const [creating, setCreating] = useState(false);
+  const [draftName, setDraftName] = useState('');
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  // 表单展开后聚焦输入框
+  useEffect(() => {
+    if (creating) nameInputRef.current?.focus();
+  }, [creating]);
+
   const disabled = connection !== 'connected';
 
-  const onCreate = async (): Promise<void> => {
-    const name = window.prompt('为存档点起个名字（可留空）：', '');
-    if (name === null) return;
+  const openCreate = (): void => {
+    setDraftName('');
+    setCreating(true);
+  };
+
+  const cancelCreate = (): void => {
+    setCreating(false);
+    setDraftName('');
+  };
+
+  const submitCreate = async (): Promise<void> => {
+    if (busy === 'create') return;
+    const name = draftName.trim();
     setBusy('create');
     try {
-      await apiCreate(name.trim() || null, actorId);
+      await apiCreate(name || null, actorId);
+      setCreating(false);
+      setDraftName('');
     } catch (err) {
-      window.alert(`新建存档失败：${err instanceof Error ? err.message : String(err)}`);
+      window.alert(
+        `新建存档失败：${err instanceof Error ? err.message : String(err)}`,
+      );
     } finally {
       setBusy(null);
     }
@@ -138,14 +161,65 @@ export function SnapshotPanel(): JSX.Element {
         ))}
       </div>
       <div className="sp-foot">
-        <button
-          type="button"
-          className="btn btn--primary"
-          disabled={disabled || busy === 'create'}
-          onClick={onCreate}
-        >
-          {busy === 'create' ? '新建中…' : '+ 新建存档点'}
-        </button>
+        {creating ? (
+          <div className="sp-newform" role="dialog" aria-label="新建存档点">
+            <div className="sp-newform__title">新建存档点</div>
+            <label className="sp-newform__label" htmlFor="sp-new-name">
+              名称
+              <span className="sp-newform__opt">选填</span>
+            </label>
+            <input
+              id="sp-new-name"
+              ref={nameInputRef}
+              className="sp-newform__input"
+              value={draftName}
+              maxLength={64}
+              placeholder="如：出发前定稿（留空则自动命名）"
+              onChange={(e) => setDraftName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  void submitCreate();
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  cancelCreate();
+                }
+              }}
+              disabled={busy === 'create'}
+            />
+            <div className="sp-newform__actions">
+              <button
+                type="button"
+                className="sp-newform__btn"
+                onClick={cancelCreate}
+                disabled={busy === 'create'}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="sp-newform__btn sp-newform__btn--primary"
+                onClick={() => void submitCreate()}
+                disabled={busy === 'create'}
+              >
+                {busy === 'create' ? '新建中…' : '创建'}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="sp-newbtn"
+            disabled={disabled}
+            onClick={openCreate}
+            title={
+              disabled ? '未连接 board-server，不能建存档' : '新建一份手动存档点'
+            }
+          >
+            <span aria-hidden="true">＋</span>
+            <span>新建存档点</span>
+          </button>
+        )}
       </div>
 
       {confirm && (

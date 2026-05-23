@@ -106,8 +106,160 @@
   border-top: 1px solid var(--c-border);
 }
 
-.sp-foot .btn {
+/* ── 新建按钮（默认态，表单未展开时显示） ─────────────────── */
+.sp-newbtn {
   width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: 8px 12px;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--c-on-accent);
+  background: var(--c-accent);
+  border: 1px solid var(--c-accent);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--dur-micro) var(--ease);
+}
+
+.sp-newbtn:hover:not(:disabled) {
+  background: var(--c-accent-strong);
+  border-color: var(--c-accent-strong);
+}
+
+.sp-newbtn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.sp-newbtn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* ── 新建表单（行内展开，替换 window.prompt） ─────────────── */
+.sp-newform {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  animation: sp-newform-in var(--dur-layout) var(--ease);
+}
+
+@keyframes sp-newform-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.sp-newform__title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--c-ink);
+}
+
+.sp-newform__label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--c-ink-2);
+}
+
+.sp-newform__opt {
+  padding: 0 5px;
+  font-size: 11px;
+  color: var(--c-ink-3);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+}
+
+.sp-newform__input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 7px 9px;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  color: var(--c-ink);
+  background: var(--c-surface-sunken);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  outline: none;
+  transition:
+    background var(--dur-micro) var(--ease),
+    border-color var(--dur-micro) var(--ease);
+}
+
+.sp-newform__input::placeholder {
+  color: var(--c-ink-3);
+}
+
+.sp-newform__input:focus {
+  background: var(--c-surface);
+  border-color: var(--c-accent);
+  box-shadow: var(--focus-ring);
+}
+
+.sp-newform__input:disabled {
+  background: var(--c-surface-sunken);
+  color: var(--c-ink-3);
+  cursor: not-allowed;
+}
+
+.sp-newform__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.sp-newform__btn {
+  padding: 6px 14px;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  color: var(--c-ink);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--dur-micro) var(--ease);
+}
+
+.sp-newform__btn:hover:not(:disabled) {
+  background: var(--c-surface-sunken);
+}
+
+.sp-newform__btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.sp-newform__btn--primary {
+  color: var(--c-on-accent);
+  background: var(--c-accent);
+  border-color: var(--c-accent);
+}
+
+.sp-newform__btn--primary:hover:not(:disabled) {
+  background: var(--c-accent-strong);
+  border-color: var(--c-accent-strong);
+}
+
+.sp-newform__btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 /* ── 复原确认弹窗 ───────────────────────────────────────── */
