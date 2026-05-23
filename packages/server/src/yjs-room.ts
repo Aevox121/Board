@@ -18,11 +18,10 @@ import * as encoding from 'lib0/encoding';
 import * as decoding from 'lib0/decoding';
 import type { WebSocket } from 'ws';
 import {
+  applySceneDiff,
   sceneToYDoc,
   yDocToScene,
-  elementToYMap,
   type BoardScene,
-  type Element,
 } from '@board/core';
 
 /** y-protocols 报文类型。 */
@@ -290,146 +289,5 @@ function encodeAwarenessUpdate(
   return encoding.toUint8Array(e);
 }
 
-/**
- * 把新场景的差异（视口 / 元素增删改）应用进 Y.Doc 的 elements / viewport /
- * elementOrder。需要在调用方 doc.transact 内调用（带 origin）。
- *
- * 修改元素的字段时按以下策略尽量保留 Y.Text / Y.Map 实例（不替换 CRDT 内部
- * 结构）：
- *  - Y.Text 字段：若字符串值变了，delete-all + insert（不做最小 diff，
- *    handler 驱动的更改本来就不是字符级输入流）
- *  - Y.Map 字段（style / label / endpoint）：遍历子字段，m.set 逐项覆盖
- *  - 其它槽：直接 m.set（含数组 / record / 标量）
- */
-function applySceneDiff(
-  doc: Y.Doc,
-  oldScene: BoardScene,
-  newScene: BoardScene,
-): void {
-  // viewport
-  const vp = doc.getMap<number>('viewport');
-  if (oldScene.viewport.x !== newScene.viewport.x) vp.set('x', newScene.viewport.x);
-  if (oldScene.viewport.y !== newScene.viewport.y) vp.set('y', newScene.viewport.y);
-  if (oldScene.viewport.zoom !== newScene.viewport.zoom)
-    vp.set('zoom', newScene.viewport.zoom);
-
-  const elementsMap = doc.getMap<Y.Map<unknown>>('elements');
-  const order = doc.getArray<string>('elementOrder');
-
-  const oldIds = new Map<string, Element>();
-  for (const el of oldScene.elements) oldIds.set(el.id, el);
-  const newIds = new Map<string, Element>();
-  for (const el of newScene.elements) newIds.set(el.id, el);
-
-  // 删除：旧有、新无
-  for (const id of oldIds.keys()) {
-    if (!newIds.has(id)) elementsMap.delete(id);
-  }
-  // 新增 / 改：遍历新场景
-  for (const newEl of newScene.elements) {
-    const oldEl = oldIds.get(newEl.id);
-    if (!oldEl) {
-      elementsMap.set(newEl.id, elementToYMap(newEl));
-      continue;
-    }
-    if (oldEl === newEl) continue; // 引用相同直接跳
-    const m = elementsMap.get(newEl.id);
-    if (!m) {
-      elementsMap.set(newEl.id, elementToYMap(newEl));
-      continue;
-    }
-    updateElementYMap(m, oldEl, newEl);
-  }
-
-  // elementOrder：按新场景顺序整体替换（简单粗暴；元素增删少时浪费不多）
-  const newOrder = newScene.elements.map((e) => e.id);
-  let needRebuildOrder = newOrder.length !== order.length;
-  if (!needRebuildOrder) {
-    for (let i = 0; i < newOrder.length; i += 1) {
-      if (newOrder[i] !== order.get(i)) {
-        needRebuildOrder = true;
-        break;
-      }
-    }
-  }
-  if (needRebuildOrder) {
-    order.delete(0, order.length);
-    if (newOrder.length > 0) order.push(newOrder);
-  }
-}
-
-function updateElementYMap(
-  m: Y.Map<unknown>,
-  oldEl: Element,
-  newEl: Element,
-): void {
-  const newKeys = new Set(Object.keys(newEl));
-  // 移除已不存在的字段
-  for (const k of Array.from(m.keys())) {
-    if (!newKeys.has(k)) m.delete(k);
-  }
-  for (const [k, newVal] of Object.entries(newEl)) {
-    const oldVal = (oldEl as unknown as Record<string, unknown>)[k];
-    if (shallowEqual(oldVal, newVal) && m.has(k)) continue;
-    const slot = m.get(k);
-    if (slot instanceof Y.Text && typeof newVal === 'string') {
-      if (slot.toString() !== newVal) {
-        slot.delete(0, slot.length);
-        if (newVal.length > 0) slot.insert(0, newVal);
-      }
-    } else if (slot instanceof Y.Map && newVal && typeof newVal === 'object' && !Array.isArray(newVal)) {
-      // 子 Y.Map（style / label / endpoint / payload 等）—— 递归字段级更新
-      if (k === 'payload' && newEl.type === 'suggestion') {
-        // suggestion.payload 是 Element，特殊
-        const payload = newVal as Element;
-        const oldPayload = (oldVal as Element | undefined) ?? payload;
-        updateElementYMap(slot, oldPayload, payload);
-        continue;
-      }
-      const newObj = newVal as Record<string, unknown>;
-      const oldObj = (oldVal as Record<string, unknown> | undefined) ?? {};
-      // shape/connector label 子层有 text:Y.Text
-      const isLabelMap = k === 'label' && (newEl.type === 'shape' || newEl.type === 'connector');
-      for (const [sk, sv] of Object.entries(newObj)) {
-        if (shallowEqual(oldObj[sk], sv) && slot.has(sk)) continue;
-        if (isLabelMap && sk === 'text' && typeof sv === 'string') {
-          let textSlot = slot.get('text');
-          if (!(textSlot instanceof Y.Text)) {
-            textSlot = new Y.Text();
-            slot.set('text', textSlot);
-          }
-          const t = textSlot as Y.Text;
-          if (t.toString() !== sv) {
-            t.delete(0, t.length);
-            if (sv.length > 0) t.insert(0, sv);
-          }
-        } else {
-          slot.set(sk, sv);
-        }
-      }
-      // 删去子层多余键
-      const newSubKeys = new Set(Object.keys(newObj));
-      for (const sk of Array.from(slot.keys())) {
-        if (!newSubKeys.has(sk)) slot.delete(sk);
-      }
-    } else {
-      // 其它槽（含数组 / record / null / 标量）—— 直接覆盖
-      m.set(k, newVal);
-    }
-  }
-}
-
-/** 浅相等：标量直比；数组 / record JSON 字符串比对（够用，handler 驱动场景）。 */
-function shallowEqual(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  if (a == null || b == null) return false;
-  if (typeof a !== typeof b) return false;
-  if (typeof a === 'object') {
-    try {
-      return JSON.stringify(a) === JSON.stringify(b);
-    } catch {
-      return false;
-    }
-  }
-  return false;
-}
+// applySceneDiff / updateElementYMap / shallowEqual 已上移到 @board/core
+// （web 端也需要相同实现，避免在两边各维护一份）

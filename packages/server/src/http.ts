@@ -29,7 +29,6 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import {
   acceptSuggestion,
-  applyOps,
   clampPercent,
   commitDraftElements,
   createRegionElement,
@@ -37,7 +36,6 @@ import {
   describeSuggestion,
   growRegions,
   guessMime,
-  isBoardOp,
   nextZ,
   normalizePath,
   regionForFile,
@@ -47,7 +45,6 @@ import {
   SCHEMA_VERSION,
   type BoardEventType,
   type BoardMeta,
-  type BoardOp,
   type BoardScene,
   type BoardTask,
   type SuggestionResult,
@@ -180,52 +177,6 @@ function handleGetBoard(deps: HttpDeps, res: ServerResponse): void {
     files: deps.getFiles(),
     tasks: deps.tasks.list(),
   });
-}
-
-/**
- * POST /api/ops —— Web 端旧自动保存通道的 Y.Doc 适配器（M4 增量2 过渡）。
- *
- * 增量3 把 web 切到 ws /yjs 后会删除此端点。在此之前，web 仍在用 ops
- * diff 上报本端变更 —— 适配器把 ops apply 到当前 Y.Doc 场景再 mutate 回去，
- * 结果经 Y.Doc → SSE board-changed 广播给各端（web 经 SSE 整板刷新兜底）。
- */
-async function handleApplyOps(
-  deps: HttpDeps,
-  req: IncomingMessage,
-  res: ServerResponse,
-): Promise<void> {
-  let body: unknown;
-  try {
-    body = await readJsonBody(req);
-  } catch (err) {
-    fail(res, 400, errMsg(err));
-    return;
-  }
-  if (typeof body !== 'object' || body === null) {
-    fail(res, 400, '请求体必须为 { ops: BoardOp[] }');
-    return;
-  }
-  const rec = body as Record<string, unknown>;
-  const rawOps = rec['ops'];
-  if (!Array.isArray(rawOps) || !rawOps.every(isBoardOp)) {
-    fail(res, 400, 'ops 必须为合法的 BoardOp 数组（upsert / delete）');
-    return;
-  }
-  const ops = rawOps as BoardOp[];
-  const actor =
-    typeof rec['actor'] === 'string' && rec['actor'] ? rec['actor'] : 'u_local';
-  if (ops.length === 0) {
-    ok(res, { applied: 0 });
-    return;
-  }
-  try {
-    deps.room.mutate(actor, (scene) => applyOps(scene, ops));
-  } catch (err) {
-    fail(res, 500, `apply ops 失败: ${errMsg(err)}`);
-    return;
-  }
-  await deps.recordChange(actor);
-  ok(res, { applied: ops.length });
 }
 
 /** PUT /api/board —— 请求体 { scene }，整场景写入 Y.Doc 后返回 { ok }。 */
@@ -1573,11 +1524,7 @@ async function route(
     await handlePutBoard(deps, req, res);
     return;
   }
-  // POST /api/ops —— 过渡期适配器（web 切到 ws /yjs 后于增量3 删除）
-  if (path === '/api/ops' && method === 'POST') {
-    await handleApplyOps(deps, req, res);
-    return;
-  }
+  // POST /api/ops 已删除（M4 增量3）—— 改走 ws /yjs Y.Doc 协议
   // POST /api/presence —— 在场光标上报（M4）
   if (path === '/api/presence' && method === 'POST') {
     let presenceBody: unknown;

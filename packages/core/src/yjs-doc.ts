@@ -162,6 +162,146 @@ export function sceneToYDoc(scene: BoardScene): Y.Doc {
 }
 
 /**
+ * 把新场景的差异（视口 / 元素增删改）应用进 Y.Doc。须在调用方
+ * `doc.transact(() => ..., origin)` 内调用 —— 以便统一 origin 给观察者。
+ *
+ * 修改元素的字段时尽量保留 Y.Text / Y.Map 实例（不替换 CRDT 内部结构）：
+ *  - Y.Text 字段：若字符串值变了，delete-all + insert（不做 LCS 最小 diff,
+ *    handler 驱动的更改本来就不是字符级输入流）
+ *  - 嵌套 Y.Map 字段（style / label / endpoint）：遍历子字段，m.set 逐项覆盖
+ *  - 其它槽：直接 m.set（含数组 / record / 标量）
+ */
+export function applySceneDiff(
+  doc: Y.Doc,
+  oldScene: BoardScene,
+  newScene: BoardScene,
+): void {
+  const vp = doc.getMap<number>('viewport');
+  if (oldScene.viewport.x !== newScene.viewport.x)
+    vp.set('x', newScene.viewport.x);
+  if (oldScene.viewport.y !== newScene.viewport.y)
+    vp.set('y', newScene.viewport.y);
+  if (oldScene.viewport.zoom !== newScene.viewport.zoom)
+    vp.set('zoom', newScene.viewport.zoom);
+
+  const elementsMap = doc.getMap<Y.Map<unknown>>('elements');
+  const order = doc.getArray<string>('elementOrder');
+
+  const oldIds = new Map<string, Element>();
+  for (const el of oldScene.elements) oldIds.set(el.id, el);
+  const newIds = new Map<string, Element>();
+  for (const el of newScene.elements) newIds.set(el.id, el);
+
+  for (const id of oldIds.keys()) {
+    if (!newIds.has(id)) elementsMap.delete(id);
+  }
+  for (const newEl of newScene.elements) {
+    const oldEl = oldIds.get(newEl.id);
+    if (!oldEl) {
+      elementsMap.set(newEl.id, elementToYMap(newEl));
+      continue;
+    }
+    if (oldEl === newEl) continue;
+    const m = elementsMap.get(newEl.id);
+    if (!m) {
+      elementsMap.set(newEl.id, elementToYMap(newEl));
+      continue;
+    }
+    updateElementYMap(m, oldEl, newEl);
+  }
+
+  const newOrder = newScene.elements.map((e) => e.id);
+  let needRebuildOrder = newOrder.length !== order.length;
+  if (!needRebuildOrder) {
+    for (let i = 0; i < newOrder.length; i += 1) {
+      if (newOrder[i] !== order.get(i)) {
+        needRebuildOrder = true;
+        break;
+      }
+    }
+  }
+  if (needRebuildOrder) {
+    order.delete(0, order.length);
+    if (newOrder.length > 0) order.push(newOrder);
+  }
+}
+
+function updateElementYMap(
+  m: Y.Map<unknown>,
+  oldEl: Element,
+  newEl: Element,
+): void {
+  const newKeys = new Set(Object.keys(newEl));
+  for (const k of Array.from(m.keys())) {
+    if (!newKeys.has(k)) m.delete(k);
+  }
+  for (const [k, newVal] of Object.entries(newEl)) {
+    const oldVal = (oldEl as unknown as Record<string, unknown>)[k];
+    if (shallowEqual(oldVal, newVal) && m.has(k)) continue;
+    const slot = m.get(k);
+    if (slot instanceof Y.Text && typeof newVal === 'string') {
+      if (slot.toString() !== newVal) {
+        slot.delete(0, slot.length);
+        if (newVal.length > 0) slot.insert(0, newVal);
+      }
+    } else if (
+      slot instanceof Y.Map &&
+      newVal &&
+      typeof newVal === 'object' &&
+      !Array.isArray(newVal)
+    ) {
+      if (k === 'payload' && newEl.type === 'suggestion') {
+        const payload = newVal as Element;
+        const oldPayload = (oldVal as Element | undefined) ?? payload;
+        updateElementYMap(slot, oldPayload, payload);
+        continue;
+      }
+      const newObj = newVal as Record<string, unknown>;
+      const oldObj = (oldVal as Record<string, unknown> | undefined) ?? {};
+      const isLabelMap =
+        k === 'label' && (newEl.type === 'shape' || newEl.type === 'connector');
+      for (const [sk, sv] of Object.entries(newObj)) {
+        if (shallowEqual(oldObj[sk], sv) && slot.has(sk)) continue;
+        if (isLabelMap && sk === 'text' && typeof sv === 'string') {
+          let textSlot = slot.get('text');
+          if (!(textSlot instanceof Y.Text)) {
+            textSlot = new Y.Text();
+            slot.set('text', textSlot);
+          }
+          const t = textSlot as Y.Text;
+          if (t.toString() !== sv) {
+            t.delete(0, t.length);
+            if (sv.length > 0) t.insert(0, sv);
+          }
+        } else {
+          slot.set(sk, sv);
+        }
+      }
+      const newSubKeys = new Set(Object.keys(newObj));
+      for (const sk of Array.from(slot.keys())) {
+        if (!newSubKeys.has(sk)) slot.delete(sk);
+      }
+    } else {
+      m.set(k, newVal);
+    }
+  }
+}
+
+function shallowEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a == null || b == null) return false;
+  if (typeof a !== typeof b) return false;
+  if (typeof a === 'object') {
+    try {
+      return JSON.stringify(a) === JSON.stringify(b);
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+/**
  * Y.Doc → BoardScene（每次读出最新投影）。
  * elements 数组顺序按 elementOrder 还原；order 里没有的 id 按 keys 顺序追加
  * 兜底（防 mutate 漏写 order）。
