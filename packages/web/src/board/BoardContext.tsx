@@ -38,6 +38,7 @@ import {
   yDocToScene,
 } from '@board/core';
 import { createYjsClient, type YjsClient, type YjsClientStatus } from './yjs-client';
+import { yjsWsUrl } from '../server/boardSession';
 
 /** 当前单人白板的参与者 id（M1 固定一个本地用户）。 */
 export const LOCAL_USER_ID: ParticipantId = 'u_local';
@@ -47,13 +48,6 @@ export type ConnectionMode = 'offline' | 'connected';
 
 /** 撤销 / 重做历史栈的最大深度。 */
 const HISTORY_CAP = 100;
-
-/** ws URL —— 同源 host，端口固定 4500（PRD §12，本地服务）。 */
-function defaultYjsUrl(): string {
-  const loc = window.location;
-  const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${proto}//${loc.hostname}:4500/yjs`;
-}
 
 export interface BoardContextValue {
   scene: BoardScene;
@@ -106,7 +100,7 @@ export function BoardProvider({
   // 浏览器 tab 关闭（自动断开），属可接受的小代价。
   const clientRef = useRef<YjsClient | null>(null);
   if (clientRef.current === null) {
-    clientRef.current = createYjsClient({ url: defaultYjsUrl() });
+    clientRef.current = createYjsClient({ url: yjsWsUrl() });
   }
   const client = clientRef.current;
 

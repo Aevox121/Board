@@ -19,8 +19,7 @@
  *  - 解析失败的消息直接丢弃，不影响后续事件。
  */
 
-/** API 基址 —— 与 server/client.ts 一致，走相对路径由 Vite proxy 转发。 */
-const API_BASE = '/api';
+import { apiUrl } from './boardSession';
 
 /** server 推送的事件帧 —— 字段随 type 而定，调用方据 type 取用。 */
 export interface SseFrame {
@@ -38,7 +37,7 @@ export function subscribeBoardEvents(onFrame: (frame: SseFrame) => void): () => 
   let source: EventSource | null = null;
 
   try {
-    source = new EventSource(`${API_BASE}/events`);
+    source = new EventSource(apiUrl('/events'));
   } catch {
     // 极少数浏览器/环境构造 EventSource 即抛错 —— 视为离线，返回空清理函数。
     return () => {};

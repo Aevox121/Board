@@ -5,16 +5,16 @@
  * （assets/ 内画布素材，走 `/api/assets/`）。两者皆无则显示缺失占位。
  */
 import type { ImageElement } from '@board/core';
+import { apiUrl } from '../server/boardSession';
 
 /** 图片元素的源 URL —— files/ 走 /api/files，assets/ 走 /api/assets。 */
 export function imageSrc(el: ImageElement): string | null {
   if (el.path) {
-    return (
-      '/api/files/' +
-      el.path.split('/').map(encodeURIComponent).join('/')
+    return apiUrl(
+      '/files/' + el.path.split('/').map(encodeURIComponent).join('/'),
     );
   }
-  if (el.assetId) return '/api/assets/' + encodeURIComponent(el.assetId);
+  if (el.assetId) return apiUrl('/assets/' + encodeURIComponent(el.assetId));
   return null;
 }
 

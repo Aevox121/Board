@@ -38,6 +38,7 @@ import { cmdComment } from './commands/comment.js';
 import { cmdStyle } from './commands/style.js';
 import { runMcpServer } from './commands/mcp.js';
 import { cmdRestore, cmdSnapshot } from './commands/snapshot.js';
+import { cmdShare } from './commands/share.js';
 import { runWatch } from './commands/watch.js';
 
 /** 命令处理函数签名。 */
@@ -63,6 +64,7 @@ const HANDLERS: Record<string, Handler> = {
   style: cmdStyle,
   snapshot: cmdSnapshot,
   restore: cmdRestore,
+  share: cmdShare,
 };
 
 /** 已登记但尚未实现的命令（规格 §2，逐里程碑补全）。 */
@@ -72,7 +74,6 @@ const PLACEHOLDER_COMMANDS = [
   'agent',
   'export',
   'import',
-  'share',
   'sync',
 ] as const;
 
@@ -132,6 +133,7 @@ function printHelp(): void {
   console.log('  snapshot ls                                  列出存档点');
   console.log('  snapshot rm <snapshotId>                     删除存档点');
   console.log('  restore <snapshotId>                         复原到指定存档点');
+  console.log('  share <路径> [--host <host>] [--port <port>] 生成可分享的白板链接（PRD §4.2）');
   console.log('');
   console.log('占位命令 (尚未实现):');
   console.log('  ' + PLACEHOLDER_COMMANDS.join(', '));

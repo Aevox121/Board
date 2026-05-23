@@ -19,6 +19,13 @@ export default defineConfig(({ mode }) => ({
         target: 'http://127.0.0.1:4500',
         changeOrigin: true,
       },
+      // ws 转发：让浏览器只认 4510 上的同源 ws://.../yjs，背后实际连 4500。
+      // 多 board 模式下分享链接走同一个 origin 也能 work。
+      '/yjs': {
+        target: 'ws://127.0.0.1:4500',
+        ws: true,
+        changeOrigin: true,
+      },
     },
   },
 }));

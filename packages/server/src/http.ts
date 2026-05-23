@@ -1633,10 +1633,40 @@ function errMsg(err: unknown): string {
 }
 
 /**
- * 创建 HTTP server（未 listen）。host 固定 127.0.0.1。
+ * 解析请求里的 boardId → 对应 HttpDeps；返回 null 表示未找到。
+ *
+ * 实参由 server/index.ts 注入 —— 持有 `Map<boardId, BoardRuntime>`。
+ * `boardId === null` 表示请求未带 `/api/boards/<id>` 前缀，应取默认 board。
  */
-export function createHttpServer(deps: HttpDeps): Server {
+export type DepsResolver = (boardId: string | null) => HttpDeps | null;
+
+/**
+ * 创建 HTTP server（未 listen）。host 固定 127.0.0.1。
+ *
+ * 多 board 路由：路径 `/api/boards/<id>/<rest>` 剥前缀后由 `getDeps(id)`
+ * 解析；无前缀的 `/api/<rest>` 由 `getDeps(null)` 解析（默认 board，
+ * 用于单 board 部署与既有客户端的向后兼容）。
+ */
+export function createHttpServer(getDeps: DepsResolver): Server {
   const server = createServer((req, res) => {
+    const url = new URL(req.url ?? '/', `http://${HOST}`);
+    const rawPath = url.pathname;
+    let boardId: string | null = null;
+    // 形如 /api/boards/<id> 或 /api/boards/<id>/<rest>
+    const m = /^\/api\/boards\/([^/]+)(\/.*)?$/.exec(rawPath);
+    if (m) {
+      boardId = decodeURIComponent(m[1]!);
+      // 把 req.url 重写为剥前缀后的形式，下游 route() 沿用既有匹配
+      const rest = m[2] ?? '';
+      const newPath = '/api' + rest;
+      const search = url.search ?? '';
+      req.url = newPath + search;
+    }
+    const deps = getDeps(boardId);
+    if (!deps) {
+      fail(res, 404, `未找到白板: ${boardId ?? '(默认)'}`);
+      return;
+    }
     // 顶层兜底：任何未捕获异常都转成 500，绝不让进程崩溃
     void route(deps, req, res).catch((err) => {
       console.error('[board-server] 请求处理异常:', err);

@@ -52,6 +52,7 @@ import {
 import { useBoard } from '../board/BoardContext';
 import { moveFile } from '../server/files';
 import { deleteElement } from '../server/client';
+import { apiUrl } from '../server/boardSession';
 import { FileCard } from './FileCard';
 import { FolderCard } from './FolderCard';
 import { TextCard } from './TextCard';
@@ -2616,7 +2617,7 @@ export function OverlayLayer({
     offsetY: number,
   ): Promise<void> {
     try {
-      const resp = await fetch('/api/regions/reparent', {
+      const resp = await fetch(apiUrl('/regions/reparent'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ regionId, parentId, offsetX, offsetY }),
@@ -2962,7 +2963,7 @@ export function OverlayLayer({
   ): Promise<void> {
     try {
       const dim = await imageDimensions(blob);
-      const resp = await fetch('/api/assets', {
+      const resp = await fetch(apiUrl('/assets'), {
         method: 'POST',
         headers: { 'Content-Type': blob.type || 'image/png' },
         body: blob,
@@ -3037,7 +3038,7 @@ export function OverlayLayer({
       return;
     }
     try {
-      const resp = await fetch('/api/regions', {
+      const resp = await fetch(apiUrl('/regions'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

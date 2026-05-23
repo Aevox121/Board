@@ -73,6 +73,7 @@ export const GLOBAL_VALUE_KEYS: ReadonlySet<string> = new Set([
   'display',
   'port',
   'host',
+  'scheme',
   'out',
   'name',
   'label',

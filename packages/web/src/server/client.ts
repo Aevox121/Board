@@ -25,9 +25,7 @@ import {
   serializeScene,
   serializeMeta,
 } from '@board/core';
-
-/** API 基址 —— 走相对路径，dev 由 Vite proxy 转发，生产同源部署亦可用。 */
-const API_BASE = '/api';
+import { apiUrl } from './boardSession';
 
 /** 请求超时（毫秒）—— server 不可达时尽快降级，不让启动流程长时间挂起。 */
 const REQUEST_TIMEOUT_MS = 4000;
@@ -80,7 +78,7 @@ async function fetchWithTimeout(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    return await fetch(`${API_BASE}${path}`, {
+    return await fetch(apiUrl(path), {
       ...init,
       signal: controller.signal,
     });
@@ -263,7 +261,7 @@ export interface PresencePayload {
  */
 export async function sendPresence(p: PresencePayload): Promise<void> {
   try {
-    await fetch(`${API_BASE}/presence`, {
+    await fetch(apiUrl('/presence'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(p),

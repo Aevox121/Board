@@ -12,8 +12,7 @@
  * Markdown 卡退化为索引卡片），不报错、不崩溃。
  */
 
-/** API 基址 —— 与 server/client.ts 一致，走相对路径由 Vite proxy 转发。 */
-const API_BASE = '/api';
+import { apiUrl } from './boardSession';
 
 /** 取文件内容请求的超时（毫秒）—— 预览类请求，失败即降级。 */
 const FILE_REQUEST_TIMEOUT_MS = 8000;
@@ -31,7 +30,7 @@ export function fileContentUrl(relPath: string): string {
     .split('/')
     .map((seg) => encodeURIComponent(seg))
     .join('/');
-  return `${API_BASE}/files/${encoded}`;
+  return apiUrl(`/files/${encoded}`);
 }
 
 /**
@@ -95,7 +94,7 @@ export async function moveFile(
   }
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}/files/move`, {
+    res = await fetch(apiUrl('/files/move'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
