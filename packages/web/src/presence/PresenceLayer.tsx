@@ -11,6 +11,7 @@
  * 传输，故各端缩放 / 平移不同也能正确对位。
  */
 import { useEffect, useRef, useSyncExternalStore } from 'react';
+import { computeEditAnchor } from '@board/core';
 import { SESSION } from '../session';
 import { sendPresence } from '../server/client';
 import { presenceStore } from './presenceStore';
@@ -122,12 +123,11 @@ export function PresenceLayer({ viewport }: PresenceLayerProps): JSX.Element {
         if (u.targetElementId) {
           const target = elementById.get(u.targetElementId);
           if (target) {
-            // Agent 焦点点 = element 本地坐标的 targetOffset；缺省取元素中心。
-            // 用 element 本地坐标 + zoom 换算到屏幕坐标。
-            const offset = u.targetOffset ?? {
-              x: target.width / 2,
-              y: target.height / 2,
-            };
+            // Agent 焦点点 = element 本地坐标的 targetOffset；缺省由 core 的
+            // computeEditAnchor 据元素类型算（text 取标题行；region 头部 label；
+            // shape 中心；connector 折线中点 …）。用 element 本地坐标 + zoom
+            // 换算到屏幕坐标。
+            const offset = u.targetOffset ?? computeEditAnchor(target);
             const cx = (target.x + offset.x + scrollX) * zoom;
             const cy = (target.y + offset.y + scrollY) * zoom;
             // 让不同 client 的 jitter 不同步 —— 给每个 cursor 一个独立 phase
