@@ -6,8 +6,7 @@
  * 端点：
  *  - GET  /api/health           → 服务状态（M1）
  *  - GET  /api/board            → { meta, scene, files }（M1）
- *  - PUT  /api/board            → 请求体 { scene } → saveBoard 落盘（M1）
- *  - POST /api/ops              → 元素级操作合并入 board.json（M4：实时同步）
+ *  - PUT  /api/board            → 请求体 { scene } → Y.Doc 整场景写入（M1）
  *  - POST /api/presence         → 在场光标上报 / 离开（M4：拟人化光标）
  *  - GET  /api/files/<相对路径>  → files/ 下文件原始内容（M2，含防目录穿越）
  *  - POST /api/files/move       → 移动 files/ 内文件（M2 增量2：画布→文件系统）
@@ -47,16 +46,17 @@ import {
   removeElement,
   SCHEMA_VERSION,
   type BoardEventType,
+  type BoardMeta,
   type BoardOp,
   type BoardScene,
   type BoardTask,
   type SuggestionResult,
 } from '@board/core';
-import { loadBoard, saveBoard } from '@board/core/node';
 import type { EventLog } from './events.js';
 import type { PresenceHub } from './presence.js';
 import type { SseHub } from './sse.js';
 import type { TaskStore } from './tasks.js';
+import type { YjsRoom } from './yjs-room.js';
 
 /** 统一响应信封。 */
 interface Envelope<T> {
@@ -86,21 +86,20 @@ export interface HttpDeps {
   /** 事件日志 —— GET /api/events/log 按游标增量拉取。 */
   events: EventLog;
   /**
-   * 比对 board.json 与基线场景，产出 element / file / region 类事件并广播；
-   * 末尾广播 board-changed。改动 board.json 的整场景写操作完成后调用。
+   * 比对 Y.Doc 当前场景与基线场景，产出 element / file / region 类事件并
+   * 广播；末尾广播 board-changed。所有 room.mutate 后调用。
    */
   recordChange(actor: string): Promise<void>;
-  /**
-   * 操作级写入（POST /api/ops）完成后调用：产事件流事件 + 广播 ops 帧
-   * （各端据此增量更新；`origin` 让发起方忽略回声）。不广播 board-changed。
-   */
-  recordOps(actor: string, ops: BoardOp[], origin: string): Promise<void>;
   /** 直接发出一条结构化事件（task 等非 board.json 来源用）。 */
   emitEvent(
     type: BoardEventType,
     actor: string,
     payload: Record<string, unknown>,
   ): void;
+  /** Yjs 房间 —— 权威 Y.Doc，所有场景读写经此（M4 增量2）。 */
+  room: YjsRoom;
+  /** 当前 meta —— index.ts 在启动时加载、运行期不变。 */
+  getMeta(): BoardMeta;
 }
 
 const HOST = '127.0.0.1';
@@ -147,6 +146,17 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   }
 }
 
+/**
+ * 取当前白板快照（M4 增量2 起：从 Y.Doc 投影，不再 loadBoard）。
+ *
+ * 同步 / 无 IO —— 各 handler 调用此函数代替 `await loadBoard(deps.dir)`。
+ * scene 来自 room.getScene()（yDocToScene 的实时投影），meta 是启动期捕获
+ * 的不可变副本。
+ */
+function readSnapshot(deps: HttpDeps): { meta: BoardMeta; scene: BoardScene } {
+  return { meta: deps.getMeta(), scene: deps.room.getScene() };
+}
+
 /** GET /api/health —— 服务状态。 */
 function handleHealth(deps: HttpDeps, res: ServerResponse): void {
   ok(res, {
@@ -162,78 +172,22 @@ function handleHealth(deps: HttpDeps, res: ServerResponse): void {
 }
 
 /** GET /api/board —— 返回 meta / scene / files。 */
-async function handleGetBoard(deps: HttpDeps, res: ServerResponse): Promise<void> {
-  let handle;
-  try {
-    handle = await loadBoard(deps.dir);
-  } catch (err) {
-    // 白板不存在或文件损坏：给出清晰错误而非崩溃
-    fail(res, 404, `读取白板失败: ${errMsg(err)}`);
-    return;
-  }
+function handleGetBoard(deps: HttpDeps, res: ServerResponse): void {
+  const snap = readSnapshot(deps);
   ok(res, {
-    meta: handle.meta,
-    scene: handle.scene,
+    meta: snap.meta,
+    scene: snap.scene,
     files: deps.getFiles(),
     tasks: deps.tasks.list(),
   });
 }
 
-/** PUT /api/board —— 请求体 { scene }，落盘后返回 { ok }。 */
-async function handlePutBoard(
-  deps: HttpDeps,
-  req: IncomingMessage,
-  res: ServerResponse,
-): Promise<void> {
-  // 解析请求体
-  let body: unknown;
-  try {
-    body = await readJsonBody(req);
-  } catch (err) {
-    fail(res, 400, errMsg(err));
-    return;
-  }
-
-  // 校验 { scene } 结构
-  if (typeof body !== 'object' || body === null || !('scene' in body)) {
-    fail(res, 400, '请求体必须为 { scene: BoardScene }');
-    return;
-  }
-  const scene = (body as { scene: unknown }).scene;
-  if (!isBoardScene(scene)) {
-    fail(res, 400, 'scene 字段结构非法（需含 schemaVersion / viewport / elements）');
-    return;
-  }
-
-  // 先加载现有 meta（saveBoard 需要 meta），白板不存在则报错
-  let handle;
-  try {
-    handle = await loadBoard(deps.dir);
-  } catch (err) {
-    fail(res, 404, `读取白板失败: ${errMsg(err)}`);
-    return;
-  }
-
-  // 落盘
-  try {
-    await saveBoard(deps.dir, handle.meta, scene);
-  } catch (err) {
-    fail(res, 500, `保存白板失败: ${errMsg(err)}`);
-    return;
-  }
-
-  // 比对前后场景产出事件（board watch / 多端订阅据此感知 Web 编辑）。
-  await deps.recordChange('u_local');
-  ok(res, { saved: true });
-}
-
 /**
- * POST /api/ops —— 应用一批元素级操作（M4：操作级实时同步）。
+ * POST /api/ops —— Web 端旧自动保存通道的 Y.Doc 适配器（M4 增量2 过渡）。
  *
- * 请求体 `{ ops, actor?, origin? }`。各客户端只发「自己改了哪些元素」的增量
- * 操作（upsert / delete），服务端按 id 合并进 board.json —— 取代整场景 PUT，
- * 消除并发写时的「后写覆盖前写」。应用后广播 `{type:'ops',...}`，其余客户端
- * 据此增量更新；`origin`（客户端 id）让发起方忽略自己的回声。
+ * 增量3 把 web 切到 ws /yjs 后会删除此端点。在此之前，web 仍在用 ops
+ * diff 上报本端变更 —— 适配器把 ops apply 到当前 Y.Doc 场景再 mutate 回去，
+ * 结果经 Y.Doc → SSE board-changed 广播给各端（web 经 SSE 整板刷新兜底）。
  */
 async function handleApplyOps(
   deps: HttpDeps,
@@ -260,30 +214,49 @@ async function handleApplyOps(
   const ops = rawOps as BoardOp[];
   const actor =
     typeof rec['actor'] === 'string' && rec['actor'] ? rec['actor'] : 'u_local';
-  const origin = typeof rec['origin'] === 'string' ? rec['origin'] : '';
-
   if (ops.length === 0) {
     ok(res, { applied: 0 });
     return;
   }
-
-  let handle;
   try {
-    handle = await loadBoard(deps.dir);
+    deps.room.mutate(actor, (scene) => applyOps(scene, ops));
   } catch (err) {
-    fail(res, 404, `读取白板失败: ${errMsg(err)}`);
+    fail(res, 500, `apply ops 失败: ${errMsg(err)}`);
     return;
   }
-  const next = applyOps(handle.scene, ops);
-  try {
-    await saveBoard(deps.dir, handle.meta, next);
-  } catch (err) {
-    fail(res, 500, `保存白板失败: ${errMsg(err)}`);
-    return;
-  }
-
-  await deps.recordOps(actor, ops, origin);
+  await deps.recordChange(actor);
   ok(res, { applied: ops.length });
+}
+
+/** PUT /api/board —— 请求体 { scene }，整场景写入 Y.Doc 后返回 { ok }。 */
+async function handlePutBoard(
+  deps: HttpDeps,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch (err) {
+    fail(res, 400, errMsg(err));
+    return;
+  }
+
+  if (typeof body !== 'object' || body === null || !('scene' in body)) {
+    fail(res, 400, '请求体必须为 { scene: BoardScene }');
+    return;
+  }
+  const scene = (body as { scene: unknown }).scene;
+  if (!isBoardScene(scene)) {
+    fail(res, 400, 'scene 字段结构非法（需含 schemaVersion / viewport / elements）');
+    return;
+  }
+
+  // 经 Y.Doc 落地 —— mutator 直接返回新场景，room 内部 diff 出最小 op 集
+  // 写入 Y.Doc；observer 节流投影回 board.json，并 ws 广播给所有客户端。
+  deps.room.mutate('u_local', () => scene);
+  await deps.recordChange('u_local');
+  ok(res, { saved: true });
 }
 
 /**
@@ -523,7 +496,7 @@ async function handleCreateRegion(
     typeof b['description'] === 'string' ? b['description'] : '';
   const actor = typeof b['actor'] === 'string' ? b['actor'] : 'u_local';
 
-  const handle = await loadBoard(deps.dir);
+  const handle = readSnapshot(deps);
   if (regionsOf(handle.scene.elements).some((r) => r.path === name)) {
     fail(res, 409, `区域已存在: ${name}`);
     return;
@@ -641,14 +614,13 @@ async function handleCreateRegion(
   });
   nextElements.push(element);
   try {
-    await saveBoard(deps.dir, handle.meta, {
+    deps.room.mutate(actor, () => ({
       ...handle.scene,
       elements: nextElements,
-    });
-    // 显式广播 board-changed —— 区域元素已落 board.json，各端经 SSE 重载。
+    }));
     await deps.recordChange(actor);
   } catch (err) {
-    fail(res, 500, `保存区域失败: ${errMsg(err)}`);
+    fail(res, 500, `写入区域失败: ${errMsg(err)}`);
     return;
   }
   ok(res, {
@@ -688,7 +660,7 @@ async function handleReparentRegion(
   const offsetY = num(b['offsetY']);
   const actor = typeof b['actor'] === 'string' ? b['actor'] : 'u_local';
 
-  const handle = await loadBoard(deps.dir);
+  const handle = readSnapshot(deps);
   const elements = handle.scene.elements;
   const region = elements.find(
     (e) => e.id === regionId && e.type === 'region',
@@ -804,13 +776,13 @@ async function handleReparentRegion(
     return patched;
   });
   try {
-    await saveBoard(deps.dir, handle.meta, {
+    deps.room.mutate(actor, () => ({
       ...handle.scene,
       elements: next,
-    });
+    }));
     await deps.recordChange(actor);
   } catch (err) {
-    fail(res, 500, `保存白板失败: ${errMsg(err)}`);
+    fail(res, 500, `写入区域失败: ${errMsg(err)}`);
     return;
   }
   ok(res, { regionId: region.id, path: newPath });
@@ -921,7 +893,7 @@ async function handleMoveFile(
   if (dropX !== null && dropY !== null) {
     // 带落点：把对应 file 元素改名并定位到落点 —— 保留位置，不自动排布。
     try {
-      const handle = await loadBoard(deps.dir);
+      const handle = readSnapshot(deps);
       const hasEl = handle.scene.elements.some(
         (el) => el.type === 'file' && el.path === from,
       );
@@ -942,12 +914,11 @@ async function handleMoveFile(
               }
             : el,
         );
-        // 区域增长以容纳落点处的文件（区域始终包含其内容）
         const grown = growRegions(moved);
-        await saveBoard(deps.dir, handle.meta, {
+        deps.room.mutate('u_local', () => ({
           ...handle.scene,
           elements: grown.elements,
-        });
+        }));
         await deps.recordChange('u_local');
       } else {
         // 该文件尚无对应画布元素 —— 退回 reconcile 兜底。
@@ -1004,22 +975,17 @@ async function handleCreateTask(
   const regionName = typeof rec['region'] === 'string' ? rec['region'].trim() : '';
   const at = Array.isArray(rec['at']) ? (rec['at'] as unknown[]) : null;
   if (regionName) {
-    try {
-      const handle = await loadBoard(deps.dir);
-      const region = regionsOf(handle.scene.elements).find(
-        (r) => r.label === regionName,
-      );
-      if (!region) {
-        fail(res, 404, `未找到区域：${regionName}`);
-        return;
-      }
-      regionId = region.id;
-      x = region.x + 20;
-      y = region.y + 56;
-    } catch (err) {
-      fail(res, 500, `读取白板失败: ${errMsg(err)}`);
+    const handle = readSnapshot(deps);
+    const region = regionsOf(handle.scene.elements).find(
+      (r) => r.label === regionName,
+    );
+    if (!region) {
+      fail(res, 404, `未找到区域：${regionName}`);
       return;
     }
+    regionId = region.id;
+    x = region.x + 20;
+    y = region.y + 56;
   } else if (at && typeof at[0] === 'number' && typeof at[1] === 'number') {
     x = at[0];
     y = at[1];
@@ -1126,10 +1092,10 @@ async function handleTaskFinish(
   // 提交本流程产出的 draft 态元素 → committed。失败不影响任务完成本身。
   let committedChanged = false;
   try {
-    const handle = await loadBoard(deps.dir);
+    const handle = readSnapshot(deps);
     const committed = commitDraftElements(handle.scene, task.agentId);
     if (committed.changed) {
-      await saveBoard(deps.dir, handle.meta, committed.scene);
+      deps.room.mutate(task.agentId, () => committed.scene);
       committedChanged = true;
     }
   } catch (err) {
@@ -1196,13 +1162,13 @@ async function handleRefresh(
   // 外部写入（CLI / MCP）可能往区域里加了元素（如 Agent 在区域内画流程图）——
   // 自动增长区域以包住内容。growRegions 是 grow-only、幂等的，安全可常跑。
   try {
-    const handle = await loadBoard(deps.dir);
+    const handle = readSnapshot(deps);
     const grown = growRegions(handle.scene.elements);
     if (grown.changed) {
-      await saveBoard(deps.dir, handle.meta, {
+      deps.room.mutate(actor, () => ({
         ...handle.scene,
         elements: grown.elements,
-      });
+      }));
     }
   } catch (err) {
     console.error('[board-server] refresh 增长区域失败:', errMsg(err));
@@ -1249,13 +1215,7 @@ async function handleSuggestionOp(
   const actor =
     typeof rec['actor'] === 'string' && rec['actor'] ? rec['actor'] : 'u_local';
 
-  let handle;
-  try {
-    handle = await loadBoard(deps.dir);
-  } catch (err) {
-    fail(res, 404, `读取白板失败: ${errMsg(err)}`);
-    return;
-  }
+  const handle = readSnapshot(deps);
 
   let result: SuggestionResult;
   if (op === 'accept') {
@@ -1278,9 +1238,9 @@ async function handleSuggestionOp(
   }
   if (result.changed) {
     try {
-      await saveBoard(deps.dir, handle.meta, result.scene);
+      deps.room.mutate(actor, () => result.scene);
     } catch (err) {
-      fail(res, 500, `保存白板失败: ${errMsg(err)}`);
+      fail(res, 500, `写入白板失败: ${errMsg(err)}`);
       return;
     }
   }
@@ -1333,13 +1293,7 @@ async function handleDeleteElement(
   const rawActor = (body as Record<string, unknown>)['actor'];
   const actor = typeof rawActor === 'string' && rawActor ? rawActor : 'u_local';
 
-  let handle;
-  try {
-    handle = await loadBoard(deps.dir);
-  } catch (err) {
-    fail(res, 404, `读取白板失败: ${errMsg(err)}`);
-    return;
-  }
+  const handle = readSnapshot(deps);
   const target = handle.scene.elements.find((e) => e.id === elementId);
   if (!target) {
     fail(res, 404, `未找到元素：${elementId}`);
@@ -1385,12 +1339,12 @@ async function handleDeleteElement(
       return true;
     });
     try {
-      await saveBoard(deps.dir, handle.meta, {
+      deps.room.mutate(actor, () => ({
         ...handle.scene,
         elements: next,
-      });
+      }));
     } catch (err) {
-      fail(res, 500, `保存白板失败: ${errMsg(err)}`);
+      fail(res, 500, `写入白板失败: ${errMsg(err)}`);
       return;
     }
     let trashedFolder: string | null = null;
@@ -1443,9 +1397,9 @@ async function handleDeleteElement(
   // 无文件」的一致状态，不再复活。
   const { scene: next, removedRefs } = removeElement(handle.scene, elementId);
   try {
-    await saveBoard(deps.dir, handle.meta, next);
+    deps.room.mutate(actor, () => next);
   } catch (err) {
-    fail(res, 500, `保存白板失败: ${errMsg(err)}`);
+    fail(res, 500, `写入白板失败: ${errMsg(err)}`);
     return;
   }
 
@@ -1612,14 +1566,14 @@ async function route(
     return;
   }
   if (path === '/api/board' && method === 'GET') {
-    await handleGetBoard(deps, res);
+    handleGetBoard(deps, res);
     return;
   }
   if (path === '/api/board' && method === 'PUT') {
     await handlePutBoard(deps, req, res);
     return;
   }
-  // POST /api/ops —— 操作级实时同步（M4）
+  // POST /api/ops —— 过渡期适配器（web 切到 ws /yjs 后于增量3 删除）
   if (path === '/api/ops' && method === 'POST') {
     await handleApplyOps(deps, req, res);
     return;

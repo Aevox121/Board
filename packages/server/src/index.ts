@@ -1,27 +1,25 @@
 /**
- * Board 本地服务 — M2 装配入口
+ * Board 本地服务 — M4 装配入口
  *
  * 职责（见 PRD §4 / specs/数据模型规格.md §5.7 / §9）：
  *  - 拥有 .board 文件夹，chokidar 监听 files/ 变化
  *  - 文件 add/change/unlink 时执行 reconcile：files/ → 画布 file 元素
- *  - HTTP API（统一信封 { ok, data, error }）：
- *      GET  /api/health  · GET /api/board  · PUT /api/board
- *      GET  /api/files/<相对路径>  · GET /api/events (SSE)
+ *    （结果通过 yjsRoom 写入 Y.Doc，不再直接落 board.json）
+ *  - 启动期读 board.json → sceneToYDoc 构 Y.Doc 作为运行态权威源
+ *  - HTTP API + ws /yjs（y-protocols sync + awareness）
+ *  - 节流投影 Y.Doc → board.json（人可读副本 + 崩溃恢复源）
  *
  * 安全：仅监听 127.0.0.1（PRD §12）。
- *
- * 后续里程碑：
- *  - M3：内嵌 MCP Server（与 CLI 等价的工具集）
- *  - M4：Yjs 协同文档 + 中继服务器对接
  */
 import { resolve } from 'node:path';
 import {
   diffScenes,
   type BoardEventType,
-  type BoardOp,
+  type BoardMeta,
   type BoardScene,
 } from '@board/core';
-import { listBoardFiles, loadBoard } from '@board/core/node';
+import { listBoardFiles, loadBoard, saveBoard } from '@board/core/node';
+import { WebSocketServer } from 'ws';
 import { createEventLog } from './events.js';
 import { createHttpServer, HOST, type HttpDeps } from './http.js';
 import { createPresenceHub } from './presence.js';
@@ -29,6 +27,7 @@ import { runReconcile } from './reconcile.js';
 import { createSseHub } from './sse.js';
 import { createTaskStore } from './tasks.js';
 import { startWatcher, type BoardWatcher } from './watcher.js';
+import { createYjsRoom } from './yjs-room.js';
 
 /** 默认监听端口，可用 BOARD_PORT 覆盖。 */
 const PORT = Number(process.env.BOARD_PORT ?? 4500);
@@ -39,7 +38,6 @@ const SYSTEM_ACTOR = 'u_system';
 /** reconcile 防抖窗口（毫秒）——批量文件变更只触发一次 reconcile。 */
 const RECONCILE_DEBOUNCE_MS = 200;
 
-/** 打印用法并以非零码退出。 */
 function printUsageAndExit(): never {
   console.error(
     [
@@ -58,10 +56,6 @@ function printUsageAndExit(): never {
   process.exit(1);
 }
 
-/**
- * 解析 .board 目录：命令行参数 process.argv[2] 优先，其次环境变量 BOARD_DIR。
- * 都没有则打印用法并退出。
- */
 function resolveBoardDir(): string {
   const fromArg = process.argv[2];
   const fromEnv = process.env.BOARD_DIR;
@@ -76,8 +70,12 @@ async function main(): Promise<void> {
   const dir = resolveBoardDir();
 
   // 启动前先验证白板可读，失败则给出清晰错误并退出（不崩栈）
+  let initialMeta: BoardMeta;
+  let initialScene: BoardScene;
   try {
-    await loadBoard(dir);
+    const handle = await loadBoard(dir);
+    initialMeta = handle.meta;
+    initialScene = handle.scene;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[board-server] 无法打开白板 ${dir}`);
@@ -85,6 +83,21 @@ async function main(): Promise<void> {
     console.error('[board-server] 请确认该路径是一个有效的 .board 文件夹。');
     process.exit(1);
   }
+
+  // M4 增量2：Y.Doc 房间 —— 启动时由 board.json 构出运行态权威源，
+  // 观察器节流投影回 board.json（人可读副本 + 崩溃恢复源）。
+  let savedSceneRef: BoardScene = initialScene;
+  const room = createYjsRoom({
+    dir,
+    initialScene,
+    saveScene: async (scene) => {
+      await saveBoard(dir, initialMeta, scene);
+      savedSceneRef = scene;
+    },
+  });
+
+  // 启动期先把 SOT 切到 Y.Doc：此时 board.json 与 Y.Doc 已一致，无需立刻落盘。
+  void savedSceneRef;
 
   // SSE 广播器：board 变化时向所有连接推送
   const sse = createSseHub();
@@ -105,26 +118,30 @@ async function main(): Promise<void> {
   }, 5000);
   presencePrune.unref();
 
-  // 服务启动时先做一次初始 reconcile，让 files/ 里已有文件生成 file 元素。
-  // 启动 reconcile 不产事件 —— 已有文件不是「新增」。
+  // 启动 reconcile：files/ 现状 → Y.Doc。已有文件不算「新增」（不发事件）。
   try {
-    await runReconcile(dir, SYSTEM_ACTOR);
+    const result = await runReconcile({
+      dir,
+      scene: room.getScene(),
+      previewLimitMB: initialMeta.settings.previewSizeLimitMB,
+      actor: SYSTEM_ACTOR,
+    });
+    if (result.changed) {
+      room.mutate(SYSTEM_ACTOR, () => result.scene);
+    }
   } catch (err) {
     console.error('[board-server] 启动 reconcile 失败:', err);
   }
 
   // 事件 diff 的基线场景 —— 取启动 reconcile 之后的场景。后续每次变更都与它比对。
-  let lastScene: BoardScene = (await loadBoard(dir)).scene;
+  let lastScene: BoardScene = room.getScene();
 
-  /**
-   * 比对 board.json 与基线场景，产出 element / file / region 类事件流事件并
-   * 广播，更新基线。不广播 board-changed / ops —— 由调用方按写入方式补。
-   */
+  /** 比对 Y.Doc 当前场景与基线场景，产事件流事件并广播。 */
   async function syncSceneEvents(actor: string): Promise<void> {
     try {
-      const handle = await loadBoard(dir);
-      const drafts = diffScenes(lastScene, handle.scene, actor);
-      lastScene = handle.scene;
+      const cur = room.getScene();
+      const drafts = diffScenes(lastScene, cur, actor);
+      lastScene = cur;
       for (const evt of events.append(drafts)) sse.broadcast(evt);
     } catch (err) {
       console.error('[board-server] 记录变更事件失败:', err);
@@ -141,10 +158,7 @@ async function main(): Promise<void> {
     return recordChain;
   }
 
-  /**
-   * 整场景写入（PUT / reconcile / 端点等）后：产事件流事件 + 广播 board-changed
-   * （Web 据此整板刷新）。
-   */
+  /** 写场景后：产事件流事件 + 广播 board-changed（Web 据此整板刷新，过渡期保留）。 */
   function recordChange(actor: string): Promise<void> {
     return serialize(async () => {
       await syncSceneEvents(actor);
@@ -152,23 +166,7 @@ async function main(): Promise<void> {
     });
   }
 
-  /**
-   * 操作级写入（POST /api/ops）后：产事件流事件 + 广播 ops 帧。各端据 ops 帧
-   * 增量更新；`origin` 让发起方忽略自己的回声。不广播 board-changed —— 避免
-   * 各端再做一次整板刷新、把彼此未同步的本地编辑冲掉。
-   */
-  function recordOps(actor: string, ops: BoardOp[], origin: string): Promise<void> {
-    return serialize(async () => {
-      await syncSceneEvents(actor);
-      const frame = { type: 'ops', ops, origin };
-      sse.broadcast(frame);
-    });
-  }
-
-  /**
-   * 直接发出一条结构化事件（task 等非 board.json 来源用）。
-   * 不广播 board-changed —— 调用方按需自行广播。
-   */
+  /** 直接发出一条结构化事件（task 等非 board.json 来源用）。 */
   function emitEvent(
     type: BoardEventType,
     actor: string,
@@ -179,19 +177,22 @@ async function main(): Promise<void> {
     }
   }
 
-  /**
-   * 执行一次 reconcile：files/ → 画布。
-   * changed 时经 recordChange 产出 file.* 事件并广播。失败仅打印，不让进程崩溃。
-   */
+  /** 执行一次 reconcile：files/ → Y.Doc。结果通过 room.mutate 写入。 */
   async function reconcileOnce(reason: string): Promise<void> {
     try {
-      const result = await runReconcile(dir, SYSTEM_ACTOR);
+      const result = await runReconcile({
+        dir,
+        scene: room.getScene(),
+        previewLimitMB: initialMeta.settings.previewSizeLimitMB,
+        actor: SYSTEM_ACTOR,
+      });
       if (result.changed) {
         console.log(
           `[board-server] reconcile(${reason}): 新增 ${result.added.length}` +
             ` / 移动 ${result.moved.length}` +
             ` / 缺失 ${result.missing.length} 个 file 元素`,
         );
+        room.mutate(SYSTEM_ACTOR, () => result.scene);
         await recordChange(SYSTEM_ACTOR);
       }
     } catch (err) {
@@ -199,7 +200,6 @@ async function main(): Promise<void> {
     }
   }
 
-  // reconcile 防抖：批量文件变更（如解压、批量拷贝）合并为一次 reconcile
   let debounceTimer: NodeJS.Timeout | null = null;
   function scheduleReconcile(): void {
     if (debounceTimer) clearTimeout(debounceTimer);
@@ -209,7 +209,6 @@ async function main(): Promise<void> {
     }, RECONCILE_DEBOUNCE_MS);
   }
 
-  // 取初始文件列表，失败时降级为空列表（files/ 可能不存在）
   let initialFiles: string[] = [];
   try {
     initialFiles = await listBoardFiles(dir);
@@ -217,13 +216,10 @@ async function main(): Promise<void> {
     console.error('[board-server] 扫描 files/ 失败，按空列表处理:', err);
   }
 
-  // 启动文件监听：文件 add/change/unlink → 防抖后触发 reconcile
   const watcher: BoardWatcher = startWatcher(dir, initialFiles, () => {
     scheduleReconcile();
   });
 
-  // 装配 HTTP server。reconcileNow 复用上面的 reconcileOnce ——
-  // POST /api/files/move 等写操作后即时同步画布，不必等 watcher 防抖窗口。
   const deps: HttpDeps = {
     dir,
     getFiles: () => watcher.getFiles(),
@@ -233,25 +229,39 @@ async function main(): Promise<void> {
     events,
     presence,
     recordChange,
-    recordOps,
     emitEvent,
+    room,
+    getMeta: () => initialMeta,
   };
   const server = createHttpServer(deps);
 
-  // 端口被占用等监听错误：打印后退出，避免无声失败
+  // M4 增量2：把 /yjs 路径下的 HTTP upgrade 升级为 Y.Doc 协同 ws。
+  const wss = new WebSocketServer({ noServer: true });
+  server.on('upgrade', (req, socket, head) => {
+    const path = (req.url ?? '').split('?')[0];
+    if (path && path.startsWith('/yjs')) {
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        room.handleWsConnection(ws);
+      });
+    } else {
+      socket.destroy();
+    }
+  });
+
   server.on('error', (err) => {
     console.error(`[board-server] HTTP 服务启动失败 (端口 ${PORT}):`, err);
     sse.closeAll();
+    room.close();
     void watcher.close().finally(() => process.exit(1));
   });
 
   server.listen(PORT, HOST, () => {
-    console.log(`[board-server] M2 已启动 http://${HOST}:${PORT}`);
+    console.log(`[board-server] M4 已启动 http://${HOST}:${PORT}`);
+    console.log(`[board-server] Yjs 协同端点: ws://${HOST}:${PORT}/yjs`);
     console.log(`[board-server] 白板目录: ${dir}`);
     console.log(`[board-server] 初始文件数: ${initialFiles.length}`);
   });
 
-  // 优雅退出：关闭监听、SSE 连接与 HTTP server
   let shuttingDown = false;
   const shutdown = (signal: string): void => {
     if (shuttingDown) return;
@@ -260,14 +270,18 @@ async function main(): Promise<void> {
     if (debounceTimer) clearTimeout(debounceTimer);
     clearInterval(presencePrune);
     sse.closeAll();
-    server.close();
-    void watcher.close().finally(() => process.exit(0));
+    // 关停前强制把 Y.Doc 投影到 board.json，避免节流窗口里的未写改动丢失
+    void room.flushToDisk().finally(() => {
+      room.close();
+      wss.close();
+      server.close();
+      void watcher.close().finally(() => process.exit(0));
+    });
   };
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
 
-// 顶层兜底：任何未预期错误都打印后退出，不留下崩溃栈
 main().catch((err) => {
   console.error('[board-server] 启动失败:', err);
   process.exit(1);
