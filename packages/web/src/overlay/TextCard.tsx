@@ -101,6 +101,24 @@ export function TextCard({
     }
   }, [editing]);
 
+  // 编辑态 textarea 跟内容长高：
+  //  - 每次 draft 改变 / 进入编辑时，把 textarea.height 重置为 auto 读取
+  //    scrollHeight，再把 height 设为该值；textarea 自身 overflow:hidden，
+  //    不出滚动条。
+  //  - 把整张文本卡的高度（textarea.offsetTop + offsetHeight）经 onResize 反馈
+  //    给 OverlayLayer，element.height 同步增长，bbox / 选择框跟着伸缩。
+  useEffect(() => {
+    if (!editing) return;
+    const ta = taRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = `${ta.scrollHeight}px`;
+    if (onResize) {
+      const fullH = ta.offsetTop + ta.offsetHeight;
+      if (Math.abs(fullH - element.height) > 4) onResize(fullH);
+    }
+  }, [editing, draft, onResize, element.height]);
+
   // 编辑态切换时同步 draft —— 进入编辑时拷 markdown 为草稿；退出时不动。
   useEffect(() => {
     if (editing) setDraft(markdown);

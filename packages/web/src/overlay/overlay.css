@@ -769,11 +769,12 @@
 }
 
 .ov-text--editing {
-  background: var(--c-surface);
-  border: 1.5px solid var(--c-accent);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-sm);
-  overflow: hidden;
+  /* 编辑态保持与预览一致的「透明纯文本」观感（PRD §6.3 修订）：
+     不加底色、不加包围盒；仅留一条陶土橙左侧细条 + 微微下划虚线，
+     提示用户当前在编辑、又不喧宾夺主。 */
+  background: transparent;
+  border: none;
+  box-shadow: inset 2px 0 0 var(--c-accent);
 }
 
 .ov-text__body {
@@ -795,15 +796,21 @@
   font-style: italic;
 }
 
-/* 文本卡就地编辑文本域 —— 仅编辑态显示，复用 body 盒模型。 */
+/* 文本卡就地编辑文本域 —— 视觉与预览态对齐：透明背景 + 同款字体字号；
+   高度由 TextCard 的 useEffect 按 scrollHeight 实时撑大（field-sizing
+   未普遍可用前的手工方案），所以 textarea 自身不滚动 / 不出 native resize 手柄。 */
 .ov-text__editor {
   resize: none;
   border: none;
   outline: none;
-  background: var(--c-surface-sunken);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  background: transparent;
+  /* 复用 ov-text__body 的字体字号（继承 .ov-text 的设置 + 元素 style.fontSize）。 */
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
   color: var(--c-ink);
+  /* textarea 不滚动 —— 高度跟着内容长（见 TextCard useEffect）。 */
+  overflow: hidden;
 }
 
 /* 连线创建的虚线预览（自研画布层增量4）。 */
