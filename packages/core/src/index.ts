@@ -17,3 +17,4 @@ export * from './task.js';
 export * from './suggestion.js';
 export * from './events.js';
 export * from './ops.js';
+export * from './yjs-doc.js';

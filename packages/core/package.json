@@ -20,5 +20,8 @@
   },
   "devDependencies": {
     "@types/node": "^20.14.0"
+  },
+  "dependencies": {
+    "yjs": "^13.6.30"
   }
 }
