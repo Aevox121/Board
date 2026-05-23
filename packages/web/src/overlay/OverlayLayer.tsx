@@ -2202,6 +2202,15 @@ export function OverlayLayer({
         void createImageFromBlob(imgFile, c.x, c.y);
         return;
       }
+      // 1b. 任意文件（资源管理器复制粘贴 / 其他来源）→ 上传到 files/ 根。
+      const otherFiles = Array.from(dt.files).filter(
+        (f) => !f.type.startsWith('image/'),
+      );
+      if (otherFiles.length > 0) {
+        e.preventDefault();
+        void uploadFilesToServer(otherFiles, '');
+        return;
+      }
       const text = dt.getData('text/plain');
       // 2. 应用内元素粘贴（带前缀标记）—— 应用内剪贴板为空时由 JSON 重建。
       if (text.startsWith(CLIP_PREFIX)) {
@@ -2274,10 +2283,15 @@ export function OverlayLayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 图片 / 嵌入工具 —— 一次性动作：选中即弹文件选择器 / URL 输入框，
-  // 随后立即回到选择工具（不作为常驻工具）。
+  // 图片 / 嵌入 / 上传文件工具 —— 一次性动作：选中即弹文件选择器 / URL
+  // 输入框 / 多选文件选择器，随后立即回到选择工具（不作为常驻工具）。
   useEffect(() => {
-    if (activeTool !== 'image' && activeTool !== 'embed') return;
+    if (
+      activeTool !== 'image' &&
+      activeTool !== 'embed' &&
+      activeTool !== 'upload'
+    )
+      return;
     onActiveToolChange?.('selection');
     if (activeTool === 'image') {
       const inp = document.createElement('input');
@@ -2289,6 +2303,16 @@ export function OverlayLayer({
           const c = viewportCenter();
           void createImageFromBlob(file, c.x, c.y);
         }
+      };
+      inp.click();
+    } else if (activeTool === 'upload') {
+      // 上传任意文件 —— 落进 .board/files/ 根，reconcile 自动建 file 元素。
+      const inp = document.createElement('input');
+      inp.type = 'file';
+      inp.multiple = true;
+      inp.onchange = (): void => {
+        const files = Array.from(inp.files ?? []);
+        if (files.length > 0) void uploadFilesToServer(files, '');
       };
       inp.click();
     } else {

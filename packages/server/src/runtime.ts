@@ -193,6 +193,12 @@ export async function createBoardRuntime(
         previewLimitMB: currentMeta.settings.previewSizeLimitMB,
         actor: SYSTEM_ACTOR,
       });
+      // 把 watcher 的内存集合同步到 reconcile 刚扫到的磁盘状态 —— 消除
+      // chokidar 轮询间隔（默认 250ms）内主动写文件（如 /api/files/upload）
+      // 与 getFiles() 之间的窗口期：否则上传后 watcher 还没轮询到新文件，
+      // getFiles() 返旧列表，web 端 missingFileIds 误把刚上传的文件标
+      // 为缺失（R6）。
+      watcher?.sync(result.diskFiles);
       if (result.changed) {
         console.log(
           `[board-server:${boardId}] reconcile(${reason}): 新增 ${result.added.length}` +

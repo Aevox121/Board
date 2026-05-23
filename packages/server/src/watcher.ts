@@ -27,6 +27,9 @@ export interface BoardWatcher {
   pause(): void;
   /** 恢复事件分发，并把暂停期间的文件集合状态对齐到磁盘当前实际状态。 */
   resume(currentDiskFiles: string[]): void;
+  /** 立即把内存集合同步到磁盘当前状态（不动 paused 状态），用于消除
+   *  chokidar 轮询间隔内主动写文件后的 getFiles() 短暂不一致。 */
+  sync(currentDiskFiles: string[]): void;
   /** 停止监听并释放资源。 */
   close(): Promise<void>;
 }
@@ -116,6 +119,15 @@ export function startWatcher(
       files.clear();
       for (const f of currentDiskFiles) files.add(f);
       paused = false;
+    },
+    /**
+     * 把内存集合直接同步到磁盘当前状态 —— 用于消除 chokidar 轮询间隔
+     * 内主动写文件（如 /api/files/upload）与 getFiles() 之间的窗口期不一致。
+     * 不动 paused 状态。
+     */
+    sync: (currentDiskFiles: string[]) => {
+      files.clear();
+      for (const f of currentDiskFiles) files.add(f);
     },
     close: () => watcher.close(),
   };

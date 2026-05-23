@@ -21,6 +21,7 @@ export type ToolId =
   | 'text'
   | 'image'
   | 'embed'
+  | 'upload'
   | 'eraser';
 
 /** 把图标 path 包进统一规格的 SVG。filled=true 用填充（如光标），否则描边。 */
@@ -129,6 +130,18 @@ const TOOLS: Array<ToolDef | 'divider'> = [
       <>
         <path d="M10.5 13.5a3.4 3.4 0 0 0 5 .3l2.7-2.7a3.4 3.4 0 0 0-4.8-4.8l-1.5 1.5" />
         <path d="M13.5 10.5a3.4 3.4 0 0 0-5-.3L5.8 12.9a3.4 3.4 0 0 0 4.8 4.8l1.5-1.5" />
+      </>,
+    ),
+  },
+  {
+    id: 'upload',
+    label: '上传文件',
+    shortcut: 'F',
+    icon: icon(
+      <>
+        <path d="M12 16V4" />
+        <path d="M7 9l5-5 5 5" />
+        <path d="M5 20h14" />
       </>,
     ),
   },

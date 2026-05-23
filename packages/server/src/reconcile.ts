@@ -31,6 +31,10 @@ export interface ReconcileRunResult {
   missing: string[];
   /** 新场景（未变化时即 opts.scene 原引用） */
   scene: BoardScene;
+  /** 本次磁盘扫描的全部 files/ 相对路径（已剔除 R7 忽略项）—— 调用方可用于
+   * 同步 watcher 缓存，消除 chokidar 轮询窗口期内 getFiles() 与刚 reconcile
+   * 出的场景之间的不一致。 */
+  diskFiles: string[];
 }
 
 export interface RunReconcileOptions {
@@ -81,5 +85,6 @@ export async function runReconcile(
     moved: result.moved,
     missing: result.missing,
     scene: result.changed ? result.scene : opts.scene,
+    diskFiles,
   };
 }
