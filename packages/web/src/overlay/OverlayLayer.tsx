@@ -77,7 +77,7 @@ import {
   smallestHitAt,
   type RectLike,
 } from './util';
-import { computeSnap, type SnapGuide } from './snap';
+import { computeSnap, snapResize, type SnapGuide } from './snap';
 import './overlay.css';
 
 /** 视口状态 —— 与 canvas/viewport.ts 的 CanvasViewport 同构。 */
@@ -3638,15 +3638,68 @@ export function OverlayLayer({
     });
   }
 
-  /** 缩放手柄移动 —— 按指针位移更新区域矩形（clamp 到内容边界）。 */
+  /**
+   * 缩放手柄移动 —— 按指针位移更新区域矩形（clamp 到内容边界）。
+   *
+   * 吸附规则（与 handlePointerMove 一致）：
+   *  - Ctrl/⌘ 按住 —— 临时关闭吸附；
+   *  - Shift 按住 —— 优先正方形约束，跳过吸附（避免 snap 把一边拉走）；
+   *  - 旋转元素 —— 跳过吸附（本地坐标轴与世界轴不同，对齐线会错位）。
+   */
   function handleResizeMove(e: React.PointerEvent<HTMLDivElement>): void {
+    const r = resize;
+    if (!r || r.pointerId !== e.pointerId) return;
     const shiftKey = e.shiftKey;
-    setResize((r) => {
-      if (!r || r.pointerId !== e.pointerId) return r;
-      const dx = (e.clientX - r.startScreenX) / zoom;
-      const dy = (e.clientY - r.startScreenY) / zoom;
-      return { ...r, ...computeResize(r, dx, dy, shiftKey) };
-    });
+    const noSnap = e.ctrlKey || e.metaKey || shiftKey;
+    const dx = (e.clientX - r.startScreenX) / zoom;
+    const dy = (e.clientY - r.startScreenY) / zoom;
+    const c = computeResize(r, dx, dy, shiftKey);
+    if (noSnap || r.angle) {
+      setResize({ ...r, ...c });
+      setSnapGuides([]);
+      return;
+    }
+    // 活动边吸附 —— 仅 hx/hy 非零的轴参与；snap 后对最小尺寸 / 内容边界再 clamp 一次。
+    const cur = sceneRef.current;
+    const refs: RectLike[] = [];
+    for (const el of cur.elements) {
+      if (el.id === r.elementId) continue;
+      if (el.type === 'connector' || el.type === 'suggestion') continue;
+      refs.push({ x: el.x, y: el.y, width: el.width, height: el.height });
+    }
+    const rect: RectLike = { x: c.x, y: c.y, width: c.w, height: c.h };
+    const snap = snapResize(rect, r.hx, r.hy, refs, SNAP_THRESHOLD_PX / zoom);
+    let { x, y, w, h } = c;
+    if (snap.dx !== 0) {
+      if (r.hx === 1) {
+        // 右边动：宽度 += dx，限制最大右界 / 最小宽。
+        w = Math.max(r.minW, Math.min(r.maxRight - x, w + snap.dx));
+      } else if (r.hx === -1) {
+        // 左边动：保持右界不动，左界右推。
+        const right = x + w;
+        const newLeft = Math.max(
+          r.minLeft,
+          Math.min(right - r.minW, x + snap.dx),
+        );
+        x = newLeft;
+        w = right - newLeft;
+      }
+    }
+    if (snap.dy !== 0) {
+      if (r.hy === 1) {
+        h = Math.max(r.minH, Math.min(r.maxBottom - y, h + snap.dy));
+      } else if (r.hy === -1) {
+        const bottom = y + h;
+        const newTop = Math.max(
+          r.minTop,
+          Math.min(bottom - r.minH, y + snap.dy),
+        );
+        y = newTop;
+        h = bottom - newTop;
+      }
+    }
+    setResize({ ...r, x, y, w, h });
+    setSnapGuides(snap.guides);
   }
 
   /** 缩放结束 —— 矩形有变化则提交并落盘。 */
@@ -3659,6 +3712,7 @@ export function OverlayLayer({
       // 已释放，忽略。
     }
     setResize(null);
+    setSnapGuides([]);
     if (r.x !== r.x0 || r.y !== r.y0 || r.w !== r.w0 || r.h !== r.h0) {
       const cur = sceneRef.current;
       const el = cur.elements.find((x) => x.id === r.elementId);
@@ -3696,6 +3750,7 @@ export function OverlayLayer({
   /** 缩放取消 —— 丢弃，不改场景。 */
   function handleResizeCancel(e: React.PointerEvent<HTMLDivElement>): void {
     setResize((r) => (r && r.pointerId === e.pointerId ? null : r));
+    setSnapGuides([]);
   }
 
   /** 指针按下旋转手柄 —— 记录元素中心，进入旋转。 */
@@ -3801,53 +3856,95 @@ export function OverlayLayer({
   function handleGroupResizeMove(
     e: React.PointerEvent<HTMLDivElement>,
   ): void {
+    const r = groupResize;
+    if (!r || r.pointerId !== e.pointerId) return;
     const shiftKey = e.shiftKey;
-    setGroupResize((r) => {
-      if (!r || r.pointerId !== e.pointerId) return r;
-      const dx = (e.clientX - r.startScreenX) / zoom;
-      const dy = (e.clientY - r.startScreenY) / zoom;
-      let bx = r.bx0;
-      let bw = r.bw0;
+    const noSnap = e.ctrlKey || e.metaKey || shiftKey;
+    const dx = (e.clientX - r.startScreenX) / zoom;
+    const dy = (e.clientY - r.startScreenY) / zoom;
+    let bx = r.bx0;
+    let bw = r.bw0;
+    if (r.hx === 1) {
+      bw = Math.max(GROUP_MIN, r.bw0 + dx);
+    } else if (r.hx === -1) {
+      const left = Math.min(r.bx0 + dx, r.bx0 + r.bw0 - GROUP_MIN);
+      bx = left;
+      bw = r.bx0 + r.bw0 - left;
+    }
+    let by = r.by0;
+    let bh = r.bh0;
+    if (r.hy === 1) {
+      bh = Math.max(GROUP_MIN, r.bh0 + dy);
+    } else if (r.hy === -1) {
+      const top = Math.min(r.by0 + dy, r.by0 + r.bh0 - GROUP_MIN);
+      by = top;
+      bh = r.by0 + r.bh0 - top;
+    }
+    // Shift 角手柄 —— 成组缩放强制保持原始宽高比，避免多选拖角时变形。
+    if (shiftKey && r.hx !== 0 && r.hy !== 0 && r.bw0 > 0 && r.bh0 > 0) {
+      const sx = bw / r.bw0;
+      const sy = bh / r.bh0;
+      const s = Math.max(sx, sy);
+      const newW = r.bw0 * s;
+      const newH = r.bh0 * s;
       if (r.hx === 1) {
-        bw = Math.max(GROUP_MIN, r.bw0 + dx);
-      } else if (r.hx === -1) {
-        const left = Math.min(r.bx0 + dx, r.bx0 + r.bw0 - GROUP_MIN);
-        bx = left;
-        bw = r.bx0 + r.bw0 - left;
+        bx = r.bx0;
+        bw = newW;
+      } else {
+        bx = r.bx0 + r.bw0 - newW;
+        bw = newW;
       }
-      let by = r.by0;
-      let bh = r.bh0;
       if (r.hy === 1) {
-        bh = Math.max(GROUP_MIN, r.bh0 + dy);
-      } else if (r.hy === -1) {
-        const top = Math.min(r.by0 + dy, r.by0 + r.bh0 - GROUP_MIN);
-        by = top;
-        bh = r.by0 + r.bh0 - top;
+        by = r.by0;
+        bh = newH;
+      } else {
+        by = r.by0 + r.bh0 - newH;
+        bh = newH;
       }
-      // Shift 角手柄 —— 成组缩放强制保持原始宽高比，避免多选拖角时变形。
-      if (shiftKey && r.hx !== 0 && r.hy !== 0 && r.bw0 > 0 && r.bh0 > 0) {
-        const sx = bw / r.bw0;
-        const sy = bh / r.bh0;
-        const s = Math.max(sx, sy);
-        const newW = r.bw0 * s;
-        const newH = r.bh0 * s;
-        if (r.hx === 1) {
-          bx = r.bx0;
-          bw = newW;
-        } else {
-          bx = r.bx0 + r.bw0 - newW;
-          bw = newW;
-        }
-        if (r.hy === 1) {
-          by = r.by0;
-          bh = newH;
-        } else {
-          by = r.by0 + r.bh0 - newH;
-          bh = newH;
+    }
+    // 成组缩放吸附 —— 把成组包围盒的活动边吸附到非选区元素的对应线。
+    // Ctrl/⌘/Shift 跳过；旋转成员存在时（包围盒可能不是各成员轴对齐）也按
+    // 包围盒做近似吸附，仍可用，只是参考线对部分旋转成员视觉略偏差。
+    let nextGuides: SnapGuide[] = [];
+    if (!noSnap) {
+      const cur = sceneRef.current;
+      const memberIds = new Set(r.members.map((m) => m.id));
+      const refs: RectLike[] = [];
+      for (const el of cur.elements) {
+        if (memberIds.has(el.id)) continue;
+        if (el.type === 'connector' || el.type === 'suggestion') continue;
+        refs.push({ x: el.x, y: el.y, width: el.width, height: el.height });
+      }
+      const rect: RectLike = { x: bx, y: by, width: bw, height: bh };
+      const snap = snapResize(
+        rect,
+        r.hx,
+        r.hy,
+        refs,
+        SNAP_THRESHOLD_PX / zoom,
+      );
+      if (snap.dx !== 0) {
+        if (r.hx === 1) bw = Math.max(GROUP_MIN, bw + snap.dx);
+        else if (r.hx === -1) {
+          const right = bx + bw;
+          const newLeft = Math.min(right - GROUP_MIN, bx + snap.dx);
+          bx = newLeft;
+          bw = right - newLeft;
         }
       }
-      return { ...r, bx, by, bw, bh };
-    });
+      if (snap.dy !== 0) {
+        if (r.hy === 1) bh = Math.max(GROUP_MIN, bh + snap.dy);
+        else if (r.hy === -1) {
+          const bottom = by + bh;
+          const newTop = Math.min(bottom - GROUP_MIN, by + snap.dy);
+          by = newTop;
+          bh = bottom - newTop;
+        }
+      }
+      nextGuides = snap.guides;
+    }
+    setGroupResize({ ...r, bx, by, bw, bh });
+    setSnapGuides(nextGuides);
   }
 
   /** 成组缩放结束 —— 按比例落定每个成员的位置 / 尺寸（draw 采样点同步）。 */
@@ -3860,6 +3957,7 @@ export function OverlayLayer({
       // 已释放，忽略。
     }
     setGroupResize(null);
+    setSnapGuides([]);
     if (r.bw === r.bw0 && r.bh === r.bh0 && r.bx === r.bx0 && r.by === r.by0) {
       return;
     }
@@ -3916,6 +4014,7 @@ export function OverlayLayer({
     e: React.PointerEvent<HTMLDivElement>,
   ): void {
     setGroupResize((r) => (r && r.pointerId === e.pointerId ? null : r));
+    setSnapGuides([]);
   }
 
   /** 指针按下成组旋转手柄 —— 冻结成员快照与并集中心，进入成组旋转。 */
