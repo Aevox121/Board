@@ -1,6 +1,12 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
+/**
+ * board-server 端口 —— 默认 4500，可经 BOARD_API_PORT 环境变量覆盖。
+ * 多实例并行调试时（如同时跑两套 server/vite 看不同 board）用得上。
+ */
+const BOARD_API_PORT = process.env.BOARD_API_PORT ?? '4500';
+
 export default defineConfig(({ mode }) => ({
   plugins: [react()],
   // Excalidraw 的入口 main.js 在运行时读 process.env.*，而浏览器没有 process。
@@ -16,13 +22,13 @@ export default defineConfig(({ mode }) => ({
     // server 未启动时代理会失败，由前端 client 层捕获并降级到离线模式。
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:4500',
+        target: `http://127.0.0.1:${BOARD_API_PORT}`,
         changeOrigin: true,
       },
-      // ws 转发：让浏览器只认 4510 上的同源 ws://.../yjs，背后实际连 4500。
+      // ws 转发：让浏览器只认 vite 同源 ws://.../yjs，背后实际连 board-server。
       // 多 board 模式下分享链接走同一个 origin 也能 work。
       '/yjs': {
-        target: 'ws://127.0.0.1:4500',
+        target: `ws://127.0.0.1:${BOARD_API_PORT}`,
         ws: true,
         changeOrigin: true,
       },

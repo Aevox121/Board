@@ -113,7 +113,13 @@ async function main(): Promise<void> {
     } else {
       const m = /^\/yjs\/([^/]+)$/.exec(rawPath);
       if (m) {
-        boardId = decodeURIComponent(m[1]!);
+        try {
+          boardId = decodeURIComponent(m[1]!);
+        } catch {
+          // 非法编码 —— 直接关掉，别让进程崩
+          socket.destroy();
+          return;
+        }
       } else {
         socket.destroy();
         return;

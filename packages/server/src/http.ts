@@ -1649,13 +1649,26 @@ export type DepsResolver = (boardId: string | null) => HttpDeps | null;
  */
 export function createHttpServer(getDeps: DepsResolver): Server {
   const server = createServer((req, res) => {
-    const url = new URL(req.url ?? '/', `http://${HOST}`);
+    // 顶层 try：URL 解析 / decodeURIComponent 在非法序列上会抛同步错误，
+    // 不能让单次坏请求崩掉整个进程。任何异常都转成 400，不让冒到 server.
+    let url: URL;
+    try {
+      url = new URL(req.url ?? '/', `http://${HOST}`);
+    } catch (err) {
+      fail(res, 400, `非法请求 URL: ${errMsg(err)}`);
+      return;
+    }
     const rawPath = url.pathname;
     let boardId: string | null = null;
     // 形如 /api/boards/<id> 或 /api/boards/<id>/<rest>
     const m = /^\/api\/boards\/([^/]+)(\/.*)?$/.exec(rawPath);
     if (m) {
-      boardId = decodeURIComponent(m[1]!);
+      try {
+        boardId = decodeURIComponent(m[1]!);
+      } catch (err) {
+        fail(res, 400, `非法 boardId 编码: ${errMsg(err)}`);
+        return;
+      }
       // 把 req.url 重写为剥前缀后的形式，下游 route() 沿用既有匹配
       const rest = m[2] ?? '';
       const newPath = '/api' + rest;
@@ -1676,6 +1689,16 @@ export function createHttpServer(getDeps: DepsResolver): Server {
         res.end();
       }
     });
+  });
+  // 套接字层异常（含 ws upgrade 路径中 decodeURIComponent 抛错）也兜底，
+  // 不能透传到 process 的 uncaughtException 导致进程崩。
+  server.on('clientError', (err, socket) => {
+    try {
+      socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+    } catch {
+      // socket 已断开，忽略
+    }
+    console.error('[board-server] 客户端请求错误:', err.message);
   });
   return server;
 }
