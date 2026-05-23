@@ -1316,6 +1316,73 @@ export function OverlayLayer({
     });
   }, [scene.elements]);
 
+  // 视口外虚拟化（PRD §12：视口外元素虚拟化渲染）。
+  //
+  //  - 元素数 <= 阈值时跳过虚拟化（少量场景无需开销）。
+  //  - 计算视口在画布坐标下的覆盖矩形 + EDGE_PAD 留白（避免边缘进出抖动）。
+  //  - 选中 / 拖拽 / 缩放 / 旋转 / 标签编辑中的元素无条件保留（手柄 / 拖出
+  //    视口的元素仍能被找回）。
+  //  - 旋转元素按其轴对齐包围盒判定 —— 包围盒比真实形状大一点，过滤更保守
+  //    （不漏渲染）；旋转 45° 的小元素几乎不会被裁掉。
+  //  - 连线 / 建议层另由 ConnectorLayer / SuggestionLayer 渲染，不受此影响；
+  //    它们按 id 引用本层元素，off-screen 引用解析仍然有效。
+  const VIRTUALIZATION_THRESHOLD = 80;
+  const VIEWPORT_PAD_PX = 200;
+  // surfaceSize：rootRef 当前像素尺寸，由 ResizeObserver 跟随。
+  const [surfaceSize, setSurfaceSize] = useState<{ width: number; height: number }>(
+    { width: 0, height: 0 },
+  );
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const update = (): void => {
+      const r = el.getBoundingClientRect();
+      setSurfaceSize({ width: r.width, height: r.height });
+    };
+    update();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const visibleElements = useMemo<CanvasElement[]>(() => {
+    if (canvasElements.length <= VIRTUALIZATION_THRESHOLD) return canvasElements;
+    if (surfaceSize.width === 0 || surfaceSize.height === 0) return canvasElements;
+    // 视口画布坐标盒（含 EDGE_PAD）。
+    const padCanvas = VIEWPORT_PAD_PX / zoom;
+    const vx = -scrollX - padCanvas;
+    const vy = -scrollY - padCanvas;
+    const vRight = -scrollX + surfaceSize.width / zoom + padCanvas;
+    const vBottom = -scrollY + surfaceSize.height / zoom + padCanvas;
+    return canvasElements.filter((el) => {
+      // 状态相关无条件保留 —— 选中 / 拖拽 / 缩放 / 旋转 / 标签编辑中的元素。
+      if (selectedIds.has(el.id)) return true;
+      if (drag && drag.memberIds.has(el.id)) return true;
+      if (resize && resize.elementId === el.id) return true;
+      if (rotate && rotate.elementId === el.id) return true;
+      if (editingLabelId === el.id) return true;
+      // 轴对齐包围盒与视口盒相交即保留。
+      return !(
+        el.x + el.width < vx ||
+        el.x > vRight ||
+        el.y + el.height < vy ||
+        el.y > vBottom
+      );
+    });
+  }, [
+    canvasElements,
+    surfaceSize,
+    scrollX,
+    scrollY,
+    zoom,
+    selectedIds,
+    drag,
+    resize,
+    rotate,
+    editingLabelId,
+  ]);
+
   // 手绘元素的命中裁剪 path —— id → `path('<轮廓>')`，供卡槽 clip-path 把
   // 手绘的命中区裁成笔迹形状（包围盒空白处不再误选）。采样点 <2 的不裁。
   const drawHitClips = useMemo<Map<string, string>>(() => {
@@ -4498,7 +4565,7 @@ export function OverlayLayer({
           </svg>
         ) : null}
 
-        {canvasElements.map((el) => {
+        {visibleElements.map((el) => {
           const isFile = el.type === 'file';
           const isText = el.type === 'text';
           const isShape = el.type === 'shape';
