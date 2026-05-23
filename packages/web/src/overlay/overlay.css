@@ -78,6 +78,12 @@
   object-fit: fill;
   display: block;
   border-radius: 4px;
+  /* 描边相关 style 字段（StylePanel 设值时生效）—— 默认 0 宽不可见。 */
+  border: var(--ov-stroke-w, 0)
+    var(--ov-stroke-style, solid)
+    var(--ov-stroke, transparent);
+  box-sizing: border-box;
+  background: var(--ov-fill, transparent);
 }
 .ov-image__missing {
   display: flex;
@@ -99,8 +105,11 @@
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: var(--c-surface, #fff);
-  border: 1.5px solid var(--c-border, #d8cfc2);
+  /* 背景 / 描边接通 StylePanel —— 改色 / 改宽 / 改线型立即反映。 */
+  background: var(--ov-fill, var(--c-surface, #fff));
+  border: var(--ov-stroke-w, 1.5px)
+    var(--ov-stroke-style, solid)
+    var(--ov-stroke, var(--c-border, #d8cfc2));
   border-radius: 8px;
 }
 .ov-embed--card {

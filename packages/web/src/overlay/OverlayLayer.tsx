@@ -260,13 +260,16 @@ function isCanvasElement(el: Element): el is CanvasElement {
   );
 }
 
+/** DragState.kind 的字面量集合 —— 表驱动 dispatch 用。 */
+type DragKind = 'file' | 'region' | 'text' | 'element' | 'group';
+
 /** 拖拽（移动）过程的瞬时状态 —— 文件卡 / 文本卡 / 区域 / 图形手绘共用。 */
 interface DragState {
   /**
    * 被拖对象类型：文件卡 / 区域 / 文本卡 / 图形手绘（element）/ 多选整组
    * （group）。group 为多选整组拖拽 —— 仅按偏移整体平移，落定走 finishGroupDrag。
    */
-  kind: 'file' | 'region' | 'text' | 'element' | 'group';
+  kind: DragKind;
   /** 被拖元素 id（group 时为按下的那个元素）。 */
   elementId: string;
   /**
@@ -322,6 +325,64 @@ interface ResizeState {
   maxBottom: number;
   minTop: number;
 }
+
+/**
+ * 元素级操作处理表 —— 各元素类型「拖拽 kind / 缩放后处理」的差异点集中在此。
+ * 加新元素类型只需填一行，无需改 slotPointerDown / handleResizeUp 的分发。
+ *
+ * 不在此表里的元素类型走自己的渲染层（特例）：
+ *  - connector → ConnectorLayer：本质两点几何，端点 / waypoint 独立拖拽，
+ *    不套通用八向缩放手柄。
+ *  - suggestion → 协作元素，渲染独立，不参与人手变换。
+ */
+type ElementKind = CanvasElement['type'];
+
+interface ElementHandler {
+  /**
+   * 该元素在通用 slotPointerDown 路径里的 `DragState.kind` —— 决定落定时
+   * 走哪条 finish 路径（file/region/text 各有专属，element 为通用矩形落点）。
+   * `null` = 不在通用路径里发起拖拽（如 region 走 header）。
+   */
+  dragKind: DragKind | null;
+  /**
+   * 缩放落定后的元素特化重建 —— 返回新元素覆写场景。
+   * 不提供 = 走通用 patchElement（按 x/y/w/h 直接 patch）。
+   *
+   * draw 用此 hook 让采样点按比例同步缩放，否则笔迹会与新包围盒脱节。
+   * 返回元素无需自带 updatedBy/updatedAt —— 调用方统一补。
+   */
+  afterResize?: (el: Element, r: ResizeState) => Element;
+}
+
+const ELEMENT_HANDLERS: Record<ElementKind, ElementHandler> = {
+  file: { dragKind: 'file' },
+  text: { dragKind: 'text' },
+  folder: { dragKind: 'element' },
+  region: { dragKind: null },
+  shape: { dragKind: 'element' },
+  image: { dragKind: 'element' },
+  embed: { dragKind: 'element' },
+  draw: {
+    dragKind: 'element',
+    afterResize: (el, r) => {
+      // 退化：原始尺寸为 0 时无法等比缩放，落回通用矩形 patch（不动 points）。
+      if (el.type !== 'draw' || r.w0 <= 0 || r.h0 <= 0) {
+        return { ...el, x: r.x, y: r.y, width: r.w, height: r.h, autoPlaced: false };
+      }
+      const sx = r.w / r.w0;
+      const sy = r.h / r.h0;
+      return {
+        ...el,
+        x: r.x,
+        y: r.y,
+        width: r.w,
+        height: r.h,
+        autoPlaced: false,
+        points: el.points.map((p) => [p[0] * sx, p[1] * sy] as [number, number]),
+      };
+    },
+  },
+};
 
 /** 旋转过程的瞬时状态。 */
 interface RotateState {
@@ -2842,13 +2903,20 @@ export function OverlayLayer({
     }
   }
 
-  /** 拖拽结束分发。 */
+  /** 拖拽结束分发 —— exhaustive switch，新增 DragKind 时 TS 会强提示。 */
   function finishDrag(d: DragState): void {
-    if (d.kind === 'group') finishGroupDrag(d);
-    else if (d.kind === 'region') finishRegionDrag(d);
-    else if (d.kind === 'text') finishTextDrag(d);
-    else if (d.kind === 'element') finishPlainDrag(d);
-    else finishFileDrag(d);
+    switch (d.kind) {
+      case 'group':
+        return finishGroupDrag(d);
+      case 'region':
+        return finishRegionDrag(d);
+      case 'text':
+        return finishTextDrag(d);
+      case 'element':
+        return finishPlainDrag(d);
+      case 'file':
+        return finishFileDrag(d);
+    }
   }
 
   /** 提交一次创建手势 —— 据创建状态造出元素并加入场景。 */
@@ -3594,26 +3662,21 @@ export function OverlayLayer({
     if (r.x !== r.x0 || r.y !== r.y0 || r.w !== r.w0 || r.h !== r.h0) {
       const cur = sceneRef.current;
       const el = cur.elements.find((x) => x.id === r.elementId);
-      if (el && el.type === 'draw' && r.w0 > 0 && r.h0 > 0) {
-        // 手绘缩放：采样点按比例缩放，笔迹随包围盒一起变 —— 否则笔迹会
-        // 与新包围盒脱节（点是相对原点的固定坐标，不会自动跟着缩放）。
-        const sx = r.w / r.w0;
-        const sy = r.h / r.h0;
-        const scaled: Element = {
-          ...el,
-          x: r.x,
-          y: r.y,
-          width: r.w,
-          height: r.h,
-          autoPlaced: false,
-          points: el.points.map((p) => [p[0] * sx, p[1] * sy]),
+      if (!el) return;
+      // 元素特化的缩放后处理（如 draw 笔迹同步缩放）；通用情况退化为
+      // patchElement —— 只 patch 矩形字段。
+      const handler = ELEMENT_HANDLERS[el.type as ElementKind];
+      if (handler?.afterResize) {
+        const ts = new Date().toISOString();
+        const next: Element = {
+          ...handler.afterResize(el, r),
           updatedBy: actorId,
-          updatedAt: new Date().toISOString(),
+          updatedAt: ts,
         };
         replaceScene(
           {
             ...cur,
-            elements: cur.elements.map((x) => (x.id === el.id ? scaled : x)),
+            elements: cur.elements.map((x) => (x.id === el.id ? next : x)),
           },
           'canvas',
         );
@@ -4457,8 +4520,10 @@ export function OverlayLayer({
                   : null;
 
           // 卡槽点选 / 进入待拖拽 —— 区域走头部手柄、不在此。
+          // 该元素在通用路径下的拖拽 kind（null = 不参与，如 region 走 header）。
+          const dragKind = ELEMENT_HANDLERS[el.type as ElementKind].dragKind;
           const slotPointerDown =
-            el.type === 'region'
+            dragKind === null
               ? undefined
               : (e: React.PointerEvent<HTMLDivElement>): void => {
                   if (e.button !== 0) return;
@@ -4481,10 +4546,8 @@ export function OverlayLayer({
                   const groupDrag = keepSel || gset.size > 1;
                   if (groupDrag) {
                     beginDrag(e, el, 'group', keepSel ? undefined : gset);
-                  } else if (isFile || isText) {
-                    beginDrag(e, el, isFile ? 'file' : 'text');
-                  } else if (isShape || isDraw || isImage || isEmbed) {
-                    beginDrag(e, el, 'element');
+                  } else {
+                    beginDrag(e, el, dragKind);
                   }
                 };
           // 双击图形 —— 进入标签就地编辑。锁定元素不可编辑。
