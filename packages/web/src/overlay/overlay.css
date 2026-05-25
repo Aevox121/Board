@@ -228,6 +228,52 @@
   opacity: 0.55;
 }
 
+/* 外链角标（PRD §6.4 「元素挂外链」）—— 评论角标左侧的小 🔗 链接;
+   pointer-events:auto + 显式 <a target=_blank>，点击新窗打开。 */
+.ov-link-badge {
+  position: absolute;
+  top: -9px;
+  right: 22px;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-sm);
+  pointer-events: auto;
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+  z-index: 2;
+  transition: background var(--dur-micro, 150ms),
+    border-color var(--dur-micro, 150ms);
+}
+.ov-link-badge:hover {
+  background: var(--c-accent-tint);
+  border-color: var(--c-accent);
+}
+
+/* StylePanel 的外链输入框 —— 与面板其他输入控件视觉一致。 */
+.ov-style-link {
+  width: 100%;
+  padding: 4px 8px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  color: var(--c-ink);
+  transition: border-color var(--dur-micro, 150ms);
+}
+.ov-style-link:focus {
+  outline: none;
+  border-color: var(--c-accent);
+}
+
 /* 锁定角标 —— 贴在元素左上角的小锁，标示该元素已锁定。 */
 .ov-lock-badge {
   position: absolute;

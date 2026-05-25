@@ -126,6 +126,13 @@ export interface StylePanelProps {
   ) => void;
   /** 沿某轴等距分布选区。 */
   onDistribute: (axis: 'h' | 'v') => void;
+  /**
+   * 选区单选时的当前外链（PRD §6.4 「元素挂外链」）；多选 / 选区不一致时为 null
+   * 表示不渲染外链节。
+   */
+  link?: string | null;
+  /** 提交外链 —— 空字符串 / 全空白 = 清除外链。仅单选时调用。 */
+  onLinkChange?: (next: string) => void;
 }
 
 /** `<input type="color">` 需合法 #rrggbb；透明 / 异常值回退到白。 */
@@ -198,6 +205,8 @@ export function StylePanel({
   alignCount,
   onAlign,
   onDistribute,
+  link,
+  onLinkChange,
 }: StylePanelProps): JSX.Element {
   // 锁定态 —— 面板只给「解锁」入口，不暴露样式 / 变换控件。
   if (locked) {
@@ -397,6 +406,36 @@ export function StylePanel({
             options={ARROW_HEADS}
             value={arrows.endArrow}
             onPick={(v) => onArrowChange({ endArrow: v })}
+          />
+        </section>
+      ) : null}
+
+      {/* 元素挂外链（PRD §6.4）—— 仅单选时出现，多选 / 选区不一致时隐藏。
+          失焦 / Enter 提交；空字符串清除外链。 */}
+      {link !== undefined && link !== null && onLinkChange ? (
+        <section className="ov-style-sec">
+          <span className="ov-style-sec__label">外链</span>
+          <input
+            type="text"
+            className="ov-style-link"
+            defaultValue={link}
+            placeholder="https://… 或 obsidian://…"
+            spellCheck={false}
+            onBlur={(e) => {
+              const next = e.target.value.trim();
+              if (next !== link) onLinkChange(next);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                (e.target as HTMLInputElement).blur();
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                (e.target as HTMLInputElement).value = link;
+                (e.target as HTMLInputElement).blur();
+              }
+            }}
+            aria-label="外链 URL"
           />
         </section>
       ) : null}

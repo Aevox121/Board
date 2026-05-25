@@ -3667,6 +3667,30 @@ export function OverlayLayer({
   }
 
   /**
+   * 设置元素外链（PRD §6.4「元素挂外链」）—— next 为空（trim 后空字符串）
+   * 清除外链；否则记录为 element.link，slot 右上角出现 🔗 角标，点击新窗
+   * 打开。任意元素类型可用，由 StylePanel 单选时暴露入口。
+   */
+  function setElementLink(id: string, next: string): void {
+    const cur = sceneRef.current;
+    const ts = new Date().toISOString();
+    const link = next.trim();
+    const nextScene: BoardScene = {
+      ...cur,
+      elements: cur.elements.map((e): Element => {
+        if (e.id !== id) return e;
+        if (link) {
+          return { ...e, link, updatedBy: actorId, updatedAt: ts } as Element;
+        }
+        // 清除外链 —— 用对象解构剔除 link 字段
+        const { link: _drop, ...rest } = e as Element & { link?: string };
+        return { ...rest, updatedBy: actorId, updatedAt: ts } as Element;
+      }),
+    };
+    replaceScene(nextScene, 'canvas');
+  }
+
+  /**
    * 区域软归属转让（PRD §8.3）—— 改 `region.ownerId`。
    * null = 设为公共区域；其它 = 转让给该参与者。
    */
@@ -5326,6 +5350,22 @@ export function OverlayLayer({
                   🔒
                 </div>
               ) : null}
+              {/* 外链角标（PRD §6.4 「元素挂外链」）—— element.link 非空时
+                  右上角出现 🔗，点击在新标签页打开外链。 */}
+              {el.link ? (
+                <a
+                  className="ov-link-badge"
+                  href={el.link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={`打开外链：${el.link}`}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => e.stopPropagation()}
+                  aria-label="打开外链"
+                >
+                  🔗
+                </a>
+              ) : null}
               {/* 评论角标（PRD §8.4）—— 元素有评论时显示条数；点击展开浮窗 */}
               {(el.comments?.length ?? 0) > 0
                 ? (() => {
@@ -5553,6 +5593,12 @@ export function OverlayLayer({
           alignCount={selAlignCount}
           onAlign={alignSelection}
           onDistribute={distributeSelection}
+          link={selectedEls.length === 1 ? (selectedEls[0]!.link ?? '') : null}
+          onLinkChange={
+            selectedEls.length === 1
+              ? (next): void => setElementLink(selectedEls[0]!.id, next)
+              : undefined
+          }
         />
       ) : null}
 

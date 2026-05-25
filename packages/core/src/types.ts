@@ -160,6 +160,12 @@ export interface BaseElement {
   updatedAt: ISO8601;
   /** 元素上的评论（PRD §8.4）；无评论时省略 */
   comments?: ElementComment[];
+  /**
+   * 元素挂外链（PRD §6.4 「元素挂外链」），任意元素可附一个 URL —— 点击
+   * 右上角 🔗 角标在新标签页打开。空 / 省略 = 无外链。
+   * 不做强校验：允许 http(s)/file/obsidian/自定义 protocol，由用户负责合法性。
+   */
+  link?: string;
   /** 扩展位，未知字段保留不丢弃 */
   meta?: Record<string, unknown>;
 }
