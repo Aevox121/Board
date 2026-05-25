@@ -12,6 +12,18 @@ export interface PresenceCursor {
   y: number;
 }
 
+/**
+ * 在场视口（PRD §8.2「跟随某人视角」）—— `x,y` 是视口左上角的画布坐标
+ * （= -scrollX, -scrollY），`zoom` 是当前缩放倍率。其他客户端跟随时把自己
+ * 的视口对齐到这三个值即可。Agent 不上报视口；人类用户每次 presence 心跳
+ * 顺带上报当前 viewport。
+ */
+export interface PresenceViewport {
+  x: number;
+  y: number;
+  zoom: number;
+}
+
 /** 一个在场参与者。 */
 export interface PresenceUser {
   /** 客户端会话 id（Agent 用 participant id，如 `a_travis`） */
@@ -40,6 +52,11 @@ export interface PresenceUser {
    * 默认 false（人类用户）。
    */
   isAgent?: boolean;
+  /**
+   * 当前视口（PRD §8.2 跟随视角）—— 含画布坐标的视口左上角 + zoom。
+   * 仅人类用户上报；其他客户端选择「跟随该人」时把自己视口对齐到这里。
+   */
+  viewport?: PresenceViewport;
 }
 
 /** 超过此时长未上报即视为离线（毫秒）。 */

@@ -27,10 +27,18 @@ const HEARTBEAT_MS = 4000;
 export interface PresenceLayerProps {
   /** 与覆盖层共享的视口（scrollX / scrollY / zoom）。 */
   viewport: OverlayViewport;
+  /**
+   * 点击对端光标 / 名牌时回调（PRD §8.2 跟随视角入口）。CanvasShell 据此
+   * 切换 followingClientId；不传则名牌不响应点击（保持原 pointer-events:none）。
+   */
+  onFollowClient?: (clientId: string) => void;
 }
 
 /** 在场光标层。 */
-export function PresenceLayer({ viewport }: PresenceLayerProps): JSX.Element {
+export function PresenceLayer({
+  viewport,
+  onFollowClient,
+}: PresenceLayerProps): JSX.Element {
   const users = useSyncExternalStore(
     presenceStore.subscribe,
     presenceStore.getSnapshot,
@@ -50,11 +58,15 @@ export function PresenceLayer({ viewport }: PresenceLayerProps): JSX.Element {
     let trailing: number | undefined;
 
     const post = (cursor: { x: number; y: number } | null): void => {
+      // viewport（PRD §8.2 跟随视角）—— 视口左上角的画布坐标 + zoom；
+      // 受让方按此对齐自己的视口。
+      const { scrollX, scrollY, zoom } = vpRef.current;
       void sendPresence({
         clientId: SESSION.clientId,
         name: SESSION.name,
         color: SESSION.color,
         cursor,
+        viewport: { x: -scrollX, y: -scrollY, zoom },
       });
     };
     const flush = (): void => {
@@ -160,8 +172,20 @@ export function PresenceLayer({ viewport }: PresenceLayerProps): JSX.Element {
                     />
                   </svg>
                   <span
-                    className="presence-focus__name"
+                    className={
+                      'presence-focus__name' +
+                      (onFollowClient ? ' presence-name--clickable' : '')
+                    }
                     style={{ background: u.color }}
+                    onClick={
+                      onFollowClient
+                        ? (e) => {
+                            e.stopPropagation();
+                            onFollowClient(u.clientId);
+                          }
+                        : undefined
+                    }
+                    title={onFollowClient ? `跟随 ${u.name} 视角` : undefined}
                   >
                     ◆ {u.name}
                   </span>
@@ -198,7 +222,22 @@ export function PresenceLayer({ viewport }: PresenceLayerProps): JSX.Element {
                 strokeLinejoin="round"
               />
             </svg>
-            <span className="presence-name" style={{ background: u.color }}>
+            <span
+              className={
+                'presence-name' +
+                (onFollowClient ? ' presence-name--clickable' : '')
+              }
+              style={{ background: u.color }}
+              onClick={
+                onFollowClient
+                  ? (e) => {
+                      e.stopPropagation();
+                      onFollowClient(u.clientId);
+                    }
+                  : undefined
+              }
+              title={onFollowClient ? `跟随 ${u.name} 视角` : undefined}
+            >
               {u.name}
             </span>
           </div>

@@ -251,6 +251,11 @@ export interface PresencePayload {
   color: string;
   /** 画布坐标的光标位置；null = 在场但光标未知 */
   cursor: { x: number; y: number } | null;
+  /**
+   * 当前视口（PRD §8.2 跟随视角）—— x/y 是视口左上角的画布坐标，zoom 是
+   * 缩放倍率。仅人类用户上报；其他客户端选择跟随时把自己视口对齐到这里。
+   */
+  viewport?: { x: number; y: number; zoom: number };
 }
 
 /**

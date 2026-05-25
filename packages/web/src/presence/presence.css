@@ -118,3 +118,53 @@
     animation-duration: 14s;
   }
 }
+
+/* 名牌作为「跟随该参与者视角」入口（PRD §8.2）—— 名牌单独恢复 pointer-events，
+   光标本体仍 none 不挡画布点选。 */
+.presence-name--clickable {
+  pointer-events: auto;
+  cursor: pointer;
+  transition: filter var(--dur-micro, 150ms);
+}
+.presence-name--clickable:hover {
+  filter: brightness(1.08);
+}
+
+/* 跟随中横幅 —— CanvasShell 渲染（顶部居中）。 */
+.cv-follow-banner {
+  position: absolute;
+  top: var(--space-3, 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2, 8px);
+  padding: var(--space-1, 4px) var(--space-3, 12px);
+  background: var(--c-surface, #fff);
+  border: 1px solid var(--c-border, #e6e3d8);
+  border-radius: var(--radius-pill, 999px);
+  box-shadow: var(--shadow-md);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs, 12px);
+  color: var(--c-ink);
+  z-index: 60; /* 高于 presence-layer */
+  pointer-events: auto;
+}
+.cv-follow-banner__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--c-followed, var(--c-accent));
+}
+.cv-follow-banner__exit {
+  border: none;
+  background: transparent;
+  padding: 0 var(--space-1, 4px);
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--c-accent);
+  cursor: pointer;
+}
+.cv-follow-banner__exit:hover {
+  text-decoration: underline;
+}

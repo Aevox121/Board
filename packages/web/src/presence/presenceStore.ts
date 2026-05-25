@@ -25,6 +25,12 @@ export interface RemotePresence {
   targetOffset?: { x: number; y: number };
   /** 是否 Agent，浏览器据此渲染 jitter 工作光标。 */
   isAgent?: boolean;
+  /**
+   * 对方当前视口（PRD §8.2 跟随视角）—— 仅人类用户上报；本端选择跟随时
+   * 把自己 viewport 对齐到这里（CanvasShell 处理）。x/y 是视口左上角的画布
+   * 坐标，zoom 是缩放倍率。
+   */
+  viewport?: { x: number; y: number; zoom: number };
 }
 
 /** 当前在场列表 —— 仅在变化时换新引用，满足 useSyncExternalStore 的稳定快照要求。 */

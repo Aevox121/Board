@@ -11,10 +11,12 @@
  * 视口真相源在本组件的 `viewport` state，由平移/缩放手势与缩放控件写入；
  * 导入 / 首次连接时由 fitToContent 聚焦到全部内容。
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useBoard } from '../board/BoardContext';
 import { OverlayLayer } from '../overlay/OverlayLayer';
 import { PresenceLayer } from '../presence/PresenceLayer';
+import { presenceStore } from '../presence/presenceStore';
+import { SESSION } from '../session';
 import { CanvasGrid } from './CanvasGrid';
 import { Toolbar, TOOL_SHORTCUTS } from './Toolbar';
 import { Minimap } from './Minimap';
@@ -49,11 +51,60 @@ export function CanvasShell(): JSX.Element {
   const [activeTool, setActiveTool] = useState<string>('selection');
   const shellRef = useRef<HTMLDivElement>(null);
 
+  // ── 跟随视角（PRD §8.2）─────────────────────────────────────
+  // followingClientId 不为 null 时，本端视口受 followingClientId 对应 presence
+  // 的 viewport 拉扯；任意本地交互（平移 / 缩放 / 导航 / fit）一律退出跟随，
+  // 把控制权交还给用户。
+  const [followingClientId, setFollowingClientId] = useState<string | null>(null);
+  const presenceUsers = useSyncExternalStore(
+    presenceStore.subscribe,
+    presenceStore.getSnapshot,
+  );
+  const followed =
+    followingClientId !== null
+      ? presenceUsers.find((u) => u.clientId === followingClientId)
+      : null;
+
+  /**
+   * 本地交互专用的 viewport setter —— 凡用户手动改动视口都走这条，自动退出
+   * 跟随；跟随驱动的视口对齐则直接 setViewport，不触发退出。
+   */
+  const setViewportLocal = useCallback(
+    (updater: CanvasViewport | ((vp: CanvasViewport) => CanvasViewport)) => {
+      setFollowingClientId(null);
+      setViewport(updater);
+    },
+    [],
+  );
+
   const { panning } = useViewportGestures({
     surfaceRef: shellRef,
     viewport,
-    onChange: setViewport,
+    onChange: setViewportLocal,
   });
+
+  // 跟随驱动 —— followed.viewport 变化即把本端视口对齐过去。
+  useEffect(() => {
+    if (!followingClientId) return;
+    if (!followed || !followed.viewport) return;
+    const { x, y, zoom } = followed.viewport;
+    setViewport({ scrollX: -x, scrollY: -y, zoom });
+  }, [followingClientId, followed]);
+
+  // 被跟随者下线 / 不再上报 → 自动退出跟随。
+  useEffect(() => {
+    if (!followingClientId) return;
+    if (!followed) setFollowingClientId(null);
+  }, [followingClientId, followed]);
+
+  // 点远端徽标 → 切换跟随：
+  //  - 当前未跟随 → 跟随该人
+  //  - 当前已跟随同一人 → 退出
+  //  - 已跟随另一人 → 改跟随这一人
+  const onFollowClient = useCallback((clientId: string) => {
+    if (clientId === SESSION.clientId) return;
+    setFollowingClientId((cur) => (cur === clientId ? null : clientId));
+  }, []);
 
   // 导入 / 首次连接（importTick 自增且 importFit）：把视口聚焦到全部内容。
   // fittedTickRef 保证每个 importTick 只聚焦一次。
@@ -65,8 +116,8 @@ export function CanvasShell(): JSX.Element {
     const el = shellRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    setViewport(fitToContent(scene.elements, r.width, r.height));
-  }, [importTick, importFit, scene]);
+    setViewportLocal(fitToContent(scene.elements, r.width, r.height));
+  }, [importTick, importFit, scene, setViewportLocal]);
 
   // 「导航请求」—— OutlinePanel / 搜索结果点击元素时把视口居中到该元素。
   // navTick 每次自增即响应一次（同一元素可重复跳转）。
@@ -82,12 +133,12 @@ export function CanvasShell(): JSX.Element {
     const r = sh.getBoundingClientRect();
     const cx = target.x + target.width / 2;
     const cy = target.y + target.height / 2;
-    setViewport((vp) => ({
+    setViewportLocal((vp) => ({
       scrollX: r.width / 2 / vp.zoom - cx,
       scrollY: r.height / 2 / vp.zoom - cy,
       zoom: vp.zoom,
     }));
-  }, [navTick, navTargetId, scene]);
+  }, [navTick, navTargetId, scene, setViewportLocal]);
 
   // 撤销 / 重做快捷键 —— Ctrl/⌘+Z 撤销，Ctrl/⌘+Shift+Z 或 Ctrl/⌘+Y 重做。
   useEffect(() => {
@@ -141,37 +192,45 @@ export function CanvasShell(): JSX.Element {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // 缩放控件 —— 以外壳中心为锚缩放。
-  const zoomBy = useCallback((factor: number) => {
-    const el = shellRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    setViewport((vp) => zoomAt(vp, vp.zoom * factor, r.width / 2, r.height / 2));
-  }, []);
+  // 缩放控件 —— 以外壳中心为锚缩放。本地交互，触发跟随退出。
+  const zoomBy = useCallback(
+    (factor: number) => {
+      const el = shellRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      setViewportLocal((vp) =>
+        zoomAt(vp, vp.zoom * factor, r.width / 2, r.height / 2),
+      );
+    },
+    [setViewportLocal],
+  );
   const resetZoom = useCallback(() => {
     const el = shellRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    setViewport((vp) => zoomAt(vp, 1, r.width / 2, r.height / 2));
-  }, []);
+    setViewportLocal((vp) => zoomAt(vp, 1, r.width / 2, r.height / 2));
+  }, [setViewportLocal]);
   // 「回到全部内容」按钮 + 快捷键 —— 把视口聚焦到当前所有元素（fitToContent）。
   const fitAll = useCallback(() => {
     const el = shellRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    setViewport(fitToContent(scene.elements, r.width, r.height));
-  }, [scene.elements]);
+    setViewportLocal(fitToContent(scene.elements, r.width, r.height));
+  }, [scene.elements, setViewportLocal]);
   // 小地图点击 —— 把指定的画布坐标置于视口中心。
-  const jumpToCanvasPoint = useCallback((cx: number, cy: number) => {
-    const el = shellRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    setViewport((vp) => ({
-      scrollX: r.width / 2 / vp.zoom - cx,
-      scrollY: r.height / 2 / vp.zoom - cy,
-      zoom: vp.zoom,
-    }));
-  }, []);
+  const jumpToCanvasPoint = useCallback(
+    (cx: number, cy: number) => {
+      const el = shellRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      setViewportLocal((vp) => ({
+        scrollX: r.width / 2 / vp.zoom - cx,
+        scrollY: r.height / 2 / vp.zoom - cy,
+        zoom: vp.zoom,
+      }));
+    },
+    [setViewportLocal],
+  );
   // 「适配选中」—— 但选区由 OverlayLayer 持有，目前没向上暴露；先不做按钮，
   // 仅留 fitAll，「适配选中」放后续。
 
@@ -188,8 +247,30 @@ export function CanvasShell(): JSX.Element {
           activeTool={activeTool}
           onActiveToolChange={setActiveTool}
         />
-        <PresenceLayer viewport={viewport} />
+        <PresenceLayer viewport={viewport} onFollowClient={onFollowClient} />
       </div>
+      {followed ? (
+        <div
+          className="cv-follow-banner"
+          role="status"
+          style={
+            { ['--c-followed' as string]: followed.color } as React.CSSProperties
+          }
+        >
+          <span className="cv-follow-banner__dot" aria-hidden="true" />
+          <span>
+            正在跟随 <strong>{followed.name}</strong> 的视角
+          </span>
+          <button
+            type="button"
+            className="cv-follow-banner__exit"
+            onClick={() => setFollowingClientId(null)}
+            title="退出跟随（任何画布操作也会退出）"
+          >
+            退出
+          </button>
+        </div>
+      ) : null}
       <Toolbar activeTool={activeTool} onSelect={setActiveTool} />
       <Minimap
         elements={scene.elements}

@@ -1734,6 +1734,24 @@ function handlePresence(
     }
   }
   const isAgent = rec['isAgent'] === true;
+  // viewport（PRD §8.2 跟随视角）—— 仅人类用户上报视口左上角的画布坐标 + zoom；
+  // 非法 / 缺失即 undefined。
+  let viewport: { x: number; y: number; zoom: number } | undefined;
+  const rawViewport = rec['viewport'];
+  if (typeof rawViewport === 'object' && rawViewport !== null) {
+    const v = rawViewport as Record<string, unknown>;
+    if (
+      typeof v['x'] === 'number' &&
+      typeof v['y'] === 'number' &&
+      typeof v['zoom'] === 'number' &&
+      Number.isFinite(v['x']) &&
+      Number.isFinite(v['y']) &&
+      Number.isFinite(v['zoom']) &&
+      v['zoom'] > 0
+    ) {
+      viewport = { x: v['x'], y: v['y'], zoom: v['zoom'] };
+    }
+  }
   const entry = deps.presence.update({
     clientId,
     name,
@@ -1742,6 +1760,7 @@ function handlePresence(
     targetElementId,
     targetOffset,
     isAgent,
+    viewport,
   });
   const frame = { type: 'presence', client: entry };
   deps.sse.broadcast(frame);
