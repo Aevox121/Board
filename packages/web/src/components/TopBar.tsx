@@ -12,6 +12,7 @@
 import { useState } from 'react';
 import type { ConnectionMode } from '../board/BoardContext';
 import { PresenceBar } from '../presence/PresenceBar';
+import { BoardSwitcher } from './BoardSwitcher';
 import './TopBar.css';
 
 /** 「保存」按钮状态机。 */
@@ -109,6 +110,9 @@ export function TopBar({
         <span className="topbar__logo" aria-hidden="true">
           ✦
         </span>
+        {/* 多 board 切换器（PRD §4.2）—— server 未启用管理端点 / 公网部署
+            禁用时自动隐藏（listBoards 返空数组）。 */}
+        <BoardSwitcher />
         {editing ? (
           <input
             className="topbar__name-input"

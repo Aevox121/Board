@@ -12,7 +12,7 @@
  * 安全：仅监听 127.0.0.1（PRD §12 安全）。若需对外提供服务（中继），
  * 通过反向代理 / 显式 `BOARD_HOST` 环境变量改 bind 地址。
  */
-import { basename, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import type { IncomingMessage } from 'node:http';
 import { WebSocketServer } from 'ws';
 import {
@@ -22,6 +22,7 @@ import {
   type HttpDeps,
 } from './http.js';
 import { createBoardRuntime, type BoardRuntime } from './runtime.js';
+import { createBoardsManager } from './boards-manager.js';
 
 /** 默认监听端口，可用 BOARD_PORT 覆盖。 */
 const PORT = Number(process.env.BOARD_PORT ?? 4500);
@@ -88,40 +89,41 @@ async function main(): Promise<void> {
 
   // 装配每个 board 的 runtime。任一失败则整体退出 —— 多 board 启动时
   // 路径错误应即时暴露，而非静默跳过造成行为偏离预期。
-  const runtimes = new Map<string, BoardRuntime>();
-  const order: string[] = []; // 启动顺序 —— 第一个是默认 board
+  const initial: BoardRuntime[] = [];
+  const seen = new Set<string>();
   for (const dir of dirs) {
     const boardId = deriveBoardId(dir);
-    if (runtimes.has(boardId)) {
+    if (seen.has(boardId)) {
       console.error(
         `[board-server] 多个目录派生出相同 boardId="${boardId}" —— ` +
           `请重命名 ${dir} 或检查重复传参`,
       );
-      // 已构造的 runtime 顺序关停
-      for (const id of order) {
-        await runtimes.get(id)!.close();
-      }
+      for (const rt of initial) await rt.close();
       process.exit(1);
     }
+    seen.add(boardId);
     try {
       const rt = await createBoardRuntime({ boardId, dir });
-      runtimes.set(boardId, rt);
-      order.push(boardId);
+      initial.push(rt);
     } catch (err) {
       console.error('[board-server] 启动失败：', err);
-      for (const id of order) {
-        await runtimes.get(id)!.close();
-      }
+      for (const rt of initial) await rt.close();
       process.exit(1);
     }
   }
 
-  const defaultBoardId = order[0]!; // 至少一个，否则 resolveBoardDirs 已 exit
+  // 新建 board 的父目录 —— BOARDS_ROOT 优先，否则取第一个 board 所在父目录。
+  // 让 web 端「+ 新建」时新 board 与既有 board 共处一处，符合直觉。
+  const boardsRoot = resolve(
+    process.env.BOARDS_ROOT?.trim() || dirname(initial[0]!.dir),
+  );
+
+  const boardsManager = createBoardsManager({ initial, boardsRoot });
 
   /** HTTP 路由的 deps 解析 —— null = 默认 board。 */
   const getDeps = (boardId: string | null): HttpDeps | null => {
-    const id = boardId ?? defaultBoardId;
-    return runtimes.get(id)?.deps ?? null;
+    const id = boardId ?? boardsManager.getDefaultId();
+    return boardsManager.get(id)?.deps ?? null;
   };
 
   /** token 鉴权 —— 仅在 BOARD_REQUIRE_TOKEN=true 时注入到 server。 */
@@ -134,7 +136,7 @@ async function main(): Promise<void> {
       }
     : undefined;
 
-  const server = createHttpServer(getDeps, checkAuth);
+  const server = createHttpServer(getDeps, checkAuth, boardsManager);
 
   // ws 升级 —— 路径 `/yjs/<id>` 或 `/yjs`（默认 board）。
   const wss = new WebSocketServer({ noServer: true });
@@ -165,7 +167,7 @@ async function main(): Promise<void> {
         return;
       }
     }
-    const rt = runtimes.get(boardId ?? defaultBoardId);
+    const rt = boardsManager.get(boardId ?? boardsManager.getDefaultId());
     if (!rt) {
       socket.destroy();
       return;
@@ -184,9 +186,9 @@ async function main(): Promise<void> {
 
   server.on('error', (err) => {
     console.error(`[board-server] HTTP 服务启动失败 (端口 ${PORT}):`, err);
-    void Promise.all([...runtimes.values()].map((rt) => rt.close())).finally(
-      () => process.exit(1),
-    );
+    void Promise.all(
+      boardsManager.list().map((b) => boardsManager.get(b.id)!.close()),
+    ).finally(() => process.exit(1));
   });
 
   server.listen(PORT, HOST, () => {
@@ -194,19 +196,25 @@ async function main(): Promise<void> {
     console.log(
       `[board-server] token 鉴权: ${REQUIRE_TOKEN ? '已启用 (BOARD_REQUIRE_TOKEN=true)' : '未启用'}`,
     );
-    console.log(`[board-server] 加载 ${runtimes.size} 个白板（默认: ${defaultBoardId}）：`);
-    for (const id of order) {
-      const rt = runtimes.get(id)!;
+    const list = boardsManager.list();
+    console.log(
+      `[board-server] 加载 ${list.length} 个白板（默认: ${boardsManager.getDefaultId()}），新建落点: ${boardsRoot}`,
+    );
+    for (const b of list) {
+      const rt = boardsManager.get(b.id)!;
       const tok = rt.deps.getMeta().shareToken;
-      console.log(`  · ${id}  →  ${rt.dir}`);
-      console.log(`     HTTP: http://${HOST}:${PORT}/api/boards/${encodeURIComponent(id)}/board`);
-      console.log(`     ws:   ws://${HOST}:${PORT}/yjs/${encodeURIComponent(id)}`);
+      console.log(`  · ${b.id}  →  ${rt.dir}`);
+      console.log(`     HTTP: http://${HOST}:${PORT}/api/boards/${encodeURIComponent(b.id)}/board`);
+      console.log(`     ws:   ws://${HOST}:${PORT}/yjs/${encodeURIComponent(b.id)}`);
       if (REQUIRE_TOKEN && tok) {
         console.log(`     token: ${tok}`);
       }
     }
-    if (runtimes.size === 1) {
+    if (list.length === 1) {
       console.log(`[board-server] 单 board 兼容路径仍可用: /api/board · ws:/yjs`);
+    }
+    if (!REQUIRE_TOKEN) {
+      console.log(`[board-server] boards 管理端点已启用: GET/POST /api/boards · DELETE /api/boards/<id>`);
     }
   });
 
@@ -215,13 +223,13 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`\n[board-server] 收到 ${signal}，正在关闭...`);
-    void Promise.all([...runtimes.values()].map((rt) => rt.close())).finally(
-      () => {
-        wss.close();
-        server.close();
-        process.exit(0);
-      },
-    );
+    void Promise.all(
+      boardsManager.list().map((b) => boardsManager.get(b.id)!.close()),
+    ).finally(() => {
+      wss.close();
+      server.close();
+      process.exit(0);
+    });
   };
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));

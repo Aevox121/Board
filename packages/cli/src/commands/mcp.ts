@@ -39,6 +39,8 @@ import { cmdText } from './text.js';
 import { cmdExport } from './export.js';
 import { cmdImport } from './import.js';
 import { cmdShare } from './share.js';
+import { cmdLs } from './ls.js';
+import { cmdDelete } from './delete.js';
 import { cmdSnapshot, cmdRestore } from './snapshot.js';
 import { cmdLog } from './log.js';
 
@@ -1090,6 +1092,44 @@ export async function runMcpServer(
         mkArgs([boardPath], opts),
       );
     },
+  );
+
+  // 列出某根目录下所有 .board（fs 扫描，不依赖 server）。
+  server.registerTool(
+    'board_list',
+    {
+      description:
+        '列出指定 root 目录及其一层子目录下的 .board 文件夹。等价于 CLI `board ls [root]`。' +
+        'root 省略时取 cwd。仅扫描文件系统，不依赖 board-server。',
+      inputSchema: {
+        root: z
+          .string()
+          .optional()
+          .describe('要扫描的根目录；省略 = cwd'),
+      },
+    },
+    async (a) => {
+      const positionals = a.root ? [a.root] : [];
+      return runCmd('board_list', cmdLs, mkArgs(positionals, {}));
+    },
+  );
+
+  // 删除一个 .board 目录 —— 移到同级 _trash/<timestamp>-<basename>，不真删。
+  server.registerTool(
+    'board_delete',
+    {
+      description:
+        '删除一个白板 —— 把 .board 目录移到同级 _trash/<timestamp>-<basename>，' +
+        '不真删，必要时人工恢复。等价于 CLI `board delete <.board 目录>`。' +
+        '⚠️ 该 board 若正被 board-server 加载，应先用 DELETE /api/boards/<id> ' +
+        '关 runtime，再调用此工具，避免 chokidar 内存集不一致。',
+      inputSchema: {
+        boardDir: z
+          .string()
+          .describe('.board 目录路径（绝对或相对 cwd）'),
+      },
+    },
+    async (a) => runCmd('board_delete', cmdDelete, mkArgs([a.boardDir], {})),
   );
 
   const transport = new StdioServerTransport();

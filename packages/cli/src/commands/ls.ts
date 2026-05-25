@@ -1,10 +1,10 @@
 /**
- * `board ls` — 列出当前目录（及一层子目录）下的 `.board` 文件夹。
+ * `board ls [root]` — 列出 root（默认当前目录）及一层子目录下的 `.board` 文件夹。
  *
- * 规格 §2.1：列出本机已知白板。M1 简化为扫描当前目录与其直接子目录。
+ * 规格 §2.1：列出本机已知白板。M1 简化为扫描指定根目录与其直接子目录。
  */
 import { readdirSync, existsSync, statSync, type Dirent } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { loadBoard } from '@board/core/node';
 import type { ParsedArgs } from '../util/args.js';
 import { EXIT, type CmdResult } from '../util/io.js';
@@ -49,25 +49,33 @@ function scanDir(dir: string): string[] {
 /**
  * 执行 ls 命令。
  *
- * 扫描当前目录与其一层子目录，收集所有 `.board` 文件夹。
+ * 扫描 root（默认 cwd）与其一层子目录，收集所有 `.board` 文件夹。
  */
-export async function cmdLs(_args: ParsedArgs): Promise<CmdResult> {
-  const cwd = process.cwd();
+export async function cmdLs(args: ParsedArgs): Promise<CmdResult> {
+  const rootArg = args.positionals[0];
+  const root = rootArg
+    ? isAbsolute(rootArg)
+      ? rootArg
+      : resolve(process.cwd(), rootArg)
+    : process.cwd();
   const found = new Set<string>();
 
-  // 当前目录直接子项
-  for (const p of scanDir(cwd)) found.add(p);
+  // root 直接子项
+  for (const p of scanDir(root)) found.add(p);
 
-  // 下钻一层：当前目录里每个非 .board 子目录再扫一次
+  // 下钻一层：root 里每个非 .board 子目录再扫一次
   let topEntries: Dirent[];
   try {
-    topEntries = readdirSync(cwd, { withFileTypes: true });
+    topEntries = readdirSync(root, { withFileTypes: true });
   } catch {
     topEntries = [];
   }
   for (const e of topEntries) {
     if (!e.isDirectory() || e.name.endsWith('.board')) continue;
-    for (const p of scanDir(join(cwd, e.name))) found.add(p);
+    // _trash 是 delete 命令的目标 —— 里头都是 `<ts>-<name>.board` 形态，
+    // 命名上仍是 .board，但语义上已经"被删除"，不该在 ls 出现。
+    if (e.name === '_trash') continue;
+    for (const p of scanDir(join(root, e.name))) found.add(p);
   }
 
   const boards: BoardEntry[] = [];
@@ -82,10 +90,10 @@ export async function cmdLs(_args: ParsedArgs): Promise<CmdResult> {
 
   const text =
     boards.length === 0
-      ? '当前目录（及一层子目录）下未发现白板。'
+      ? `${root} 下未发现白板（含一层子目录）。`
       : boards
           .map((b) => `${b.id}  ${b.name}\n  ${b.dir}`)
           .join('\n');
 
-  return { code: EXIT.OK, text, data: { boards } };
+  return { code: EXIT.OK, text, data: { boards, root } };
 }

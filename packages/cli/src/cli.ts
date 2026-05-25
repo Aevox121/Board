@@ -45,6 +45,7 @@ import { cmdExport } from './commands/export.js';
 import { cmdImport } from './commands/import.js';
 import { cmdServe } from './commands/serve.js';
 import { cmdLog } from './commands/log.js';
+import { cmdDelete } from './commands/delete.js';
 
 /** 命令处理函数签名。 */
 type Handler = (args: ParsedArgs) => Promise<CmdResult>;
@@ -75,6 +76,7 @@ const HANDLERS: Record<string, Handler> = {
   import: cmdImport,
   serve: cmdServe,
   log: cmdLog,
+  delete: cmdDelete,
 };
 
 /** 已登记但尚未实现的命令（规格 §2，逐里程碑补全）。 */
@@ -103,8 +105,9 @@ function printHelp(): void {
   console.log('');
   console.log('已实现命令 (M1):');
   console.log('  new <名称> [--dir <父目录>]        新建白板');
+  console.log('  delete <.board 目录>              删除白板（移到同级 _trash/）');
   console.log('  info <路径>                       查看白板元信息与统计');
-  console.log('  ls                                列出当前目录及一层子目录的白板');
+  console.log('  ls [根目录]                       列出指定目录及一层子目录的白板');
   console.log('  tree <路径>                       打印 files/ 文件树');
   console.log('  add text <路径> "<markdown>"      添加文本卡片元素');
   console.log('');

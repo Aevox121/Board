@@ -1,0 +1,145 @@
+/* BoardSwitcher —— 顶栏 board 切换 / 新建 / 删除入口 */
+
+.bs {
+  position: relative;
+  display: inline-flex;
+}
+
+.bs__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 240px;
+}
+
+.bs__trigger > span:not(.bs__chev) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bs__chev {
+  font-size: 0.8em;
+  opacity: 0.6;
+}
+
+.bs__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+}
+
+.bs__menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 280px;
+  max-width: 360px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  z-index: 100;
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.bs__menu-list {
+  max-height: 360px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.bs__row {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.bs__row--current {
+  background: var(--c-surface-sunken, rgba(0, 0, 0, 0.04));
+}
+
+.bs__row-main {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: var(--c-ink);
+  min-width: 0;
+}
+
+.bs__row-main:hover:not(:disabled) {
+  background: var(--c-surface-hover, rgba(0, 0, 0, 0.06));
+}
+
+.bs__row-main:disabled {
+  cursor: default;
+}
+
+.bs__row-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bs__row-tag {
+  flex: 0 0 auto;
+  padding: 1px var(--space-2);
+  font-size: var(--text-xs);
+  border-radius: var(--radius-pill);
+  background: var(--c-border);
+  color: var(--c-ink);
+  opacity: 0.7;
+}
+
+.bs__row-tag--current {
+  background: var(--c-accent);
+  color: var(--c-on-accent);
+  opacity: 1;
+}
+
+.bs__row-del {
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-2);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--c-ink);
+  opacity: 0.55;
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--text-xs);
+}
+
+.bs__row-del:hover:not(:disabled) {
+  opacity: 1;
+  background: var(--c-warning, #f08c00);
+  color: var(--c-on-accent, #fff);
+}
+
+.bs__row-del:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.bs__menu-foot {
+  padding-top: var(--space-2);
+  border-top: 1px dashed var(--c-border);
+  display: flex;
+  justify-content: flex-end;
+}

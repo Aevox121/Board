@@ -1998,13 +1998,50 @@ export type DepsResolver = (boardId: string | null) => HttpDeps | null;
 export type AuthChecker = (deps: HttpDeps, url: URL, req: IncomingMessage) => boolean;
 
 /**
+ * BoardsManager 注入参数 —— http.ts 用它处理 `/api/boards`（不带 boardId）
+ * 与 `DELETE /api/boards/<id>` 这类"管理 server 下的 board 集合"的端点。
+ * 见 boards-manager.ts。
+ */
+export interface BoardsManagerForHttp {
+  list(): Array<{
+    id: string;
+    name: string;
+    dir: string;
+    createdAt: string;
+    updatedAt: string;
+    isDefault: boolean;
+  }>;
+  create(input: { name: string }): Promise<{
+    id: string;
+    name: string;
+    dir: string;
+    createdAt: string;
+    updatedAt: string;
+    isDefault: boolean;
+  }>;
+  delete(id: string): Promise<void>;
+}
+
+/**
  * 创建 HTTP server（未 listen）。host 固定 127.0.0.1。
  *
  * 多 board 路由：路径 `/api/boards/<id>/<rest>` 剥前缀后由 `getDeps(id)`
  * 解析；无前缀的 `/api/<rest>` 由 `getDeps(null)` 解析（默认 board，
  * 用于单 board 部署与既有客户端的向后兼容）。
+ *
+ * 管理端点（PRD §4.2 多 board 中继）：
+ *  - `GET  /api/boards`        列出 server 当前托管的所有 board
+ *  - `POST /api/boards`        新建一个空白 board（body: {name}）
+ *  - `DELETE /api/boards/<id>` 关 runtime + 移 .board 到 _trash/
+ *
+ * 管理端点在 BOARD_REQUIRE_TOKEN=true 部署下返 403 —— 公网中继不应让任意
+ * 用户增删 board；admin 在 server 主机上用 CLI 操作。
  */
-export function createHttpServer(getDeps: DepsResolver, checkAuth?: AuthChecker): Server {
+export function createHttpServer(
+  getDeps: DepsResolver,
+  checkAuth?: AuthChecker,
+  boardsManager?: BoardsManagerForHttp,
+): Server {
   const server = createServer((req, res) => {
     // 顶层 try：URL 解析 / decodeURIComponent 在非法序列上会抛同步错误，
     // 不能让单次坏请求崩掉整个进程。任何异常都转成 400，不让冒到 server.
@@ -2015,7 +2052,97 @@ export function createHttpServer(getDeps: DepsResolver, checkAuth?: AuthChecker)
       fail(res, 400, `非法请求 URL: ${errMsg(err)}`);
       return;
     }
-    const rawPath = url.pathname;
+    const rawPath = url.pathname.replace(/\/+$/, '') || '/';
+    const method = req.method ?? 'GET';
+
+    // ── 管理端点（不走 getDeps / checkAuth；它们由 boardsManager 自己处理）──
+    // GET /api/boards —— 列表
+    if (rawPath === '/api/boards' && method === 'GET') {
+      if (!boardsManager) {
+        fail(res, 404, '该 server 未启用 boards 管理端点');
+        return;
+      }
+      if (checkAuth) {
+        fail(res, 403, '公网部署下管理端点禁用，请在 server 主机上用 CLI');
+        return;
+      }
+      const list = boardsManager.list();
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ boards: list }));
+      return;
+    }
+    // POST /api/boards —— 新建
+    if (rawPath === '/api/boards' && method === 'POST') {
+      if (!boardsManager) {
+        fail(res, 404, '该 server 未启用 boards 管理端点');
+        return;
+      }
+      if (checkAuth) {
+        fail(res, 403, '公网部署下管理端点禁用，请在 server 主机上用 CLI');
+        return;
+      }
+      void (async () => {
+        try {
+          const body = (await readJsonBody(req)) as { name?: unknown };
+          if (typeof body.name !== 'string') {
+            fail(res, 400, 'body.name 必填且为字符串');
+            return;
+          }
+          const summary = await boardsManager.create({ name: body.name });
+          res.writeHead(201, {
+            'content-type': 'application/json; charset=utf-8',
+          });
+          res.end(JSON.stringify(summary));
+        } catch (err) {
+          const msg = errMsg(err);
+          // 已存在 → 409，其它视为 400（输入校验）
+          if (/已存在|冲突/.test(msg)) {
+            fail(res, 409, msg);
+          } else {
+            fail(res, 400, msg);
+          }
+        }
+      })();
+      return;
+    }
+    // DELETE /api/boards/<id> —— 删除（无后续路径段）
+    const mDel = /^\/api\/boards\/([^/]+)$/.exec(rawPath);
+    if (mDel && method === 'DELETE') {
+      if (!boardsManager) {
+        fail(res, 404, '该 server 未启用 boards 管理端点');
+        return;
+      }
+      if (checkAuth) {
+        fail(res, 403, '公网部署下管理端点禁用，请在 server 主机上用 CLI');
+        return;
+      }
+      let delId: string;
+      try {
+        delId = decodeURIComponent(mDel[1]!);
+      } catch (err) {
+        fail(res, 400, `非法 boardId 编码: ${errMsg(err)}`);
+        return;
+      }
+      void (async () => {
+        try {
+          await boardsManager.delete(delId);
+          res.writeHead(204);
+          res.end();
+        } catch (err) {
+          const msg = errMsg(err);
+          if (/不存在/.test(msg)) {
+            fail(res, 404, msg);
+          } else if (/保留|最后一个/.test(msg)) {
+            fail(res, 409, msg);
+          } else {
+            fail(res, 400, msg);
+          }
+        }
+      })();
+      return;
+    }
+
+    // ── 单 board 路由（既有）──
     let boardId: string | null = null;
     // 形如 /api/boards/<id> 或 /api/boards/<id>/<rest>
     const m = /^\/api\/boards\/([^/]+)(\/.*)?$/.exec(rawPath);
