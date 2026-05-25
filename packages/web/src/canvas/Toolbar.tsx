@@ -16,6 +16,7 @@ export type ToolId =
   | 'ellipse'
   | 'diamond'
   | 'region'
+  | 'folder'
   | 'arrow'
   | 'freedraw'
   | 'text'
@@ -85,6 +86,14 @@ const TOOLS: Array<ToolDef | 'divider'> = [
     icon: icon(
       <rect x="3.5" y="5.5" width="17" height="13" rx="1.5"
         strokeDasharray="3 2.4" />,
+    ),
+  },
+  {
+    id: 'folder',
+    label: '文件夹卡',
+    shortcut: 'J',
+    icon: icon(
+      <path d="M3.5 7.5V18a1 1 0 0 0 1 1h15a1 1 0 0 0 1-1V9.5a1 1 0 0 0-1-1h-8L9.5 6h-5a1 1 0 0 0-1 1z" />,
     ),
   },
   {

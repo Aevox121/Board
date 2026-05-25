@@ -47,6 +47,7 @@ import {
   createConnectorElement,
   createImageElement,
   createEmbedElement,
+  createFolderElement,
   DEFAULT_STYLE,
 } from '@board/core';
 import { useBoard } from '../board/BoardContext';
@@ -62,6 +63,7 @@ import { TaskCard } from './TaskCard';
 import { SuggestionCard } from './SuggestionCard';
 import { RegionCard, type PointerHandlers } from './RegionCard';
 import { RegionCreateDialog } from './RegionCreateDialog';
+import { FolderPickDialog } from './FolderPickDialog';
 import { ConfirmDialog, PromptDialog } from '../components/Dialog';
 import { toast } from '../components/toast';
 import { ConnectorLayer } from './ConnectorLayer';
@@ -1228,6 +1230,8 @@ export function OverlayLayer({
   const [regionDraft, setRegionDraft] = useState<RectLike | null>(null);
   // 嵌入元素 URL 输入弹窗 —— 工具栏选「嵌入」后开（替代原生 window.prompt）。
   const [embedUrlOpen, setEmbedUrlOpen] = useState(false);
+  // 文件夹路径选择弹窗 —— 工具栏选「文件夹卡」后开（PRD §6.5）。
+  const [folderPickOpen, setFolderPickOpen] = useState(false);
   // 区域删除二次确认 —— 多选 Delete 含区域时弹（替代原生 window.confirm）。
   const [regionDeleteConfirm, setRegionDeleteConfirm] = useState<{
     regions: RegionElement[];
@@ -2353,13 +2357,15 @@ export function OverlayLayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 图片 / 嵌入 / 上传文件工具 —— 一次性动作：选中即弹文件选择器 / URL
-  // 输入框 / 多选文件选择器，随后立即回到选择工具（不作为常驻工具）。
+  // 图片 / 嵌入 / 上传文件 / 文件夹工具 —— 一次性动作：选中即弹文件选择器 /
+  // URL 输入框 / 多选文件选择器 / 文件夹路径选择，随后立即回到选择工具
+  // （不作为常驻工具）。
   useEffect(() => {
     if (
       activeTool !== 'image' &&
       activeTool !== 'embed' &&
-      activeTool !== 'upload'
+      activeTool !== 'upload' &&
+      activeTool !== 'folder'
     )
       return;
     onActiveToolChange?.('selection');
@@ -2385,6 +2391,9 @@ export function OverlayLayer({
         if (files.length > 0) void uploadFilesToServer(files, '');
       };
       inp.click();
+    } else if (activeTool === 'folder') {
+      // 文件夹卡 —— 开路径选择对话框（PRD §6.5）
+      setFolderPickOpen(true);
     } else {
       // 嵌入 URL —— 开规范化对话框（替代原生 prompt）
       setEmbedUrlOpen(true);
@@ -3420,6 +3429,37 @@ export function OverlayLayer({
     } catch (err) {
       console.warn('[board] 图片创建失败:', err);
     }
+  }
+
+  /**
+   * 在画布坐标 (cx,cy) 为中心创建一个 folder 元素（PRD §6.5）。
+   * 收起态是个紧凑 chip（160×40），展开后会自适应到大尺寸；用户也可拖拽手柄
+   * 调整。`path` 是相对 `files/` 的路径（不带前缀），由 FolderPickDialog
+   * 已规范化（去首尾斜杠、合并 `/`）。
+   */
+  function createFolderAt(path: string, cx: number, cy: number): void {
+    const cur = sceneRef.current;
+    const w = 280;
+    const h = 360; // 展开后给出合理初始大小；折叠时 chip 高度由 CSS 决定
+    const ex = cx - w / 2;
+    const ey = cy - h / 2;
+    const el = createFolderElement({
+      x: ex,
+      y: ey,
+      width: w,
+      height: h,
+      createdBy: actorId,
+      z: nextZ(cur.elements),
+      parentId:
+        regionForCard(
+          { x: ex, y: ey, width: w, height: h },
+          regionsOf(cur.elements),
+        )?.id ?? null,
+      path,
+      expanded: true, // 默认展开 —— 创建即可看见浏览内容
+    });
+    replaceScene({ ...cur, elements: [...cur.elements, el] }, 'canvas');
+    selectOnly(el.id);
   }
 
   /** 在画布坐标 (cx,cy) 为中心创建一个外链嵌入元素（链接卡）。 */
@@ -5598,6 +5638,18 @@ export function OverlayLayer({
             } else {
               toast.warn('不是有效的链接 URL。');
             }
+          }}
+        />
+      ) : null}
+      {/* 文件夹卡 路径选择弹窗（PRD §6.5）—— 工具栏「文件夹卡」按钮触发 */}
+      {folderPickOpen ? (
+        <FolderPickDialog
+          elements={scene.elements}
+          onCancel={() => setFolderPickOpen(false)}
+          onConfirm={(path) => {
+            setFolderPickOpen(false);
+            const c = viewportCenter();
+            createFolderAt(path, c.x, c.y);
           }}
         />
       ) : null}

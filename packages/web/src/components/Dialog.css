@@ -143,6 +143,56 @@
   border-color: var(--c-accent);
 }
 
+/* FolderPickDialog 用的目录列表（PRD §6.5）—— 浮在对话框正文里的可滚动
+   候选行；hover 加 sunken 底色，active 用 accent-tint 提示已选。 */
+.folder-pick__list {
+  margin-top: var(--space-2);
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  background: var(--c-surface);
+}
+.folder-pick__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  padding: 4px var(--space-2) 4px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  text-align: left;
+  color: var(--c-ink);
+  cursor: pointer;
+  transition: background var(--dur-micro, 150ms);
+}
+.folder-pick__row:hover {
+  background: var(--c-surface-sunken);
+}
+.folder-pick__row--active {
+  background: var(--c-accent-tint);
+  color: var(--c-ink);
+}
+.folder-pick__row-glyph {
+  flex: 0 0 auto;
+  font-size: var(--text-sm);
+}
+.folder-pick__row-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folder-pick__row-path {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--c-ink-3);
+}
+
 .bd-dialog__btn--primary:hover:not(:disabled) {
   background: var(--c-accent-strong);
   border-color: var(--c-accent-strong);
