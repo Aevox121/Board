@@ -36,6 +36,11 @@ import { cmdSearch } from './search.js';
 import { cmdComment } from './comment.js';
 import { cmdStyle } from './style.js';
 import { cmdText } from './text.js';
+import { cmdExport } from './export.js';
+import { cmdImport } from './import.js';
+import { cmdShare } from './share.js';
+import { cmdSnapshot, cmdRestore } from './snapshot.js';
+import { cmdLog } from './log.js';
 
 /** 由位置参数 / 选项 / 开关构造一个 ParsedArgs（喂给 cmd* 函数）。 */
 function mkArgs(
@@ -876,6 +881,215 @@ export async function runMcpServer(
       safeHandler('board_subscribe_events', () =>
         subscribeEvents(port, a.since, a.region),
       ),
+  );
+
+  // ── 导出 / 导入 / 分享（PRD §10.2 与 CLI 对齐）─────────────────────
+  //
+  // 全部包装 cmdExport / cmdImport / cmdShare 等 CLI 函数 —— 与 CLI 同源
+  // 同语义，避免逻辑分叉。其中 board_import 不绑当前白板（zip 解到任意
+  // 目录新建一份），其他工具默认指向 MCP 启动时绑定的 `boardPath`。
+
+  // 导出：默认 json 写 stdout / out 路径；zip 默认写 <name>.board.zip。
+  server.registerTool(
+    'board_export',
+    {
+      description:
+        '导出整个白板。format=json 把 board.json 内容返回；out 指定时写到该路径。' +
+        'format=zip 把 .board 目录全打包成 zip（含 board.json/meta.json/files/' +
+        '/assets/...），out 缺省落到 cwd 的 <name>.board.zip。等价于 CLI ' +
+        '`board export`，与 Web 顶栏的「导出 board.json / 导出 zip」对等。',
+      inputSchema: {
+        format: z
+          .enum(['json', 'zip'])
+          .optional()
+          .describe('导出格式；默认 json'),
+        out: z
+          .string()
+          .optional()
+          .describe('输出路径；json 不传则把内容回到 MCP 调用方，zip 不传则 cwd'),
+      },
+    },
+    async (a) => {
+      const opts: Record<string, string | undefined> = {};
+      if (a.out) opts['out'] = a.out;
+      const flags = [a.format === 'zip' ? 'zip' : 'json'];
+      return runCmd(
+        'board_export',
+        cmdExport,
+        mkArgs([boardPath], opts, flags),
+      );
+    },
+  );
+
+  // 导入：把 zip 还原成一个新 .board 目录；不绑当前白板。
+  server.registerTool(
+    'board_import',
+    {
+      description:
+        '把 board export --zip 产生的压缩包恢复成一个 .board 目录。zip 根必须' +
+        '含 board.json + meta.json；目标 = <dir>/<name>.board，目标已存在时拒绝' +
+        '覆盖（请改 name 或先移走原目录）。',
+      inputSchema: {
+        zipPath: z.string().describe('要导入的 zip 文件路径'),
+        name: z
+          .string()
+          .optional()
+          .describe('新白板名（白板目录名 = <name>.board）；缺省取 zip 内 meta.name'),
+        dir: z
+          .string()
+          .optional()
+          .describe('新白板的父目录；缺省 cwd'),
+      },
+    },
+    async (a) => {
+      const opts: Record<string, string | undefined> = {};
+      if (a.name) opts['name'] = a.name;
+      if (a.dir) opts['dir'] = a.dir;
+      return runCmd(
+        'board_import',
+        cmdImport,
+        mkArgs([a.zipPath], opts),
+      );
+    },
+  );
+
+  // 分享：产出可分享 URL（M4 中继服务器，PRD §4.2）。
+  server.registerTool(
+    'board_share',
+    {
+      description:
+        '生成可分享的白板 URL，形如 http://<host>:<port>/?board=<boardId>&token=...。' +
+        '对应的 board-server 须以多 board 模式启动并加载该白板。host/port/scheme/' +
+        'no_token 都可选；默认取 BOARD_SHARE_HOST / BOARD_SHARE_PORT 环境变量或 ' +
+        'localhost:4510。',
+      inputSchema: {
+        host: z.string().optional().describe('URL 的 host；省略走环境变量或 localhost'),
+        port: z.string().optional().describe('URL 的端口；省略走环境变量或 4510'),
+        scheme: z.enum(['http', 'https']).optional().describe('默认 http'),
+        no_token: z
+          .boolean()
+          .optional()
+          .describe('true 时不在 URL 里拼 token（用于 BOARD_REQUIRE_TOKEN=false 部署）'),
+      },
+    },
+    async (a) => {
+      const opts: Record<string, string | undefined> = {};
+      if (a.host) opts['host'] = a.host;
+      if (a.port) opts['port'] = a.port;
+      if (a.scheme) opts['scheme'] = a.scheme;
+      const flags = a.no_token ? ['no-token'] : [];
+      return runCmd(
+        'board_share',
+        cmdShare,
+        mkArgs([boardPath], opts, flags),
+      );
+    },
+  );
+
+  // ── 存档点（PRD §8.5，依赖运行中的 board-server）────────────────
+  // 写操作（create / restore / delete）经 server HTTP；list 也走 server。
+  // 因此这四个工具都要求 board-server 正在运行（与 CLI 同样语义）。
+
+  server.registerTool(
+    'board_snapshot_create',
+    {
+      description:
+        '建一份手动存档点（PRD §8.5）。server 把当前 board.json/meta.json/files/ ' +
+        '完整复制进 history/snapshots/<id>/。需 board-server 正在运行。',
+      inputSchema: {
+        name: z
+          .string()
+          .optional()
+          .describe('快照名；缺省 = 自动生成（含时间戳）'),
+      },
+    },
+    async (a) => {
+      const opts: Record<string, string | undefined> = {};
+      if (a.name) opts['name'] = a.name;
+      return runCmd(
+        'board_snapshot_create',
+        cmdSnapshot,
+        mkArgs(['create'], opts),
+        port,
+      );
+    },
+  );
+
+  server.registerTool(
+    'board_snapshot_list',
+    {
+      description:
+        '列出当前白板的全部存档点（含手动 / 自动 / 复原前自动档）。需 board-server 正在运行。',
+      inputSchema: {},
+    },
+    async () =>
+      runCmd('board_snapshot_list', cmdSnapshot, mkArgs(['ls'])),
+  );
+
+  server.registerTool(
+    'board_snapshot_delete',
+    {
+      description:
+        '删除一份存档点（含磁盘目录 + meta 索引）。需 board-server 正在运行。',
+      inputSchema: {
+        snapshotId: z.string().describe('要删除的存档 id（取自 board_snapshot_list）'),
+      },
+    },
+    async (a) =>
+      runCmd(
+        'board_snapshot_delete',
+        cmdSnapshot,
+        mkArgs(['rm', a.snapshotId]),
+        port,
+      ),
+  );
+
+  server.registerTool(
+    'board_restore',
+    {
+      description:
+        '一键复原到指定存档点。server 会先自动建 pre-restore 档（保留当前状态），' +
+        '再把整套 board.json/meta.json/files/ 换成快照内容；Y.Doc 重新同步给所有 ' +
+        'ws 客户端。需 board-server 正在运行。',
+      inputSchema: {
+        snapshotId: z.string().describe('要复原到的存档 id'),
+      },
+    },
+    async (a) =>
+      runCmd(
+        'board_restore',
+        cmdRestore,
+        mkArgs([a.snapshotId]),
+        port,
+      ),
+  );
+
+  // ── 操作日志（PRD §6.9）────────────────────────────────────
+  // server 在跑就经 HTTP 拉；不在跑回退到磁盘直读 history/oplog.jsonl。
+  server.registerTool(
+    'board_log',
+    {
+      description:
+        '读 oplog（PRD §6.9），按时间倒序后再正序输出末尾 N 条；server 不可达' +
+        '时回退磁盘直读 history/oplog.jsonl。每条含 ts / actor / op / details。' +
+        '比 board_subscribe_events 留存更长（事件流是内存环），适合事后审计。',
+      inputSchema: {
+        tail: z
+          .number()
+          .int()
+          .optional()
+          .describe('要拉取的末尾条数（默认 50，上限 1000）'),
+      },
+    },
+    async (a) => {
+      const opts: Record<string, string | undefined> = { port };
+      if (a.tail !== undefined) opts['tail'] = String(a.tail);
+      return runCmd(
+        'board_log',
+        cmdLog,
+        mkArgs([boardPath], opts),
+      );
+    },
   );
 
   const transport = new StdioServerTransport();
