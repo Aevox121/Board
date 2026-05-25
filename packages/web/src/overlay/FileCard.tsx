@@ -159,6 +159,17 @@ export function FileCard({
     }
   }
 
+  /** 命中 checkbox —— pointerdown 阶段就拦截，否则 slot 会 setPointerCapture
+   *  把后续 click 重定向到 slot 上，checkbox 收不到。 */
+  function handleMarkdownBodyPointerDown(
+    e: React.PointerEvent<HTMLElement>,
+  ): void {
+    const t = e.target as HTMLElement | null;
+    if (t && t.tagName === 'INPUT' && (t as HTMLInputElement).type === 'checkbox') {
+      e.stopPropagation();
+    }
+  }
+
   /**
    * GFM 任务列表勾选回写（PRD §6.3）—— md 预览态委托点击：命中 checkbox 即
    * 翻转源文件里对应任务行 + writeFileText 覆写磁盘 + 本地 rawText/applyPreview
@@ -426,6 +437,7 @@ export function FileCard({
         </div>
         <div
           className="ov-file__md-body ov-md"
+          onPointerDown={handleMarkdownBodyPointerDown}
           onClick={handleMarkdownBodyClick}
           // marked 输出为受信内容来源（本地 .board 文件），M2 直接内联。
           dangerouslySetInnerHTML={{ __html: markdownHtml }}

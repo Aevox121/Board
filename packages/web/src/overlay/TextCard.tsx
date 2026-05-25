@@ -97,6 +97,15 @@ export function TextCard({
   // data-task-index）；body onClick 委托处理勾选回写（PRD §6.3）。
   const html = markdown ? renderMarkdownWithTaskIndex(markdown) : '';
 
+  /** 命中 checkbox —— pointerdown 阶段就拦截，否则 slot 会
+   *  setPointerCapture 把后续 click 重定向到 slot 上，checkbox 收不到。 */
+  function handleBodyPointerDown(e: React.PointerEvent<HTMLElement>): void {
+    const t = e.target as HTMLElement | null;
+    if (t && t.tagName === 'INPUT' && (t as HTMLInputElement).type === 'checkbox') {
+      e.stopPropagation();
+    }
+  }
+
   /** 委托点击 —— 命中 checkbox 即翻转源 markdown 对应任务行并写回。 */
   function handleBodyClick(e: React.MouseEvent<HTMLElement>): void {
     if (!onCommit) return;
@@ -201,6 +210,7 @@ export function TextCard({
           className="ov-text__body ov-md"
           style={bodyStyle}
           onDoubleClick={beginEdit}
+          onPointerDown={handleBodyPointerDown}
           onClick={handleBodyClick}
           // marked 输出来自本地白板数据，受信，M2 直接内联。
           dangerouslySetInnerHTML={{ __html: html }}
