@@ -2401,6 +2401,58 @@ export function OverlayLayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTool]);
 
+  // 空白处双击 → 在落点新建一张空文本卡 + 进入编辑（参考 Excalidraw,
+  // 问题记录 19）。
+  //
+  // 监听对象必须是 `.cv-shell`（画布外壳）而非 `.ov-root` —— ov-root
+  // 设了 `pointer-events: none` 让空白处事件穿透给外壳做平移，所以挂在
+  // ov-root 上的 onDoubleClick 永远不会在空白处触发。
+  //
+  // 触发条件：selection 工具 + dblclick 的目标向上找不到 [data-element-id]
+  // / [data-connector-id] / 工具栏 / 底栏 / 在线条等 UI 控件。
+  useEffect(() => {
+    // .cv-shell 在 .board-canvas 之上（rootRef.parentElement.parentElement）；
+    // 用 closest 兜底应对未来层级变化。
+    const shell = rootRef.current?.closest('.cv-shell') as HTMLElement | null;
+    if (!shell) return;
+    const onDbl = (e: MouseEvent): void => {
+      if (activeToolRef.current !== 'selection') return;
+      const t = e.target as HTMLElement | null;
+      if (!t) return;
+      // 命中任何元素 / 连线 → 让该元素自己处理双击（编辑 label / 文本 / 文件等）
+      if (
+        t.closest('[data-element-id]') ||
+        t.closest('[data-connector-id]')
+      ) {
+        return;
+      }
+      // 命中 UI 控件 → 不当作画布空白
+      if (
+        t.closest('.cv-toolbar') ||
+        t.closest('.cv-bottombar') ||
+        t.closest('.cv-minimap') ||
+        t.closest('.cv-pill') ||
+        t.closest('.presence-name') ||
+        t.closest('.presence-bar') ||
+        t.closest('.bd-dialog') ||
+        t.closest('.cv-follow-banner')
+      ) {
+        return;
+      }
+      const root = rootRef.current;
+      if (!root) return;
+      const r = root.getBoundingClientRect();
+      const vp = viewportRef.current;
+      const cx = (e.clientX - r.left) / vp.zoom - vp.scrollX;
+      const cy = (e.clientY - r.top) / vp.zoom - vp.scrollY;
+      e.preventDefault();
+      createTextAtAndEdit(cx, cy);
+    };
+    shell.addEventListener('dblclick', onDbl);
+    return () => shell.removeEventListener('dblclick', onDbl);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // 橡皮擦模式：在 .board-canvas 上以捕获阶段拦截左键按下 —— 命中画布元素
   // （图形 / 手绘 / 连线 / 文件卡 / 文本卡）即删除并吞掉事件（不触发拖拽）；
   // 命中区域 / 文件夹不删（背后是真实文件夹）；点空白处不拦截。
@@ -4914,25 +4966,6 @@ export function OverlayLayer({
         tasks.length === 0 &&
         suggestions.length === 0
       }
-      // 空白处双击 → 在落点新建一张空文本卡 + 进入编辑（参考 Excalidraw,
-      // 问题记录 19）。仅 selection 工具 + 落点不在任何元素 / 连线上时触发。
-      onDoubleClick={(e) => {
-        if (activeTool !== 'selection') return;
-        const target = e.target as HTMLElement | null;
-        if (
-          target?.closest('[data-element-id]') ||
-          target?.closest('[data-connector-id]')
-        ) {
-          return; // 落在元素 / 连线上 —— 让该元素自己处理双击
-        }
-        const root = rootRef.current;
-        if (!root) return;
-        const r = root.getBoundingClientRect();
-        const vp = viewportRef.current;
-        const cx = (e.clientX - r.left) / vp.zoom - vp.scrollX;
-        const cy = (e.clientY - r.top) / vp.zoom - vp.scrollY;
-        createTextAtAndEdit(cx, cy);
-      }}
     >
       <div className="ov-transform" style={transformStyle}>
         {/* 建议 → 目标的连线 —— 建议卡 → 目标卡的箭头线，端点裁到 bbox 边
