@@ -427,14 +427,19 @@ async function handleUploadAsset(
 }
 
 /**
- * POST /api/files/upload?path=<相对路径> —— 把请求体字节写入 files/<path>。
+ * POST /api/files/upload?path=<相对路径>[&overwrite=1] —— 把请求体字节写入 files/<path>。
  *
  * 请求体：原始字节；Content-Type 任意（仅用于回显，不参与决策）。
  * `?path=` 是 files/ 下的目标相对路径（含文件名），用 `/` 分隔；server 防
- * 目录穿越（resolve 后必须仍在 files/ 内、不允许覆盖既有同名文件）。
+ * 目录穿越（resolve 后必须仍在 files/ 内）。
+ *
+ * 默认行为：拒绝覆盖既有同名文件（避免拖入文件时静默丢失）。
+ * `?overwrite=1`：允许覆盖既有同名文件（FileCard 就地编辑保存走这条路径，
+ * 写回是用户主动行为而非误触）；目标若是目录仍拒绝。
  *
  * 落盘后立即跑一次 reconcile：watcher 同步路径的同时也会经 reconcile 在
- * scene 里建出 file 元素（含 region 归属自动判定）。
+ * scene 里建出 file 元素（含 region 归属自动判定）；编辑覆写场景下文件已
+ * 存在、reconcile 仅刷新 updatedAt，scene 元素本体不变。
  */
 async function handleFileUpload(
   deps: HttpDeps,
@@ -447,6 +452,7 @@ async function handleFileUpload(
     fail(res, 400, '缺少 ?path=<files/ 下的相对路径>');
     return;
   }
+  const overwrite = url.searchParams.get('overwrite') === '1';
   // 规范化 + 拒绝穿越。
   const target = targetRaw.replace(/\\/g, '/').replace(/^\/+/, '');
   if (
@@ -463,11 +469,17 @@ async function handleFileUpload(
     fail(res, 400, 'path 越出 files/');
     return;
   }
-  // 不允许覆盖既有文件（避免静默丢失 / 引用元素错位）。
+  // 已存在性判断 —— overwrite 时只拒绝「目标是目录」，否则按既往拒绝覆盖。
   try {
-    await stat(full);
-    fail(res, 409, `目标已存在: ${target}`);
-    return;
+    const st = await stat(full);
+    if (st.isDirectory()) {
+      fail(res, 409, `目标是目录，无法写文件: ${target}`);
+      return;
+    }
+    if (!overwrite) {
+      fail(res, 409, `目标已存在: ${target}`);
+      return;
+    }
   } catch {
     // ENOENT —— 正常路径，继续。
   }

@@ -53,7 +53,7 @@ import { useBoard } from '../board/BoardContext';
 import { moveFile } from '../server/files';
 import { deleteElement, uploadFile } from '../server/client';
 import { apiUrl } from '../server/boardSession';
-import { FileCard } from './FileCard';
+import { FileCard, isFileEditable } from './FileCard';
 import { FolderCard } from './FolderCard';
 import { TextCard } from './TextCard';
 import { ImageView } from './ImageView';
@@ -1184,6 +1184,10 @@ export function OverlayLayer({
   // 同样由卡槽 onDoubleClick 触发（slot 抢占 pointer capture 后，内层 body 的
   // dblclick 不再可达），状态提到本层、传 TextCard 受控渲染。
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
+  // 正在就地编辑的文件卡 id —— 双击类文本（text/*）文件卡进入；null = 无。
+  // FileCard 把整段文本作为 UTF-8 覆写磁盘，故仅对 isFileEditable 通过的元素
+  // 打开入口；其他 MIME / 缺失 / 大文件不响应双击。
+  const [editingFileId, setEditingFileId] = useState<string | null>(null);
   // 正在编辑 label / description 的区域 id —— 双击区域头部打开编辑弹窗（PRD §6.6）。
   const [editingRegionId, setEditingRegionId] = useState<string | null>(null);
   const [resize, setResize] = useState<ResizeState | null>(null);
@@ -1375,6 +1379,7 @@ export function OverlayLayer({
       if (rotate && rotate.elementId === el.id) return true;
       if (editingLabelId === el.id) return true;
       if (editingTextId === el.id) return true;
+      if (editingFileId === el.id) return true;
       if (editingRegionId === el.id) return true;
       // 轴对齐包围盒与视口盒相交即保留。
       return !(
@@ -1396,6 +1401,7 @@ export function OverlayLayer({
     rotate,
     editingLabelId,
     editingTextId,
+    editingFileId,
     editingRegionId,
   ]);
 
@@ -4887,13 +4893,19 @@ export function OverlayLayer({
           //   文本 → 正文就地编辑（editingTextId）—— slot 抢占 pointer
           //          capture 后内层 body 的 dblclick 不再可达，必须由 slot
           //          承接才能进编辑态。
+          //   类文本文件 → 内容就地编辑（editingFileId）—— md/csv/txt 等
+          //          UTF-8 文本族文件双击进编辑器，提交时整段覆写磁盘。
+          //          非文本 MIME / 缺失 / 大文件 isFileEditable 返回 false，
+          //          不挂 dblclick。
           const slotDoubleClick = el.locked
             ? undefined
             : isShape
               ? (): void => setEditingLabelId(el.id)
               : isText
                 ? (): void => setEditingTextId(el.id)
-                : undefined;
+                : isFile && isFileEditable(el, missingFileIds.has(el.id))
+                  ? (): void => setEditingFileId(el.id)
+                  : undefined;
 
           return (
             <div
@@ -4972,7 +4984,14 @@ export function OverlayLayer({
               ) : el.type === 'embed' ? (
                 <EmbedView element={el} />
               ) : (
-                <FileCard element={el} missing={missingFileIds.has(el.id)} />
+                <FileCard
+                  element={el}
+                  missing={missingFileIds.has(el.id)}
+                  editing={editingFileId === el.id}
+                  onEditingChange={(next) =>
+                    setEditingFileId(next ? el.id : null)
+                  }
+                />
               )}
               {/* 形状命中层（椭圆 / 菱形）—— clip-path 裁成真实形状，承接
                   点选 / 拖拽 / 双击；标签编辑态让位给下层 contentEditable。 */}

@@ -358,15 +358,19 @@ export async function describeSuggestion(
  *
  * @param targetPath 文件在 files/ 下的目标相对路径（含文件名，用 `/` 分隔）。
  * @param blob       文件二进制内容（File / Blob）。
+ * @param options    `overwrite` —— 允许覆盖既有同名文件（编辑保存场景）；
+ *                   默认 false（拖入场景下不覆盖，重名走调用方改名）。
  * @returns 服务端返回的实际路径 + 字节数。
  * @throws ServerError —— 服务不可达 / 路径非法 / 已存在 / 写盘失败。
  */
 export async function uploadFile(
   targetPath: string,
   blob: Blob,
+  options?: { overwrite?: boolean },
 ): Promise<{ path: string; size: number }> {
-  const qs = `?path=${encodeURIComponent(targetPath)}`;
-  const res = await fetchWithTimeout(`/files/upload${qs}`, {
+  const params = new URLSearchParams({ path: targetPath });
+  if (options?.overwrite) params.set('overwrite', '1');
+  const res = await fetchWithTimeout(`/files/upload?${params.toString()}`, {
     method: 'POST',
     headers: {
       'Content-Type': blob.type || 'application/octet-stream',
@@ -377,4 +381,23 @@ export async function uploadFile(
     res,
     'POST /api/files/upload',
   );
+}
+
+/**
+ * 把一段文本作为 UTF-8 写回 files/ 下的指定文件（覆盖既有内容）。
+ *
+ * 编辑文本 / Markdown / CSV 文件卡时使用：双击 → textarea 改字 → Ctrl+Enter
+ * 提交，复用 upload 端点（overwrite=1）+ utf-8 + 文件原 MIME。
+ *
+ * @param relPath 相对 files/ 的路径。
+ * @param text    新文本内容。
+ * @param mime    文件 MIME（用于 Content-Type 回显，不影响落盘）。
+ */
+export async function writeFileText(
+  relPath: string,
+  text: string,
+  mime: string,
+): Promise<{ path: string; size: number }> {
+  const blob = new Blob([text], { type: `${mime}; charset=utf-8` });
+  return uploadFile(relPath, blob, { overwrite: true });
 }

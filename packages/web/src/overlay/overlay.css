@@ -809,6 +809,60 @@
   word-break: break-word;
 }
 
+/* ── 文件卡片 · 就地编辑态（类文本文件）────────────────────────
+ * 双击 md/csv/txt 等 text/* 文件卡进入。视觉上与对应预览态接近 —— 顶部
+ * 保留文件名行并加一条提示，下方 textarea 替换原预览，铺满卡片可用空间，
+ * 字体字号沿用 ov-file__text-body 的等宽栈。 */
+.ov-file--editing {
+  /* 编辑态卡片整体加一条琥珀色描边 —— 区分预览，提示「现在改的是磁盘文件」。 */
+  border-color: var(--c-accent);
+  box-shadow: 0 0 0 1px var(--c-accent), var(--shadow-sm);
+}
+
+.ov-file--editing .ov-file__head {
+  border-bottom: 1px solid var(--c-border);
+}
+
+.ov-file__edit-hint {
+  flex: 0 0 auto;
+  margin-left: var(--space-2);
+  padding: 1px var(--space-2);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  color: var(--c-ink-2);
+  background: var(--c-surface-sunken);
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+}
+
+.ov-file__editor {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  outline: none;
+  background: var(--c-surface);
+  color: var(--c-ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  resize: none;
+  overflow: auto;
+}
+
+.ov-file__editor--md {
+  /* Markdown 源码用与预览近似的字号，便于改字时所见即所改。 */
+  font-size: var(--text-sm);
+}
+
+.ov-file__editor:disabled {
+  opacity: 0.7;
+  cursor: progress;
+}
+
 /* ── 文件卡片 · 缺失态（R6）──────────────────────────────────
  * path 指向的文件已不在磁盘上：虚线边框 + 暗金警示，不预览，
  * 不删除元素 —— 等待文件恢复或用户清理。 */

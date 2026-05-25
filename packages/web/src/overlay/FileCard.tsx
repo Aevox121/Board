@@ -11,17 +11,33 @@
  *  - CSV（text/csv）→ 取文本解析为表格预览。
  *  - 其余纯文本（text/*）→ 取文本显示片段预览。
  *  - 兜底 → 卡片态（图标 + 文件名 + 元信息）。
+ *
+ * 就地编辑（类文本文件）：当父层把 `editing=true` 提上来时，body 替换为
+ * textarea，Ctrl+Enter / 失焦提交（writeFileText 覆写磁盘）、Esc 取消。
+ * 仅 text/* 系（md / csv / 纯文本）+ 非缺失 + 可预览的文件支持编辑，
+ * 是否允许由 `isFileEditable()` 判定，OverlayLayer 据此决定是否触发编辑。
  */
 import { useEffect, useRef, useState } from 'react';
 import type { FileElement } from '@board/core';
 import { marked } from 'marked';
 import { fileContentUrl, fetchFileText } from '../server/files';
+import { writeFileText } from '../server/client';
+import { toast } from '../components/toast';
 import { cardRotation, fileBaseName, formatBytes, parseCsv } from './util';
 
 export interface FileCardProps {
   element: FileElement;
   /** R6：元素 path 指向的文件已不在磁盘上 —— 渲染为「缺失」态。 */
   missing?: boolean;
+  /**
+   * 就地编辑态（外部控制）—— OverlayLayer 因为 slot 抢占了 pointer capture，
+   * 内层 body 的 onDoubleClick 不再可达；改由 slot.onDoubleClick 把
+   * `editingId` 提上来，FileCard 据此进入 / 退出编辑态。仅对类文本（text/*）
+   * 文件生效，其他 MIME 即便外部传 true 也按预览渲染（编辑入口不开放）。
+   */
+  editing?: boolean;
+  /** 用户按 Esc / 失焦 / Ctrl+Enter 退出编辑时通知调用方清状态。 */
+  onEditingChange?: (editing: boolean) => void;
 }
 
 /** 纯文本预览截取的字符上限 —— 卡片只需片段。 */
@@ -55,6 +71,24 @@ function textKind(mime: string): 'markdown' | 'csv' | 'plain' | null {
   return null;
 }
 
+/**
+ * 该 file 元素是否允许就地编辑。
+ *
+ * 编辑会把整段文本作为 UTF-8 覆写磁盘（writeFileText），仅对：
+ *  - text/* 系 MIME（md / csv / 纯文本，含 .json/.html 等若 guessMime 归为 text/*）
+ *  - 非缺失（磁盘上有文件）
+ *  - 可预览（小文件，未走索引卡片）
+ * 三条都满足才放行。OverlayLayer 据此决定是否给 slot 装 dblclick 编辑入口。
+ */
+export function isFileEditable(
+  element: FileElement,
+  missing?: boolean,
+): boolean {
+  if (missing) return false;
+  if (element.previewable === false) return false;
+  return textKind(element.mime) !== null;
+}
+
 /** 按 MIME 大类挑一个简单的字形图标。 */
 function fileGlyph(mime: string): string {
   if (isImageMime(mime)) return '🖼';
@@ -73,17 +107,34 @@ function mimeLabel(mime: string): string {
   return tail.toUpperCase();
 }
 
-export function FileCard({ element, missing }: FileCardProps): JSX.Element {
+export function FileCard({
+  element,
+  missing,
+  editing: editingProp,
+  onEditingChange,
+}: FileCardProps): JSX.Element {
   const { path, mime, size, previewable } = element;
   const name = fileBaseName(path);
   const rotation = cardRotation(element.id);
+  const kind = textKind(mime);
+  const editable = isFileEditable(element, missing);
+  const editing = Boolean(editingProp) && editable;
 
-  // 文本族预览内容；null = 尚未加载 / 不适用 / 加载失败（据此降级为兜底卡片）。
+  // 完整原始文本 —— 编辑器的草稿底本，亦驱动 markdown/csv/纯文本的下游预览。
+  // null = 尚未拉取 / server 不可达；保存成功后直接更新此值，无需等 reconcile。
+  const [rawText, setRawText] = useState<string | null>(null);
+  // 文本族预览内容 —— 缓存解析结果（避免每次 render 重跑 marked / parseCsv）。
+  // null = 尚未加载 / 不适用 / 加载失败（据此降级为兜底卡片）。
   const [markdownHtml, setMarkdownHtml] = useState<string | null>(null);
   const [csvRows, setCsvRows] = useState<string[][] | null>(null);
   const [textSnippet, setTextSnippet] = useState<string | null>(null);
   // 图片预览是否加载失败 —— 失败时退回兜底卡片。
   const [imageFailed, setImageFailed] = useState(false);
+  // 编辑器草稿；进入编辑态时由 rawText 初始化。
+  const [draft, setDraft] = useState('');
+  // 保存中 —— 提交期间禁用 textarea，按钮转「保存中…」。
+  const [saving, setSaving] = useState(false);
+  const taRef = useRef<HTMLTextAreaElement>(null);
 
   // 元素是否仍挂载，避免异步回调写已卸载组件的 state。
   const mountedRef = useRef(true);
@@ -94,38 +145,151 @@ export function FileCard({ element, missing }: FileCardProps): JSX.Element {
     };
   }, []);
 
+  /** 把 rawText 投影到对应预览缓存。 */
+  function applyPreview(text: string, k: 'markdown' | 'csv' | 'plain'): void {
+    if (k === 'markdown') {
+      setMarkdownHtml(marked.parse(text) as string);
+    } else if (k === 'csv') {
+      setCsvRows(parseCsv(text));
+    } else {
+      setTextSnippet(text.slice(0, TEXT_SNIPPET_LIMIT));
+    }
+  }
+
   // 文本族文件（md/csv/纯文本）：拉取正文并按类型解析。
   // 缺失 / 大文件 / 非文本族不拉取。
   useEffect(() => {
+    setRawText(null);
     setMarkdownHtml(null);
     setCsvRows(null);
     setTextSnippet(null);
     if (missing || !previewable) return;
-    const kind = textKind(mime);
     if (!kind) return;
     let cancelled = false;
     void (async () => {
       const text = await fetchFileText(path);
       if (cancelled || !mountedRef.current) return;
       if (text === null) return; // server 不可达 / 端点未实现 —— 降级为兜底卡片
-      if (kind === 'markdown') {
-        // marked.parse 同步返回 string（未启用 async 选项）。
-        setMarkdownHtml(marked.parse(text) as string);
-      } else if (kind === 'csv') {
-        setCsvRows(parseCsv(text));
-      } else {
-        setTextSnippet(text.slice(0, TEXT_SNIPPET_LIMIT));
-      }
+      setRawText(text);
+      applyPreview(text, kind);
     })();
     return () => {
       cancelled = true;
     };
-  }, [path, mime, previewable, missing]);
+  }, [path, mime, previewable, missing, kind]);
+
+  // 进入编辑态：拷 rawText（或 ''）为草稿，聚焦并把光标置于末尾。
+  useEffect(() => {
+    if (!editing) return;
+    setDraft(rawText ?? '');
+    const ta = taRef.current;
+    if (ta) {
+      ta.focus();
+      // 编辑长文本时全选会糊一片；光标放末尾、不动选区。
+      const len = ta.value.length;
+      ta.setSelectionRange(len, len);
+    }
+    // 进入编辑后 rawText 还在异步加载时，加载完了再回填一次草稿。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing]);
+
+  // 草稿未脏（== rawText）时，rawText 异步到位后同步草稿，避免文本空白。
+  useEffect(() => {
+    if (!editing) return;
+    if (rawText !== null && draft === '') setDraft(rawText);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing, rawText]);
+
+  function exitEditing(): void {
+    onEditingChange?.(false);
+  }
+
+  async function commit(): Promise<void> {
+    if (!editable || !kind) {
+      exitEditing();
+      return;
+    }
+    // 无变化：直接退出编辑，不打 server。
+    if (rawText !== null && draft === rawText) {
+      exitEditing();
+      return;
+    }
+    setSaving(true);
+    try {
+      await writeFileText(path, draft, mime);
+      if (!mountedRef.current) return;
+      setRawText(draft);
+      applyPreview(draft, kind);
+      exitEditing();
+    } catch (err) {
+      toast.error(`保存失败：${err instanceof Error ? err.message : String(err)}`);
+      // 失败保留编辑态 + 草稿，便于用户重试或拷走内容。
+    } finally {
+      if (mountedRef.current) setSaving(false);
+    }
+  }
+
+  function cancel(): void {
+    setDraft(rawText ?? '');
+    exitEditing();
+  }
 
   // 卡片外层通用属性 —— 手绘质感容器，微旋转由元素 id 派生（稳定不抖）。
   const cardStyle: React.CSSProperties = {
     transform: `rotate(${rotation}deg)`,
   };
+
+  // ── 编辑态（类文本文件）：替换 body 为 textarea ───────────────
+  // 优先级最高 —— 即便 markdown/csv 还在拉取，编辑界面立即可见。
+  if (editing && kind) {
+    const editorClass =
+      'ov-file__editor' +
+      (kind === 'markdown'
+        ? ' ov-file__editor--md'
+        : kind === 'csv'
+          ? ' ov-file__editor--csv'
+          : ' ov-file__editor--text');
+    return (
+      <div
+        className="ov-card ov-file ov-file--editing"
+        style={cardStyle}
+        title={path}
+      >
+        <div className="ov-file__head">
+          <span className="ov-file__glyph" aria-hidden="true">
+            {fileGlyph(mime)}
+          </span>
+          <span className="ov-file__name">{name}</span>
+          <span className="ov-file__edit-hint">
+            {saving ? '保存中…' : 'Ctrl+Enter 保存 · Esc 取消'}
+          </span>
+        </div>
+        <textarea
+          ref={taRef}
+          className={editorClass}
+          value={draft}
+          disabled={saving}
+          spellCheck={false}
+          // 编辑器内的指针 / 滚轮不应触发卡片拖拽 / 画布缩放。
+          onPointerDown={(e) => e.stopPropagation()}
+          onWheel={(e) => e.stopPropagation()}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={() => {
+            void commit();
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              e.preventDefault();
+              cancel();
+            } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+              e.preventDefault();
+              void commit();
+            }
+          }}
+        />
+      </div>
+    );
+  }
 
   // ── 缺失态（R6）：文件已不在磁盘上 ───────────────────────────
   if (missing) {
