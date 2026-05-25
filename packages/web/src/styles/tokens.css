@@ -45,7 +45,12 @@
   --font-hand: 'Excalifont', 'Virgil', 'Patrick Hand', 'KaiTi', 'STKaiti',
     'Kaiti SC', 'TW-Kai', cursive;
   --font-ui: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-serif: 'Tiempos', 'Source Serif 4', Georgia, serif;
+  /* 衬线体（文件预览正文）：拉丁走 Tiempos / Source Serif；CJK 首选思源宋体
+     系（Source Han Serif / Noto Serif），系统未装时回退到 Songti / STSong /
+     SimSun，至少保持衬线风。 */
+  --font-serif: 'Tiempos', 'Source Serif 4', 'Source Han Serif SC',
+    'Noto Serif SC', 'Noto Serif CJK SC', 'Songti SC', 'STSong', 'SimSun',
+    Georgia, serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
 
   /* ── 字号 ─────────────────────────────────── */
