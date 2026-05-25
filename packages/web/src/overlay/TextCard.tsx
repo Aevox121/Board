@@ -12,9 +12,10 @@
  */
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { Style, TextElement } from '@board/core';
+import { useBoard } from '../board/BoardContext';
 import { cardRotation } from './util';
 import {
-  renderMarkdownWithTaskIndex,
+  renderMarkdownRich,
   toggleMarkdownTask,
 } from '../board/markdownTasks';
 
@@ -55,6 +56,7 @@ export function TextCard({
   onEditingChange,
 }: TextCardProps): JSX.Element {
   const { markdown } = element;
+  const { scene, requestNavigateToElement } = useBoard();
   // 编辑态：受控（来自 props）+ 受控失败时本地兜底；优先用 props。
   const editing = Boolean(editingProp);
   const [draft, setDraft] = useState(markdown);
@@ -94,30 +96,48 @@ export function TextCard({
   }, [markdown, onResize, editing, element.height]);
 
   // 渲染 markdown + 让 GFM 任务列表的 checkbox 可点（去 disabled + 加
-  // data-task-index）；body onClick 委托处理勾选回写（PRD §6.3）。
-  const html = markdown ? renderMarkdownWithTaskIndex(markdown) : '';
+  // data-task-index） + `[[xxx]]` 内链解析（数据来自场景元素，
+  // 命中后 data-bd-link=元素 id）。body onClick 委托处理勾选回写 / 跳转。
+  const html = markdown ? renderMarkdownRich(markdown, scene.elements) : '';
 
-  /** 命中 checkbox —— pointerdown 阶段就拦截，否则 slot 会
-   *  setPointerCapture 把后续 click 重定向到 slot 上，checkbox 收不到。 */
+  /** 命中 checkbox / 内链 —— pointerdown 阶段就拦截，否则 slot 会
+   *  setPointerCapture 把后续 click 重定向到 slot 上。 */
   function handleBodyPointerDown(e: React.PointerEvent<HTMLElement>): void {
     const t = e.target as HTMLElement | null;
-    if (t && t.tagName === 'INPUT' && (t as HTMLInputElement).type === 'checkbox') {
+    if (!t) return;
+    if (t.tagName === 'INPUT' && (t as HTMLInputElement).type === 'checkbox') {
+      e.stopPropagation();
+      return;
+    }
+    if (t.tagName === 'A' && t.classList.contains('ov-md-link')) {
       e.stopPropagation();
     }
   }
 
-  /** 委托点击 —— 命中 checkbox 即翻转源 markdown 对应任务行并写回。 */
+  /** 委托点击 —— 命中 checkbox 翻转任务；命中内链跳到目标元素。 */
   function handleBodyClick(e: React.MouseEvent<HTMLElement>): void {
-    if (!onCommit) return;
     const t = e.target as HTMLElement | null;
-    if (!t || t.tagName !== 'INPUT') return;
+    if (!t) return;
+    // 内链 [[xxx]] —— 命中则跳到目标元素（dead 链 class 也带 ov-md-link
+    // 但无 data-bd-link，自然 no-op）。
+    if (t.tagName === 'A' && t.classList.contains('ov-md-link')) {
+      const id = t.dataset['bdLink'];
+      if (id) {
+        e.preventDefault();
+        e.stopPropagation();
+        requestNavigateToElement(id);
+      }
+      return;
+    }
+    // GFM 任务列表 checkbox
+    if (!onCommit) return;
+    if (t.tagName !== 'INPUT') return;
     const input = t as HTMLInputElement;
     if (input.type !== 'checkbox') return;
     const raw = input.dataset['taskIndex'];
     if (raw === undefined) return;
     const idx = Number(raw);
     if (!Number.isFinite(idx) || idx < 0) return;
-    // 阻止冒泡 / 默认 —— 不进入编辑态、不影响 native focus
     e.preventDefault();
     e.stopPropagation();
     const next = toggleMarkdownTask(markdown, idx);

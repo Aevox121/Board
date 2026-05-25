@@ -19,6 +19,7 @@
  */
 
 import { marked } from 'marked';
+import type { Element, RegionElement } from '@board/core';
 
 /** 匹配「任务行的方括号位置」—— 仅取方括号本身，避免误改正文里的 `[x]`。 */
 const TASK_LINE_RE = /^([ \t]*(?:>\s*)*[-*+]\s+)\[([ xX])\]/gm;
@@ -59,6 +60,152 @@ export function toggleMarkdownTask(md: string, n: number): string {
     return `${prefix}[${flipped}]`;
   });
   return next;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+//  内链 [[xxx]]（PRD §6.3 「支持 `[[白板内文件]]` 风格内链」）
+// ─────────────────────────────────────────────────────────────────────
+
+/** 把 `[[xxx]]` 解析到场景里的某个元素。找不到返回 null（死链）。
+ *
+ * 解析优先级：
+ *  1. file 元素 path 完全匹配（`[[路线/day1.md]]`）
+ *  2. file 元素 basename 完全匹配（`[[day1.md]]`）
+ *  3. region label 完全匹配（`[[路线]]`）
+ *  4. folder 元素 basename 完全匹配
+ *  5. file basename 去扩展名后完全匹配（`[[day1]]`）
+ *  6. text 元素首非空行前缀匹配（`[[华山三日攻略]]`，便于跳到笔记节）
+ * 名称 trim 后参与匹配；大小写敏感（路径敏感的文件系统多数大小写敏感）。 */
+export function resolveInternalLink(
+  elements: ReadonlyArray<Element>,
+  rawName: string,
+): Element | null {
+  const name = rawName.trim();
+  if (!name) return null;
+  const baseOf = (p: string): string => {
+    const i = p.lastIndexOf('/');
+    return i >= 0 ? p.slice(i + 1) : p;
+  };
+  const noExt = (b: string): string => {
+    const i = b.lastIndexOf('.');
+    return i > 0 ? b.slice(0, i) : b;
+  };
+
+  // 1) file path 精确
+  for (const e of elements) {
+    if (e.type === 'file' && e.path === name) return e;
+  }
+  // 2) file basename 精确
+  for (const e of elements) {
+    if (e.type === 'file' && baseOf(e.path) === name) return e;
+  }
+  // 3) region label 精确
+  for (const e of elements) {
+    if (e.type === 'region' && (e as RegionElement).label === name) return e;
+  }
+  // 4) folder basename 精确
+  for (const e of elements) {
+    if (e.type === 'folder' && baseOf(e.path) === name) return e;
+  }
+  // 5) file basename 去扩展名 精确
+  for (const e of elements) {
+    if (e.type === 'file' && noExt(baseOf(e.path)) === name) return e;
+  }
+  // 6) text 元素首行前缀
+  for (const e of elements) {
+    if (e.type !== 'text') continue;
+    const md = e.markdown ?? '';
+    const firstLine = md.split('\n').find((l) => l.trim()) ?? '';
+    // 去掉 markdown 标记字符（# > - * 等）后做前缀比较
+    const stripped = firstLine.replace(/^[#>\-*+\s]+/, '').trim();
+    if (stripped.startsWith(name)) return e;
+  }
+  return null;
+}
+
+/** 转义 HTML 文本（避免链接名包含 `<>&"` 时破坏 DOM）。 */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * 把 HTML 字符串里出现在「标签外」的 `[[xxx]]` 文本替换为可点击链接 / 死链。
+ *
+ * 只在 `>` 与 `<` 之间的文本片段做替换 —— 避开属性值（如 `href="..."` 含 `[`）
+ * 与 `<code>` / `<pre>`（避免代码块里的 `[[]]` 被吃掉）。
+ *
+ * 命中元素 → `<a class="ov-md-link" data-bd-link="<id>">xxx</a>`
+ * 未命中  → `<span class="ov-md-link ov-md-link--dead" title="未找到">xxx</span>`
+ */
+function replaceInternalLinksInHtml(
+  html: string,
+  elements: ReadonlyArray<Element>,
+): string {
+  // 把 HTML 切成 tag / text 交替片段。text 段才做替换；tag 段（含 `<code>`
+  // / `<pre>` 内部一同视为 tag，因 marked 输出 `<code>...</code>` 内部仍是
+  // 文本节点 —— 用 inCodeDepth 计数标签嵌套来跳过代码块）。
+  const out: string[] = [];
+  let i = 0;
+  let codeDepth = 0;
+  while (i < html.length) {
+    const lt = html.indexOf('<', i);
+    if (lt < 0) {
+      // 末尾文本
+      out.push(
+        codeDepth > 0 ? html.slice(i) : transformText(html.slice(i)),
+      );
+      break;
+    }
+    // 文本片段
+    if (lt > i) {
+      const seg = html.slice(i, lt);
+      out.push(codeDepth > 0 ? seg : transformText(seg));
+    }
+    // 标签片段
+    const gt = html.indexOf('>', lt);
+    if (gt < 0) {
+      out.push(html.slice(lt));
+      break;
+    }
+    const tag = html.slice(lt, gt + 1);
+    out.push(tag);
+    // 维护 code/pre 深度（marked 会输出 `<code>` / `<pre>`；嵌套通常 1 层）
+    if (/^<\s*(code|pre)\b/i.test(tag)) codeDepth += 1;
+    else if (/^<\s*\/\s*(code|pre)\s*>/i.test(tag)) {
+      codeDepth = Math.max(0, codeDepth - 1);
+    }
+    i = gt + 1;
+  }
+  return out.join('');
+
+  function transformText(text: string): string {
+    return text.replace(/\[\[([^\[\]]+)\]\]/g, (_m, raw: string) => {
+      const target = resolveInternalLink(elements, raw);
+      const label = escapeHtml(raw);
+      if (target) {
+        return `<a class="ov-md-link" data-bd-link="${escapeHtml(target.id)}">${label}</a>`;
+      }
+      return `<span class="ov-md-link ov-md-link--dead" title="未找到该元素">${label}</span>`;
+    });
+  }
+}
+
+/**
+ * 完整 markdown 渲染：marked.parse + 任务列表可勾选 + 内链 `[[xxx]]` 解析。
+ *
+ * 这是 TextCard / FileCard 都用的单一入口；旧的 `renderMarkdownWithTaskIndex`
+ * 不知道场景元素故只能做任务列表，本函数补上内链支持。
+ */
+export function renderMarkdownRich(
+  md: string,
+  elements: ReadonlyArray<Element>,
+): string {
+  const withTasks = renderMarkdownWithTaskIndex(md);
+  return replaceInternalLinksInHtml(withTasks, elements);
 }
 
 /** 计数源 markdown 里的任务行数 —— 给 UI 显示「已完成 / 总数」用，可选。 */

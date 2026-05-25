@@ -22,8 +22,9 @@ import type { FileElement } from '@board/core';
 import { fileContentUrl, fetchFileText } from '../server/files';
 import { writeFileText } from '../server/client';
 import { toast } from '../components/toast';
+import { useBoard } from '../board/BoardContext';
 import {
-  renderMarkdownWithTaskIndex,
+  renderMarkdownRich,
   toggleMarkdownTask,
 } from '../board/markdownTasks';
 import { cardRotation, fileBaseName, formatBytes, parseCsv } from './util';
@@ -116,6 +117,7 @@ export function FileCard({
   editing: editingProp,
   onEditingChange,
 }: FileCardProps): JSX.Element {
+  const { scene, requestNavigateToElement } = useBoard();
   const { path, mime, size, previewable } = element;
   const name = fileBaseName(path);
   const rotation = cardRotation(element.id);
@@ -148,10 +150,11 @@ export function FileCard({
     };
   }, []);
 
-  /** 把 rawText 投影到对应预览缓存。markdown 路径同时让 GFM 任务列表可勾。 */
+  /** 把 rawText 投影到对应预览缓存。markdown 路径同时让 GFM 任务列表可勾
+   *  + `[[xxx]]` 内链解析。 */
   function applyPreview(text: string, k: 'markdown' | 'csv' | 'plain'): void {
     if (k === 'markdown') {
-      setMarkdownHtml(renderMarkdownWithTaskIndex(text));
+      setMarkdownHtml(renderMarkdownRich(text, scene.elements));
     } else if (k === 'csv') {
       setCsvRows(parseCsv(text));
     } else {
@@ -159,26 +162,42 @@ export function FileCard({
     }
   }
 
-  /** 命中 checkbox —— pointerdown 阶段就拦截，否则 slot 会 setPointerCapture
-   *  把后续 click 重定向到 slot 上，checkbox 收不到。 */
+  /** 命中 checkbox / 内链 —— pointerdown 阶段就拦截，否则 slot 会
+   *  setPointerCapture 把后续 click 重定向到 slot 上。 */
   function handleMarkdownBodyPointerDown(
     e: React.PointerEvent<HTMLElement>,
   ): void {
     const t = e.target as HTMLElement | null;
-    if (t && t.tagName === 'INPUT' && (t as HTMLInputElement).type === 'checkbox') {
+    if (!t) return;
+    if (t.tagName === 'INPUT' && (t as HTMLInputElement).type === 'checkbox') {
+      e.stopPropagation();
+      return;
+    }
+    if (t.tagName === 'A' && t.classList.contains('ov-md-link')) {
       e.stopPropagation();
     }
   }
 
   /**
-   * GFM 任务列表勾选回写（PRD §6.3）—— md 预览态委托点击：命中 checkbox 即
-   * 翻转源文件里对应任务行 + writeFileText 覆写磁盘 + 本地 rawText/applyPreview
-   * 即时刷新（不等 watcher 回波）。失败保留原状并 toast。
+   * 委托点击 —— 命中内链跳转；命中 GFM checkbox 翻转任务行并写回。
+   * markdown 任务回写：toggleMarkdownTask + writeFileText 覆写磁盘 + 本地
+   * rawText/applyPreview 即时刷新（不等 watcher 回波）。失败回滚 + toast。
    */
   function handleMarkdownBodyClick(e: React.MouseEvent<HTMLElement>): void {
-    if (!editable) return;
     const t = e.target as HTMLElement | null;
-    if (!t || t.tagName !== 'INPUT') return;
+    if (!t) return;
+    // 内链 [[xxx]] —— 命中即跳画布视口到目标元素
+    if (t.tagName === 'A' && t.classList.contains('ov-md-link')) {
+      const id = t.dataset['bdLink'];
+      if (id) {
+        e.preventDefault();
+        e.stopPropagation();
+        requestNavigateToElement(id);
+      }
+      return;
+    }
+    if (!editable) return;
+    if (t.tagName !== 'INPUT') return;
     const input = t as HTMLInputElement;
     if (input.type !== 'checkbox') return;
     const raw = input.dataset['taskIndex'];
