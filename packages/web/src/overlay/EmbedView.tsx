@@ -21,10 +21,16 @@ export function EmbedView({ element }: { element: EmbedElement }): JSX.Element {
   const { url, embedType } = element;
 
   if (embedType === 'iframe') {
+    // 可交互态（PRD §6.10）—— iframe 取消 pointer-events:none，用户可在
+    // 内部点击 / 滚动 / 输入；trade-off:拖拽该 embed 必须从外框入手。
+    const interactive = element.interactive === true;
     return (
       <div className="ov-embed ov-embed--frame">
         <iframe
-          className="ov-embed__iframe"
+          className={
+            'ov-embed__iframe' +
+            (interactive ? ' ov-embed__iframe--interactive' : '')
+          }
           src={url}
           title={url}
           sandbox="allow-scripts allow-same-origin allow-popups"

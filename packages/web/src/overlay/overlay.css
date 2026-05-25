@@ -192,8 +192,16 @@
   height: 100%;
   border: 0;
   background: #fff;
-  /* iframe 此阶段为只读预览 —— 不拦截指针，整个嵌入元素仍可拖拽 / 选中。 */
+  /* 默认 iframe 为只读预览 —— 不拦截指针，整个嵌入元素仍可拖拽 / 选中。
+     `interactive=true` 时下方 modifier 把它打开。 */
   pointer-events: none;
+}
+
+/* 可交互态（PRD §6.10）—— 取消指针屏蔽，让 iframe 接收点击 / 滚动 /
+   键盘。代价：拖拽该 embed 必须从选择框边缘或手柄入手（iframe 区域内
+   的 pointerdown 不再冒泡到 slot）。 */
+.ov-embed__iframe--interactive {
+  pointer-events: auto;
 }
 
 .ov-slot--shape.ov-slot--dragging {
@@ -2121,6 +2129,22 @@
   font-size: var(--text-xs);
   color: var(--c-ink);
   opacity: 0.55;
+}
+
+/* StylePanel 内的 checkbox toggle 行（如 embed iframe 可交互开关）。 */
+.ov-style-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--c-ink);
+  cursor: pointer;
+  user-select: none;
+}
+
+.ov-style-toggle input {
+  accent-color: var(--c-accent);
+  cursor: pointer;
 }
 
 .ov-swatches {

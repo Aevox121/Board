@@ -150,6 +150,14 @@ export interface StylePanelProps {
   fileDisplayMode?: FileDisplayMode | null;
   /** 切换 file 元素显示模式（icon / card / preview）。仅单选 file 时调用。 */
   onFileDisplayModeChange?: (next: FileDisplayMode) => void;
+  /**
+   * 选区单选 embed 元素 + embedType==='iframe' 时的 interactive 标志
+   *（PRD §6.10 「iframe 可交互」）。null = 不显示开关（其它类型 / 多选 /
+   * embedType==='link-card'）。
+   */
+  embedInteractive?: boolean | null;
+  /** 切换 embed iframe 可交互。仅单选 iframe 类 embed 时调用。 */
+  onEmbedInteractiveChange?: (next: boolean) => void;
 }
 
 /** `<input type="color">` 需合法 #rrggbb；透明 / 异常值回退到白。 */
@@ -226,6 +234,8 @@ export function StylePanel({
   onLinkChange,
   fileDisplayMode,
   onFileDisplayModeChange,
+  embedInteractive,
+  onEmbedInteractiveChange,
 }: StylePanelProps): JSX.Element {
   // 锁定态 —— 面板只给「解锁」入口，不暴露样式 / 变换控件。
   if (locked) {
@@ -439,6 +449,24 @@ export function StylePanel({
             value={fileDisplayMode}
             onPick={onFileDisplayModeChange}
           />
+        </section>
+      ) : null}
+
+      {/* embed iframe 可交互（PRD §6.10）—— 仅当选区是单个 iframe 类 embed
+          元素时出现。开启后 iframe 接收点击 / 滚动 / 输入，关闭恢复只读预览。 */}
+      {embedInteractive !== undefined &&
+      embedInteractive !== null &&
+      onEmbedInteractiveChange ? (
+        <section className="ov-style-sec">
+          <span className="ov-style-sec__label">交互</span>
+          <label className="ov-style-toggle">
+            <input
+              type="checkbox"
+              checked={embedInteractive}
+              onChange={(e) => onEmbedInteractiveChange(e.target.checked)}
+            />
+            <span>{embedInteractive ? '可点击 / 滚动' : '只读预览'}</span>
+          </label>
         </section>
       ) : null}
 

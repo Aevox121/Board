@@ -314,6 +314,13 @@ export interface EmbedElement extends BaseElement {
   type: 'embed';
   url: string;
   embedType: 'iframe' | 'link-card';
+  /**
+   * PRD §6.10 「embed iframe 可交互」开关。缺省 / false = iframe 设
+   * `pointer-events:none`（只读预览，整个 embed 元素仍可拖拽 / 选中）；
+   * true = 取消屏蔽，用户可在 iframe 里点击 / 滚动 / 输入，代价是要
+   * 拖拽该 embed 必须从选择框的边缘或手柄入手。
+   */
+  interactive?: boolean;
 }
 
 /** 元素可辨识联合（discriminated union by `type`） */

@@ -25,6 +25,7 @@ import type {
   ConnectorRouting,
   DrawElement,
   Element,
+  EmbedElement,
   FileElement,
   ParticipantId,
   RegionElement,
@@ -3797,6 +3798,35 @@ export function OverlayLayer({
   }
 
   /**
+   * 切换 embed iframe 可交互（PRD §6.10）—— true 让 iframe 接收点击 / 滚动 /
+   * 输入；false / 缺省回到只读预览态。仅对 embed 类型元素生效，其它类型 no-op。
+   */
+  function setEmbedInteractive(id: string, next: boolean): void {
+    const cur = sceneRef.current;
+    const ts = new Date().toISOString();
+    const nextScene: BoardScene = {
+      ...cur,
+      elements: cur.elements.map((e): Element => {
+        if (e.id !== id || e.type !== 'embed') return e;
+        if (next) {
+          return {
+            ...e,
+            interactive: true,
+            updatedBy: actorId,
+            updatedAt: ts,
+          } as Element;
+        }
+        // 关闭 = 剔除字段（不留 interactive:false，节省存储 + 默认即关闭）
+        const { interactive: _drop, ...rest } = e as EmbedElement & {
+          interactive?: boolean;
+        };
+        return { ...rest, updatedBy: actorId, updatedAt: ts } as Element;
+      }),
+    };
+    replaceScene(nextScene, 'canvas');
+  }
+
+  /**
    * 设置元素外链（PRD §6.4「元素挂外链」）—— next 为空（trim 后空字符串）
    * 清除外链；否则记录为 element.link，slot 右上角出现 🔗 角标，点击新窗
    * 打开。任意元素类型可用，由 StylePanel 单选时暴露入口。
@@ -5737,6 +5767,20 @@ export function OverlayLayer({
           onFileDisplayModeChange={
             selectedEls.length === 1 && selectedEls[0]!.type === 'file'
               ? (next): void => setFileDisplayMode(selectedEls[0]!.id, next)
+              : undefined
+          }
+          embedInteractive={
+            selectedEls.length === 1 &&
+            selectedEls[0]!.type === 'embed' &&
+            selectedEls[0]!.embedType === 'iframe'
+              ? (selectedEls[0]!.interactive === true)
+              : null
+          }
+          onEmbedInteractiveChange={
+            selectedEls.length === 1 &&
+            selectedEls[0]!.type === 'embed' &&
+            selectedEls[0]!.embedType === 'iframe'
+              ? (next): void => setEmbedInteractive(selectedEls[0]!.id, next)
               : undefined
           }
         />
