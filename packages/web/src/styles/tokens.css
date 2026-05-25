@@ -39,20 +39,31 @@
   --c-p8: #5f8a82;  /* 灰青 */
 
   /* ── 字体 ─────────────────────────────────── */
-  /* 手写体：拉丁字形走 Excalifont 系（未内嵌时回退 cursive）；CJK 字形
-     无对应手写 webfont，按字形回退到系统楷体（Win: KaiTi / mac: STKaiti），
-     比默认黑体 / 宋体更贴「手绘风」。 */
-  --font-hand: 'Excalifont', 'Virgil', 'Patrick Hand', 'KaiTi', 'STKaiti',
-    'Kaiti SC', 'TW-Kai', cursive;
-  --font-ui: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  /* 衬线体（文件预览正文）：拉丁走 Tiempos / Source Serif；CJK 首选思源宋体
-     系（Source Han Serif / Noto Serif），系统未装时回退到 Songti / STSong /
-     SimSun，至少保持衬线风。
-     family 列表覆盖三种发行形态：
+  /* CJK 统一走思源宋体（Source Han Serif / Noto Serif SC）—— 用户偏好；
+     列表覆盖三种发行形态：
       - SC 专用分包：'Source Han Serif SC' / 'Noto Serif SC'
-      - 多区域 TTC（Adobe 官方下载默认就是这种，含「思源宋体」中文别名）：
+      - 多区域 TTC（Adobe 官方默认就是这种，含「思源宋体」中文别名）：
         'Source Han Serif' / '思源宋体' / 'Source Han Serif CN'
-      - 旧版 Noto CJK SC 命名：'Noto Serif CJK SC' */
+      - 旧版 Noto CJK SC 命名：'Noto Serif CJK SC'
+     系统未装时回退到 Songti / STSong / SimSun，至少保持衬线风。
+     这个 CJK 段被 --font-hand / --font-ui / --font-serif 共享：拉丁字形各走
+     自己的 Latin 字体（Excalifont / Inter / Tiempos），CJK 字形按浏览器字符
+     回退机制落到第一个含该字符的家族 —— 就是思源宋体。 */
+  --font-cjk-serif: 'Source Han Serif SC', 'Noto Serif SC',
+    'Source Han Serif', '思源宋体', 'Source Han Serif CN',
+    'Noto Serif CJK SC', 'Songti SC', 'STSong', 'SimSun';
+
+  /* 手写体：拉丁走 Excalifont 系，CJK 经 --font-cjk-serif 落到思源宋体；
+     若两边都不可用最终 cursive 兜底。 */
+  --font-hand: 'Excalifont', 'Virgil', 'Patrick Hand', 'Source Han Serif SC',
+    'Noto Serif SC', 'Source Han Serif', '思源宋体', 'Source Han Serif CN',
+    'Noto Serif CJK SC', 'Songti SC', 'STSong', 'SimSun', cursive;
+  /* UI 字体：拉丁走 Inter / system，CJK 同样落到思源宋体。 */
+  --font-ui: 'Inter', system-ui, -apple-system, 'Segoe UI',
+    'Source Han Serif SC', 'Noto Serif SC', 'Source Han Serif', '思源宋体',
+    'Source Han Serif CN', 'Noto Serif CJK SC', 'Songti SC', 'STSong',
+    'SimSun', sans-serif;
+  /* 衬线体（文件预览正文）：拉丁走 Tiempos / Source Serif，CJK 思源宋体。 */
   --font-serif: 'Tiempos', 'Source Serif 4', 'Source Han Serif SC',
     'Noto Serif SC', 'Source Han Serif', '思源宋体', 'Source Han Serif CN',
     'Noto Serif CJK SC', 'Songti SC', 'STSong', 'SimSun', Georgia, serif;
