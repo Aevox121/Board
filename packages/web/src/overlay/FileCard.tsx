@@ -19,10 +19,13 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import type { FileElement } from '@board/core';
-import { marked } from 'marked';
 import { fileContentUrl, fetchFileText } from '../server/files';
 import { writeFileText } from '../server/client';
 import { toast } from '../components/toast';
+import {
+  renderMarkdownWithTaskIndex,
+  toggleMarkdownTask,
+} from '../board/markdownTasks';
 import { cardRotation, fileBaseName, formatBytes, parseCsv } from './util';
 
 export interface FileCardProps {
@@ -145,15 +148,52 @@ export function FileCard({
     };
   }, []);
 
-  /** 把 rawText 投影到对应预览缓存。 */
+  /** 把 rawText 投影到对应预览缓存。markdown 路径同时让 GFM 任务列表可勾。 */
   function applyPreview(text: string, k: 'markdown' | 'csv' | 'plain'): void {
     if (k === 'markdown') {
-      setMarkdownHtml(marked.parse(text) as string);
+      setMarkdownHtml(renderMarkdownWithTaskIndex(text));
     } else if (k === 'csv') {
       setCsvRows(parseCsv(text));
     } else {
       setTextSnippet(text.slice(0, TEXT_SNIPPET_LIMIT));
     }
+  }
+
+  /**
+   * GFM 任务列表勾选回写（PRD §6.3）—— md 预览态委托点击：命中 checkbox 即
+   * 翻转源文件里对应任务行 + writeFileText 覆写磁盘 + 本地 rawText/applyPreview
+   * 即时刷新（不等 watcher 回波）。失败保留原状并 toast。
+   */
+  function handleMarkdownBodyClick(e: React.MouseEvent<HTMLElement>): void {
+    if (!editable) return;
+    const t = e.target as HTMLElement | null;
+    if (!t || t.tagName !== 'INPUT') return;
+    const input = t as HTMLInputElement;
+    if (input.type !== 'checkbox') return;
+    const raw = input.dataset['taskIndex'];
+    if (raw === undefined) return;
+    const idx = Number(raw);
+    if (!Number.isFinite(idx) || idx < 0) return;
+    if (rawText === null) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const next = toggleMarkdownTask(rawText, idx);
+    if (next === rawText) return;
+    // 乐观即时：本地先刷新 + 异步写盘；失败回滚。
+    setRawText(next);
+    applyPreview(next, 'markdown');
+    void (async () => {
+      try {
+        await writeFileText(path, next, mime);
+      } catch (err) {
+        if (!mountedRef.current) return;
+        toast.error(
+          `保存失败：${err instanceof Error ? err.message : String(err)}`,
+        );
+        setRawText(rawText);
+        applyPreview(rawText, 'markdown');
+      }
+    })();
   }
 
   // 文本族文件（md/csv/纯文本）：拉取正文并按类型解析。
@@ -386,6 +426,7 @@ export function FileCard({
         </div>
         <div
           className="ov-file__md-body ov-md"
+          onClick={handleMarkdownBodyClick}
           // marked 输出为受信内容来源（本地 .board 文件），M2 直接内联。
           dangerouslySetInnerHTML={{ __html: markdownHtml }}
         />

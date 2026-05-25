@@ -496,6 +496,11 @@
 }
 .ov-md input[type='checkbox'] {
   margin-right: 4px;
+  /* GFM 任务列表勾选互动（PRD §6.3）—— marked 默认渲染 disabled，渲染层
+     已去 disabled + 加 data-task-index，CSS 把光标改成可点（细节由
+     handleBodyClick 在 TextCard / FileCard 里委托完成）。 */
+  cursor: pointer;
+  accent-color: var(--c-accent);
 }
 
 .ov-md a {

@@ -12,8 +12,11 @@
  */
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { Style, TextElement } from '@board/core';
-import { marked } from 'marked';
 import { cardRotation } from './util';
+import {
+  renderMarkdownWithTaskIndex,
+  toggleMarkdownTask,
+} from '../board/markdownTasks';
 
 /** fontFamily 枚举 → CSS 字体栈（与 ShapeView 同款映射）。 */
 function fontStack(family: Style['fontFamily']): string {
@@ -90,8 +93,27 @@ export function TextCard({
     if (Math.abs(fullH - element.height) > 4) onResize(fullH);
   }, [markdown, onResize, editing, element.height]);
 
-  // marked.parse 同步返回 string（未启用 async 选项）。
-  const html = markdown ? (marked.parse(markdown) as string) : '';
+  // 渲染 markdown + 让 GFM 任务列表的 checkbox 可点（去 disabled + 加
+  // data-task-index）；body onClick 委托处理勾选回写（PRD §6.3）。
+  const html = markdown ? renderMarkdownWithTaskIndex(markdown) : '';
+
+  /** 委托点击 —— 命中 checkbox 即翻转源 markdown 对应任务行并写回。 */
+  function handleBodyClick(e: React.MouseEvent<HTMLElement>): void {
+    if (!onCommit) return;
+    const t = e.target as HTMLElement | null;
+    if (!t || t.tagName !== 'INPUT') return;
+    const input = t as HTMLInputElement;
+    if (input.type !== 'checkbox') return;
+    const raw = input.dataset['taskIndex'];
+    if (raw === undefined) return;
+    const idx = Number(raw);
+    if (!Number.isFinite(idx) || idx < 0) return;
+    // 阻止冒泡 / 默认 —— 不进入编辑态、不影响 native focus
+    e.preventDefault();
+    e.stopPropagation();
+    const next = toggleMarkdownTask(markdown, idx);
+    if (next !== markdown) onCommit(next);
+  }
 
   // 进入编辑 —— 聚焦并全选，方便直接覆写占位文本。
   useEffect(() => {
@@ -179,6 +201,7 @@ export function TextCard({
           className="ov-text__body ov-md"
           style={bodyStyle}
           onDoubleClick={beginEdit}
+          onClick={handleBodyClick}
           // marked 输出来自本地白板数据，受信，M2 直接内联。
           dangerouslySetInnerHTML={{ __html: html }}
         />
