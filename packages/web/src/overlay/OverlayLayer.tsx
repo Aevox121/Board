@@ -3580,6 +3580,44 @@ export function OverlayLayer({
   }
 
   /**
+   * 切换文件夹展开（PRD §6.5）—— 改 `folder.expanded`。
+   * true 时 FolderCard 渲染类访达浏览（按 viewMode 走 list / grid / tree）。
+   */
+  function setFolderExpanded(id: string, value: boolean): void {
+    const cur = sceneRef.current;
+    const ts = new Date().toISOString();
+    const next: BoardScene = {
+      ...cur,
+      elements: cur.elements.map((e): Element =>
+        e.id === id && e.type === 'folder'
+          ? ({ ...e, expanded: value, updatedBy: actorId, updatedAt: ts } as Element)
+          : e,
+      ),
+    };
+    replaceScene(next, 'canvas');
+  }
+
+  /**
+   * 切换文件夹视图模式（PRD §6.5）—— 改 `folder.viewMode`：list / grid / tree。
+   */
+  function setFolderViewMode(
+    id: string,
+    mode: 'list' | 'grid' | 'tree',
+  ): void {
+    const cur = sceneRef.current;
+    const ts = new Date().toISOString();
+    const next: BoardScene = {
+      ...cur,
+      elements: cur.elements.map((e): Element =>
+        e.id === id && e.type === 'folder'
+          ? ({ ...e, viewMode: mode, updatedBy: actorId, updatedAt: ts } as Element)
+          : e,
+      ),
+    };
+    replaceScene(next, 'canvas');
+  }
+
+  /**
    * 切换区域自动归档（PRD §6.6）—— 改 `region.autoFile`。
    * false 时文件拖入不会自动 reparent / 移文件（dropRegionId / finishFileDrag
    * 视该区域为「非归档目标」），区域变成纯视觉容器。
@@ -5064,7 +5102,19 @@ export function OverlayLayer({
                   }
                 />
               ) : el.type === 'folder' ? (
-                <FolderCard element={el} />
+                <FolderCard
+                  element={el}
+                  onToggleExpanded={
+                    el.locked
+                      ? undefined
+                      : (): void => setFolderExpanded(el.id, !el.expanded)
+                  }
+                  onChangeViewMode={
+                    el.locked
+                      ? undefined
+                      : (mode): void => setFolderViewMode(el.id, mode)
+                  }
+                />
               ) : el.type === 'text' ? (
                 <TextCard
                   element={el}

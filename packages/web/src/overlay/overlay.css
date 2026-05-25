@@ -544,6 +544,242 @@
   text-overflow: ellipsis;
 }
 
+/* 收起 / 展开 chevron —— 与 RegionCard 同款样式但放在文件夹头部最左。 */
+.ov-folder__chevron {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--c-ink-2);
+  font-size: var(--text-xs);
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--dur-micro, 150ms),
+    border-color var(--dur-micro, 150ms);
+}
+.ov-folder__chevron:hover {
+  background: var(--c-surface-sunken);
+  border-color: var(--c-border);
+  color: var(--c-ink);
+}
+
+/* ── 文件夹卡片 · 展开态（类访达浏览，PRD §6.5）──────────────── */
+.ov-folder--expanded {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  padding: 0;
+  gap: 0;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  font-family: var(--font-ui);
+}
+
+.ov-folder__head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--c-border);
+  background: var(--c-surface-sunken);
+}
+.ov-folder--expanded .ov-folder__name {
+  font-family: var(--font-hand);
+  font-size: var(--text-md);
+  flex: 1 1 auto;
+}
+
+/* 视图模式切换条（list / grid / tree） */
+.ov-folder__modes {
+  display: inline-flex;
+  gap: 2px;
+}
+.ov-folder__mode-btn {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--c-ink-2);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: background var(--dur-micro, 150ms),
+    border-color var(--dur-micro, 150ms),
+    color var(--dur-micro, 150ms);
+}
+.ov-folder__mode-btn:hover {
+  background: var(--c-surface);
+  color: var(--c-ink);
+}
+.ov-folder__mode-btn--active {
+  background: var(--c-accent-tint);
+  border-color: var(--c-accent);
+  color: var(--c-ink);
+}
+
+/* 面包屑（下钻后才出现） */
+.ov-folder__crumb {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--c-ink-2);
+  border-bottom: 1px solid var(--c-border);
+}
+.ov-folder__crumb-seg {
+  padding: 1px 6px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: inherit;
+  color: var(--c-ink-2);
+  cursor: pointer;
+}
+.ov-folder__crumb-seg:hover {
+  background: var(--c-surface-sunken);
+  color: var(--c-ink);
+}
+.ov-folder__crumb-current {
+  padding: 1px 6px;
+  color: var(--c-ink);
+  font-weight: 600;
+}
+.ov-folder__crumb-sep {
+  color: var(--c-ink-3);
+}
+.ov-folder__crumb-step {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* 主体：占满剩余高度，内部滚动 */
+.ov-folder__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  background: var(--c-surface);
+}
+.ov-folder__empty {
+  padding: var(--space-4) var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--c-ink-3);
+  text-align: center;
+}
+
+/* 行（list / tree 共用） */
+.ov-folder__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding-top: 3px;
+  padding-bottom: 3px;
+  padding-right: var(--space-2);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  color: var(--c-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+}
+.ov-folder__row:hover {
+  background: var(--c-surface-sunken);
+}
+.ov-folder__row--file .ov-folder__row-name {
+  color: var(--c-ink-2);
+}
+.ov-folder__row-caret {
+  flex: 0 0 auto;
+  width: 12px;
+  font-size: var(--text-xs);
+  color: var(--c-ink-3);
+  text-align: center;
+}
+.ov-folder__row-glyph {
+  flex: 0 0 auto;
+  font-size: var(--text-sm);
+  line-height: 1;
+}
+.ov-folder__row--file .ov-folder__row-glyph {
+  margin-left: 12px;
+}
+.ov-folder__row-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ov-folder__row-count {
+  flex: 0 0 auto;
+  min-width: 18px;
+  padding: 0 var(--space-1);
+  font-size: var(--text-xs);
+  text-align: center;
+  color: var(--c-ink-3);
+  background: var(--c-surface-sunken);
+  border-radius: var(--radius-pill);
+}
+
+/* 网格 */
+.ov-folder__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
+  gap: var(--space-2);
+  padding: var(--space-2);
+}
+.ov-folder__tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: var(--space-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  font-family: var(--font-ui);
+  color: var(--c-ink);
+  cursor: pointer;
+  transition: background var(--dur-micro, 150ms),
+    border-color var(--dur-micro, 150ms);
+  text-align: center;
+}
+.ov-folder__tile:hover {
+  background: var(--c-surface-sunken);
+  border-color: var(--c-border);
+}
+.ov-folder__tile-glyph {
+  font-size: 26px;
+  line-height: 1;
+}
+.ov-folder__tile-name {
+  width: 100%;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  font-size: var(--text-xs);
+}
+.ov-folder__tile--file .ov-folder__tile-name {
+  color: var(--c-ink-2);
+}
+.ov-folder__tile-sub {
+  font-size: 10px;
+  color: var(--c-ink-3);
+}
+
 /* ── 区域卡片（手绘质感，陶土橙浅底）──────────────────────────
  * 设计系统 §7.5：roughjs 边框 + --c-accent-tint 浅底 + 头部条。 */
 .ov-region {

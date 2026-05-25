@@ -145,6 +145,128 @@
   text-align: center;
 }
 
+/* ── 视图模式切换条 ───────────────────────────────────── */
+.fp-modes {
+  display: flex;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--c-border);
+}
+.fp-mode-btn {
+  flex: 1 1 auto;
+  padding: 4px 6px;
+  background: transparent;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  color: var(--c-ink-2);
+  cursor: pointer;
+  transition: background var(--dur-micro, 150ms),
+    border-color var(--dur-micro, 150ms),
+    color var(--dur-micro, 150ms);
+}
+.fp-mode-btn:hover {
+  background: var(--c-surface-sunken);
+}
+.fp-mode-btn--active {
+  background: var(--c-accent-tint);
+  border-color: var(--c-accent);
+  color: var(--c-ink);
+}
+
+/* ── 面包屑（list / grid 模式）───────────────────────── */
+.fp-crumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--c-ink-2);
+  border-bottom: 1px solid var(--c-border);
+}
+.fp-crumb__seg {
+  padding: 2px 6px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: inherit;
+  color: var(--c-ink-2);
+  cursor: pointer;
+}
+.fp-crumb__seg:hover {
+  background: var(--c-surface-sunken);
+  color: var(--c-ink);
+}
+.fp-crumb__current {
+  padding: 2px 6px;
+  color: var(--c-ink);
+  font-weight: 600;
+}
+.fp-crumb__sep {
+  color: var(--c-ink-3);
+}
+.fp-crumb__step {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* ── List 视图 ────────────────────────────────────────── */
+.fp-list {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Grid 视图 ────────────────────────────────────────── */
+.fp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+  gap: var(--space-2);
+  padding: var(--space-2);
+}
+.fp-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  padding: var(--space-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  color: var(--c-ink);
+  cursor: pointer;
+  transition: background var(--dur-micro, 150ms),
+    border-color var(--dur-micro, 150ms);
+  text-align: center;
+}
+.fp-tile:hover {
+  background: var(--c-surface-sunken);
+  border-color: var(--c-border);
+}
+.fp-tile__glyph {
+  font-size: 28px;
+  line-height: 1;
+}
+.fp-tile__name {
+  width: 100%;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  color: var(--c-ink);
+  font-size: var(--text-xs);
+}
+.fp-tile--file .fp-tile__name {
+  color: var(--c-ink-2);
+}
+.fp-tile__sub {
+  font-size: 10px;
+  color: var(--c-ink-3);
+}
+
 /* ── 脚注 ─────────────────────────────────────────────── */
 .fp-foot {
   flex: 0 0 auto;
