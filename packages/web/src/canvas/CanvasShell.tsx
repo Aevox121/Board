@@ -16,6 +16,7 @@ import { useBoard } from '../board/BoardContext';
 import { OverlayLayer } from '../overlay/OverlayLayer';
 import { PresenceLayer } from '../presence/PresenceLayer';
 import { presenceStore } from '../presence/presenceStore';
+import { followStore } from '../presence/followStore';
 import { SESSION } from '../session';
 import { CanvasGrid } from './CanvasGrid';
 import { Toolbar, TOOL_SHORTCUTS } from './Toolbar';
@@ -54,8 +55,12 @@ export function CanvasShell(): JSX.Element {
   // ── 跟随视角（PRD §8.2）─────────────────────────────────────
   // followingClientId 不为 null 时，本端视口受 followingClientId 对应 presence
   // 的 viewport 拉扯；任意本地交互（平移 / 缩放 / 导航 / fit）一律退出跟随，
-  // 把控制权交还给用户。
-  const [followingClientId, setFollowingClientId] = useState<string | null>(null);
+  // 把控制权交还给用户。state 提到 followStore，便于 TopBar 在线参与者条
+  // 也能读 / 设（PresenceLayer 名牌 + TopBar 头像走同一份真相）。
+  const followingClientId = useSyncExternalStore(
+    followStore.subscribe,
+    followStore.getSnapshot,
+  );
   const presenceUsers = useSyncExternalStore(
     presenceStore.subscribe,
     presenceStore.getSnapshot,
@@ -71,7 +76,7 @@ export function CanvasShell(): JSX.Element {
    */
   const setViewportLocal = useCallback(
     (updater: CanvasViewport | ((vp: CanvasViewport) => CanvasViewport)) => {
-      setFollowingClientId(null);
+      followStore.setFollowing(null);
       setViewport(updater);
     },
     [],
@@ -94,7 +99,7 @@ export function CanvasShell(): JSX.Element {
   // 被跟随者下线 / 不再上报 → 自动退出跟随。
   useEffect(() => {
     if (!followingClientId) return;
-    if (!followed) setFollowingClientId(null);
+    if (!followed) followStore.setFollowing(null);
   }, [followingClientId, followed]);
 
   // 点远端徽标 → 切换跟随：
@@ -103,7 +108,8 @@ export function CanvasShell(): JSX.Element {
   //  - 已跟随另一人 → 改跟随这一人
   const onFollowClient = useCallback((clientId: string) => {
     if (clientId === SESSION.clientId) return;
-    setFollowingClientId((cur) => (cur === clientId ? null : clientId));
+    const cur = followStore.getSnapshot();
+    followStore.setFollowing(cur === clientId ? null : clientId);
   }, []);
 
   // 导入 / 首次连接（importTick 自增且 importFit）：把视口聚焦到全部内容。
@@ -264,7 +270,7 @@ export function CanvasShell(): JSX.Element {
           <button
             type="button"
             className="cv-follow-banner__exit"
-            onClick={() => setFollowingClientId(null)}
+            onClick={() => followStore.setFollowing(null)}
             title="退出跟随（任何画布操作也会退出）"
           >
             退出

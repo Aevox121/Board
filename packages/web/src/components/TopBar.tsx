@@ -11,6 +11,7 @@
  */
 import { useState } from 'react';
 import type { ConnectionMode } from '../board/BoardContext';
+import { PresenceBar } from '../presence/PresenceBar';
 import './TopBar.css';
 
 /** 「保存」按钮状态机。 */
@@ -173,6 +174,9 @@ export function TopBar({
       </div>
 
       <div className="topbar__right">
+        {/* 在线参与者条（PRD §8.2）—— 自己 + 其他在场参与者；点头像跟随其视角 */}
+        <PresenceBar />
+
         {/* 连接状态指示 —— 圆点 + 文案 */}
         <span
           className={`topbar__status ${statusModifier}`}

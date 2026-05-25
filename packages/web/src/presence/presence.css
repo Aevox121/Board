@@ -130,6 +130,101 @@
   filter: brightness(1.08);
 }
 
+/* ── 顶栏在线参与者条（TopBar slot · PRD §8.2）─────────────────
+ * 一排头像 chip：颜色圆 + 名字。本端「你」灰底；其他人可点切换跟随。
+ * 当前跟随的 chip 加陶土橙外环 + 浅底色高亮。Agent 头像加微抖动光晕，与
+ * presence-focus 的视觉语言保持一致。 */
+.presence-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1, 4px);
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.presence-bar__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1, 4px);
+  padding: 2px var(--space-2, 8px) 2px 2px;
+  background: var(--c-surface, #fff);
+  border: 1px solid var(--c-border, #e6e3d8);
+  border-radius: var(--radius-pill, 999px);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs, 12px);
+  line-height: 1.4;
+  color: var(--c-ink);
+  cursor: default;
+  transition: transform var(--dur-micro, 150ms),
+    background var(--dur-micro, 150ms),
+    border-color var(--dur-micro, 150ms);
+}
+
+.presence-bar__chip--self {
+  background: var(--c-surface-sunken, #f4f2ea);
+  color: var(--c-ink-2, #6e6b62);
+}
+
+.presence-bar__chip--clickable {
+  cursor: pointer;
+}
+.presence-bar__chip--clickable:hover {
+  background: var(--c-surface-sunken, #f4f2ea);
+  border-color: var(--c-border-strong, #d4d0c0);
+}
+.presence-bar__chip--followed {
+  background: var(--c-accent-tint, #f6e6dd);
+  border-color: var(--c-accent, #d97757);
+  color: var(--c-ink);
+}
+
+.presence-bar__avatar {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--c-ink, #1a1915);
+  color: #fff;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  text-transform: uppercase;
+  /* 圆形头像始终居中显示首字，CJK / Latin 都能稳住 */
+  user-select: none;
+}
+
+.presence-bar__name {
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.presence-bar__chip--agent .presence-bar__avatar {
+  /* 加一圈浅光晕暗示「这是 Agent」 */
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--c-accent) 25%, transparent);
+}
+
+/* 折叠态：剩余人数计数 */
+.presence-bar__overflow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 26px;
+  padding: 0 var(--space-2, 8px);
+  background: var(--c-surface-sunken, #f4f2ea);
+  border: 1px solid var(--c-border, #e6e3d8);
+  border-radius: var(--radius-pill, 999px);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs, 12px);
+  color: var(--c-ink-2, #6e6b62);
+}
+
 /* 跟随中横幅 —— CanvasShell 渲染（顶部居中）。 */
 .cv-follow-banner {
   position: absolute;
