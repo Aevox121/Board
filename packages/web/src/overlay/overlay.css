@@ -603,6 +603,8 @@
 
 /* 区域名 —— 手写体（设计系统 §7.5：区域名 --font-hand 20px）。 */
 .ov-region__label {
+  flex: 1 1 auto;
+  min-width: 0;
   font-family: var(--font-hand);
   font-size: var(--text-lg);
   line-height: 1.25;
@@ -610,6 +612,54 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* 头部 chevron / autoFile 切换按钮（PRD §6.6）—— 头部小按钮，
+   pointer-down 在 RegionCard 里被 stopPropagation 阻挡，不会触发头部拖拽。 */
+.ov-region__chevron,
+.ov-region__autofile {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--c-ink-2);
+  font-size: var(--text-xs);
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--dur-micro, 150ms),
+    color var(--dur-micro, 150ms),
+    border-color var(--dur-micro, 150ms);
+}
+.ov-region__chevron:hover,
+.ov-region__autofile:hover {
+  background: var(--c-surface-sunken);
+  border-color: var(--c-border);
+  color: var(--c-ink);
+}
+.ov-region__autofile--off {
+  /* 关闭态用半透明 + 灰边，区别于开态 */
+  opacity: 0.6;
+}
+
+/* 折叠态区域 —— 紧凑 chip：去掉 body、去掉描述、头部上下 padding 收紧。 */
+.ov-region--collapsed {
+  /* 折叠 chip 用更紧凑的高度（slot 高度由 OverlayLayer 覆盖到
+     COLLAPSED_REGION_HEIGHT），头部满铺 */
+  overflow: hidden;
+}
+.ov-region--collapsed .ov-region__head {
+  padding-top: var(--space-1);
+  padding-bottom: var(--space-1);
+}
+.ov-region--collapsed .ov-region__label {
+  /* 折叠态字号回到中号，更像一个 chip */
+  font-size: var(--text-md);
 }
 
 /* 区域描述 —— 次要灰。 */

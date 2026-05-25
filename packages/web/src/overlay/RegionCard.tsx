@@ -11,9 +11,20 @@
  * 「我的区域」chip；他人的区域=该参与者颜色边框 + 「xxx 的区域」chip；
  * 无归属=默认陶土橙边 + 「公共区域」chip。仅做提示，不强制锁定。
  *
+ * 折叠 / 自动归档（PRD §6.6）：
+ *  - `element.collapsed`：true 时区域渲染为紧凑卡片（只有头部，子元素由
+ *    OverlayLayer 过滤掉、slot 高度被压扁）；点头部 chevron 切换。
+ *  - `element.autoFile`：false 时区域是「纯视觉容器」—— 文件拖入不会触发
+ *    自动归档到本文件夹（不改 path / parentId，只 reposition）。头部右侧
+ *    一个磁铁图标按钮切换；关闭时图标加禁用线。
+ *
  * `highlighted`：拖拽文件卡悬停到本区域上方时为 true —— 高亮边框提示落点。
  */
-import type { CSSProperties, MouseEventHandler, PointerEventHandler } from 'react';
+import type {
+  CSSProperties,
+  MouseEventHandler,
+  PointerEventHandler,
+} from 'react';
 import type { Participant, RegionElement } from '@board/core';
 import { cardRotation } from './util';
 import { OwnerBadge } from './OwnerBadge';
@@ -42,6 +53,10 @@ export interface RegionCardProps {
   participants: ReadonlyArray<Participant>;
   /** 点击徽标转让归属时回调；不传则徽标只读。 */
   onChangeOwner?: (nextOwnerId: string | null) => void;
+  /** 切换 `collapsed`（PRD §6.6）；不传则不渲染 chevron。 */
+  onToggleCollapsed?: () => void;
+  /** 切换 `autoFile`（PRD §6.6）；不传则不渲染磁铁按钮。 */
+  onToggleAutoFile?: () => void;
 }
 
 /** 把 #rrggbb 与不透明度合成 rgba()；非法颜色回退陶土橙。 */
@@ -60,10 +75,13 @@ export function RegionCard({
   actorId,
   participants,
   onChangeOwner,
+  onToggleCollapsed,
+  onToggleAutoFile,
 }: RegionCardProps): JSX.Element {
-  const { label, description, ownerId } = element;
-  // 区域旋转幅度比卡片更小（大块容器，过度倾斜会显乱）—— 取一半。
-  const rotation = cardRotation(element.id) * 0.5;
+  const { label, description, ownerId, collapsed, autoFile } = element;
+  // 区域旋转幅度比卡片更小（大块容器，过度倾斜会显乱）—— 取一半；
+  // 折叠态进一步取消旋转（小 chip 倾斜看起来像出 bug）。
+  const rotation = collapsed ? 0 : cardRotation(element.id) * 0.5;
 
   const owner = ownerId ? participants.find((p) => p.id === ownerId) ?? null : null;
   const isMine = ownerId === actorId;
@@ -80,16 +98,63 @@ export function RegionCard({
 
   const className =
     'ov-card ov-region' +
+    (collapsed ? ' ov-region--collapsed' : '') +
     (highlighted ? ' ov-region--drop' : '') +
     (active ? ' ov-region--active' : '') +
-    (isMine ? ' ov-region--mine' : owner ? ' ov-region--others' : ' ov-region--public');
+    (isMine
+      ? ' ov-region--mine'
+      : owner
+        ? ' ov-region--others'
+        : ' ov-region--public');
 
   return (
     <div className={className} style={cssVars} title={element.path}>
       {/* 头部 —— 兼作拖拽手柄 */}
       <div className="ov-region__head" {...headerHandlers}>
         <div className="ov-region__head-row">
+          {onToggleCollapsed ? (
+            <button
+              type="button"
+              className="ov-region__chevron"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleCollapsed();
+              }}
+              // 不让头部 pointer-down 抢走点击 —— 阻止冒泡到 headerHandlers。
+              onPointerDown={(e) => e.stopPropagation()}
+              onPointerUp={(e) => e.stopPropagation()}
+              title={collapsed ? '展开区域' : '折叠区域'}
+              aria-label={collapsed ? '展开区域' : '折叠区域'}
+              aria-expanded={!collapsed}
+            >
+              {collapsed ? '▶' : '▼'}
+            </button>
+          ) : null}
           <span className="ov-region__label">{label || '未命名区域'}</span>
+          {onToggleAutoFile ? (
+            <button
+              type="button"
+              className={
+                'ov-region__autofile' +
+                (autoFile ? '' : ' ov-region__autofile--off')
+              }
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleAutoFile();
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+              onPointerUp={(e) => e.stopPropagation()}
+              title={
+                autoFile
+                  ? '自动归档开 —— 文件拖入会自动移到此文件夹（点击关闭）'
+                  : '自动归档关 —— 拖入文件不会自动归档（点击开启）'
+              }
+              aria-label={autoFile ? '关闭自动归档' : '开启自动归档'}
+              aria-pressed={!autoFile}
+            >
+              {autoFile ? '🧲' : '🚫'}
+            </button>
+          ) : null}
           <OwnerBadge
             owner={owner}
             ownerId={ownerId}
@@ -99,12 +164,15 @@ export function RegionCard({
             onChangeOwner={onChangeOwner}
           />
         </div>
-        {description ? (
+        {description && !collapsed ? (
           <span className="ov-region__desc">{description}</span>
         ) : null}
       </div>
-      {/* 区域主体留白 —— 子文件靠 z 顺序叠在其上，此处不渲染子项。 */}
-      <div className="ov-region__body" aria-hidden="true" />
+      {/* 区域主体留白 —— 子文件靠 z 顺序叠在其上，此处不渲染子项。
+          折叠态隐藏 body（slot 高度也被 OverlayLayer 压扁）。 */}
+      {collapsed ? null : (
+        <div className="ov-region__body" aria-hidden="true" />
+      )}
     </div>
   );
 }

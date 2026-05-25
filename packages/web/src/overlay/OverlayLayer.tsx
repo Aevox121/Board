@@ -1362,16 +1362,73 @@ export function OverlayLayer({
     return () => ro.disconnect();
   }, []);
 
+  // 折叠态区域（PRD §6.6）—— 子树由 hiddenByCollapseIds 过滤掉；slot 高度
+  // 由 COLLAPSED_REGION_HEIGHT 覆盖；不参与缩放手柄（resize handle 跳过）。
+  const collapsedRegionIds = useMemo<Set<string>>(() => {
+    const out = new Set<string>();
+    for (const e of scene.elements) {
+      if (e.type === 'region' && (e as RegionElement).collapsed) out.add(e.id);
+    }
+    return out;
+  }, [scene.elements]);
+
+  // 被折叠区域隐藏的元素 id —— 经 path / parentId 链可达任意折叠区域。
+  // 折叠区域自身不在集合内（仍要渲染头部 chip）。
+  const hiddenByCollapseIds = useMemo<Set<string>>(() => {
+    if (collapsedRegionIds.size === 0) return new Set();
+    const collapsedPaths: string[] = [];
+    for (const e of scene.elements) {
+      if (e.type === 'region' && collapsedRegionIds.has(e.id)) {
+        collapsedPaths.push((e as RegionElement).path);
+      }
+    }
+    const hidden = new Set<string>();
+    for (const e of scene.elements) {
+      if (collapsedRegionIds.has(e.id)) continue; // 区域自身保留
+      // path 在某折叠区域下：file / folder / 子 region
+      const raw = (e as { path?: unknown }).path;
+      if (typeof raw === 'string') {
+        for (const rp of collapsedPaths) {
+          if (raw === rp || raw.startsWith(`${rp}/`)) {
+            hidden.add(e.id);
+            break;
+          }
+        }
+      }
+    }
+    // 二次扩展：parentId 链可达隐藏 id 的元素也隐藏（非文件元素经 parentId
+    // 挂在折叠区域里，自身无 path 但要随之消失）。
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const e of scene.elements) {
+        if (hidden.has(e.id)) continue;
+        if (collapsedRegionIds.has(e.id)) continue;
+        const p = e.parentId;
+        if (p && (collapsedRegionIds.has(p) || hidden.has(p))) {
+          hidden.add(e.id);
+          grew = true;
+        }
+      }
+    }
+    return hidden;
+  }, [scene.elements, collapsedRegionIds]);
+
+  /** 折叠态区域的渲染高度（覆盖 slot height）。 */
+  const COLLAPSED_REGION_HEIGHT = 44;
+
   const visibleElements = useMemo<CanvasElement[]>(() => {
-    if (canvasElements.length <= VIRTUALIZATION_THRESHOLD) return canvasElements;
-    if (surfaceSize.width === 0 || surfaceSize.height === 0) return canvasElements;
+    // 折叠区域下的元素一律不渲染（无视虚拟化）—— 状态保留也不展示。
+    const base = canvasElements.filter((el) => !hiddenByCollapseIds.has(el.id));
+    if (base.length <= VIRTUALIZATION_THRESHOLD) return base;
+    if (surfaceSize.width === 0 || surfaceSize.height === 0) return base;
     // 视口画布坐标盒（含 EDGE_PAD）。
     const padCanvas = VIEWPORT_PAD_PX / zoom;
     const vx = -scrollX - padCanvas;
     const vy = -scrollY - padCanvas;
     const vRight = -scrollX + surfaceSize.width / zoom + padCanvas;
     const vBottom = -scrollY + surfaceSize.height / zoom + padCanvas;
-    return canvasElements.filter((el) => {
+    return base.filter((el) => {
       // 状态相关无条件保留 —— 选中 / 拖拽 / 缩放 / 旋转 / 标签编辑中的元素。
       if (selectedIds.has(el.id)) return true;
       if (drag && drag.memberIds.has(el.id)) return true;
@@ -1381,6 +1438,8 @@ export function OverlayLayer({
       if (editingTextId === el.id) return true;
       if (editingFileId === el.id) return true;
       if (editingRegionId === el.id) return true;
+      // 折叠区域用其 chip 高度判定（COLLAPSED_REGION_HEIGHT），bbox 比真实小，
+      // 但 el.width 仍取原值；漏渲染影响小，无需特殊处理。
       // 轴对齐包围盒与视口盒相交即保留。
       return !(
         el.x + el.width < vx ||
@@ -1391,6 +1450,7 @@ export function OverlayLayer({
     });
   }, [
     canvasElements,
+    hiddenByCollapseIds,
     surfaceSize,
     scrollX,
     scrollY,
@@ -1643,6 +1703,8 @@ export function OverlayLayer({
   }, [selectedIds, scene.elements, liveRects]);
 
   // 拖拽文件 / 文本卡时实时算出落点所在区域 —— 用于高亮提示（区域拖拽不需要）。
+  // PRD §6.6 autoFile=false 的区域不接受自动归档，落到其上不算「归档目标」，
+  // 不出高亮提示（避免误以为落进去会移动文件）。
   const dropRegionId = useMemo<string | null>(() => {
     if (!drag || !drag.moved) return null;
     // 区域拖拽 / 整组拖拽不重设归属 —— 不显示落点高亮。
@@ -1656,7 +1718,9 @@ export function OverlayLayer({
       height: el.height,
     };
     const target = regionForCard(cardRect, regionsOf(scene.elements));
-    return target ? target.id : null;
+    if (!target) return null;
+    if (target.autoFile === false) return null;
+    return target.id;
   }, [drag, scene.elements]);
 
   // 菜单打开时，Esc 关闭（连同虚线框）。
@@ -2891,7 +2955,12 @@ export function OverlayLayer({
     const regions = regionsOf(curScene.elements);
     const target = regionForCard(cardRect, regions);
     const current = regionForFile(el.path, regions);
-    const sameRegion = (target?.id ?? null) === (current?.id ?? null);
+    // PRD §6.6 autoFile=false：目标区域是「纯视觉容器」，不接受自动归档。
+    // 等价于「视觉上同区域」处理 —— 文件 path / parentId 不变，仅 reposition。
+    const effectiveTarget =
+      target && target.autoFile === false ? current : target;
+    const sameRegion =
+      (effectiveTarget?.id ?? null) === (current?.id ?? null);
 
     if (sameRegion) {
       repositionElement(curScene, el, finalX, finalY);
@@ -2904,8 +2973,10 @@ export function OverlayLayer({
       return;
     }
     const baseName = fileBaseName(el.path);
-    const to = target ? `${target.path}/${baseName}` : baseName;
-    void doMove(curScene, el, finalX, finalY, target, to);
+    const to = effectiveTarget
+      ? `${effectiveTarget.path}/${baseName}`
+      : baseName;
+    void doMove(curScene, el, finalX, finalY, effectiveTarget, to);
   }
 
   /**
@@ -3483,6 +3554,44 @@ export function OverlayLayer({
       elements: cur.elements.map((e): Element =>
         e.id === id && e.type === 'region'
           ? ({ ...e, ownerId: nextOwnerId, updatedBy: actorId, updatedAt: ts } as Element)
+          : e,
+      ),
+    };
+    replaceScene(next, 'canvas');
+  }
+
+  /**
+   * 切换区域折叠态（PRD §6.6）—— 改 `region.collapsed`。
+   * true 时区域渲染为头部紧凑卡，且 OverlayLayer 把其下所有子元素从渲染中
+   * 滤掉（slot height 也被覆盖为 COLLAPSED_REGION_HEIGHT）。
+   */
+  function setRegionCollapsed(id: string, value: boolean): void {
+    const cur = sceneRef.current;
+    const ts = new Date().toISOString();
+    const next: BoardScene = {
+      ...cur,
+      elements: cur.elements.map((e): Element =>
+        e.id === id && e.type === 'region'
+          ? ({ ...e, collapsed: value, updatedBy: actorId, updatedAt: ts } as Element)
+          : e,
+      ),
+    };
+    replaceScene(next, 'canvas');
+  }
+
+  /**
+   * 切换区域自动归档（PRD §6.6）—— 改 `region.autoFile`。
+   * false 时文件拖入不会自动 reparent / 移文件（dropRegionId / finishFileDrag
+   * 视该区域为「非归档目标」），区域变成纯视觉容器。
+   */
+  function setRegionAutoFile(id: string, value: boolean): void {
+    const cur = sceneRef.current;
+    const ts = new Date().toISOString();
+    const next: BoardScene = {
+      ...cur,
+      elements: cur.elements.map((e): Element =>
+        e.id === id && e.type === 'region'
+          ? ({ ...e, autoFile: value, updatedBy: actorId, updatedAt: ts } as Element)
           : e,
       ),
     };
@@ -4754,7 +4863,12 @@ export function OverlayLayer({
           const rx = gG ? gG.x : resizing && resize ? resize.x : el.x;
           const ry = gG ? gG.y : resizing && resize ? resize.y : el.y;
           const rw = gG ? gG.w : resizing && resize ? resize.w : el.width;
-          const rh = gG ? gG.h : resizing && resize ? resize.h : el.height;
+          let rh = gG ? gG.h : resizing && resize ? resize.h : el.height;
+          // 折叠态区域 —— slot 高度覆盖为头部 chip 高度（PRD §6.6）。
+          // element.height 保留原值，展开后立即恢复。
+          const collapsedRegion =
+            el.type === 'region' && collapsedRegionIds.has(el.id);
+          if (collapsedRegion) rh = COLLAPSED_REGION_HEIGHT;
 
           // 旋转：区域不旋转（容器、轴对齐）；其余按 el.angle，单选旋转中取
           // rotate.angle、成组变换中取 gG.angle。卡槽绕中心旋转。
@@ -4938,6 +5052,16 @@ export function OverlayLayer({
                   actorId={actorId}
                   participants={participants}
                   onChangeOwner={(next) => changeRegionOwner(el.id, next)}
+                  onToggleCollapsed={
+                    el.locked
+                      ? undefined
+                      : (): void => setRegionCollapsed(el.id, !el.collapsed)
+                  }
+                  onToggleAutoFile={
+                    el.locked
+                      ? undefined
+                      : (): void => setRegionAutoFile(el.id, !el.autoFile)
+                  }
                 />
               ) : el.type === 'folder' ? (
                 <FolderCard element={el} />
@@ -5015,8 +5139,8 @@ export function OverlayLayer({
                 <SelectionFrame element={el} width={rw} height={rh} />
               ) : null}
               {/* 八向缩放手柄（圆点）—— 仅单选时出现（多选不缩放）；
-                  锁定元素不出手柄。 */}
-              {soloId === el.id && !el.locked ? (
+                  锁定元素不出手柄；折叠态区域不出手柄（先展开再调整尺寸）。 */}
+              {soloId === el.id && !el.locked && !collapsedRegion ? (
                 <ResizeHandles
                   api={resizeApi}
                   rotatable={el.type !== 'region'}
