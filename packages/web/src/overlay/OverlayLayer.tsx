@@ -744,6 +744,45 @@ interface StyleClipboardEntry {
 }
 let styleClipboard: StyleClipboardEntry | null = null;
 
+/**
+ * 当前会话起点 ISO —— 模块首次 import 时确定，对应"页面打开 / 上次刷新
+ * 后用户已经看过的截点"。文件状态角标（PRD §6.4「新增 / 被 Agent 修改」）
+ * 据此过滤：只有此刻之后 Agent 的新建 / 修改才打角标，避免页面打开就出
+ * 一堆历史活动徽章。刷新页面 = 重置截点 = 清空所有徽章。
+ */
+const SESSION_START = new Date().toISOString();
+
+/** Participant id 形如 `u_xxxxx` / `a_xxxxx`；这里只判 Agent 命名约定。 */
+function isAgentParticipant(id: string): boolean {
+  return id.startsWith('a_');
+}
+
+/**
+ * 计算单个 file 元素相对当前会话的 Agent 活动状态：
+ *  - 'new'      —— 本次会话期间被 Agent 新建
+ *  - 'modified' —— 本次会话期间被 Agent 修改（且不是本会话内 Agent 新建）
+ *  - null       —— 无 Agent 活动 / 已被用户 ack
+ *
+ * 已 ack 的 id 在 ackSet 中直接返回 null。
+ */
+function fileAgentStatusOf(
+  el: FileElement,
+  ackSet: ReadonlySet<string>,
+): 'new' | 'modified' | null {
+  if (ackSet.has(el.id)) return null;
+  if (el.createdAt > SESSION_START && isAgentParticipant(el.createdBy)) {
+    return 'new';
+  }
+  if (
+    el.updatedAt > SESSION_START &&
+    isAgentParticipant(el.updatedBy) &&
+    el.updatedBy !== el.createdBy // 排除"Agent 自己反复改自己的新建"
+  ) {
+    return 'modified';
+  }
+  return null;
+}
+
 /** 创建手势的瞬时状态。 */
 interface CreatingState {
   /** 创建中的元素类型。 */
@@ -1233,6 +1272,11 @@ export function OverlayLayer({
     elementId: string;
     anchor: { x: number; y: number };
   } | null>(null);
+  // 文件状态角标的本地"已读"集（PRD §6.4 「新增 / 被 Agent 修改」角标）——
+  // 点角标即 ack，加入此集后不再显示。仅本会话有效，刷新页面重置。
+  const [ackedFileStatusIds, setAckedFileStatusIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
   // 右键上下文菜单（屏幕坐标 + 作用域）；null = 未显示。
   const [menu, setMenu] = useState<{
     x: number;
@@ -5554,6 +5598,41 @@ export function OverlayLayer({
                         }}
                       >
                         💬 {unresolved > 0 ? unresolved : all.length}
+                      </button>
+                    );
+                  })()
+                : null}
+              {/* 文件状态角标（PRD §6.4 「新增 / 被 Agent 修改」）—— file 元素
+                  本会话被 Agent 新建 / 修改且未被 ack 时左上角出现；点角标
+                  即 ack。状态信息会进 title，鼠标停留可看到。 */}
+              {el.type === 'file'
+                ? (() => {
+                    const status = fileAgentStatusOf(el, ackedFileStatusIds);
+                    if (!status) return null;
+                    const isNew = status === 'new';
+                    const ts = isNew ? el.createdAt : el.updatedAt;
+                    const who = isNew ? el.createdBy : el.updatedBy;
+                    const label = isNew ? '新增' : '改过';
+                    return (
+                      <button
+                        type="button"
+                        className={
+                          'ov-file-status-badge ov-file-status-badge--' +
+                          (isNew ? 'new' : 'modified')
+                        }
+                        title={`Agent ${label}（${who} · ${ts}）—— 点击标记已读`}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setAckedFileStatusIds((prev) => {
+                            const next = new Set(prev);
+                            next.add(el.id);
+                            return next;
+                          });
+                        }}
+                        aria-label={`Agent ${label}，点击标记已读`}
+                      >
+                        {isNew ? '✨' : '✎'}
                       </button>
                     );
                   })()

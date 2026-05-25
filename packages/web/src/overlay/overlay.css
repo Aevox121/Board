@@ -208,6 +208,47 @@
   cursor: grabbing;
 }
 
+/* 文件状态角标（PRD §6.4 「新增 / 被 Agent 修改」）—— 贴在卡片左上角；
+   - 'new'      ✨ 绿底：本会话 Agent 新建
+   - 'modified' ✎ 橙底：本会话 Agent 修改（非新建）
+   点击 ack 即消失。和 link / comment 角标分占左上、右上两侧不冲突。 */
+.ov-file-status-badge {
+  position: absolute;
+  top: -9px;
+  left: -9px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--c-border);
+  border-radius: 50%;
+  background: var(--c-surface);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  box-shadow: var(--shadow-sm);
+  /* 默认 slot 是 pointer-events:none，本徽章显式开启接收点击。 */
+  pointer-events: auto;
+}
+
+.ov-file-status-badge--new {
+  background: #d3f9d8;
+  border-color: #69db7c;
+  color: #2b8a3e;
+}
+
+.ov-file-status-badge--modified {
+  background: #ffe8cc;
+  border-color: #ffa94d;
+  color: #d9480f;
+}
+
+.ov-file-status-badge:hover {
+  filter: brightness(1.04);
+}
+
 /* 评论角标（PRD §8.4）—— 贴在卡片右上角，显示评论条数；hover 出全文。 */
 .ov-comment-badge {
   position: absolute;
