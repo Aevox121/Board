@@ -47,10 +47,15 @@
   --font-ui: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   /* 衬线体（文件预览正文）：拉丁走 Tiempos / Source Serif；CJK 首选思源宋体
      系（Source Han Serif / Noto Serif），系统未装时回退到 Songti / STSong /
-     SimSun，至少保持衬线风。 */
+     SimSun，至少保持衬线风。
+     family 列表覆盖三种发行形态：
+      - SC 专用分包：'Source Han Serif SC' / 'Noto Serif SC'
+      - 多区域 TTC（Adobe 官方下载默认就是这种，含「思源宋体」中文别名）：
+        'Source Han Serif' / '思源宋体' / 'Source Han Serif CN'
+      - 旧版 Noto CJK SC 命名：'Noto Serif CJK SC' */
   --font-serif: 'Tiempos', 'Source Serif 4', 'Source Han Serif SC',
-    'Noto Serif SC', 'Noto Serif CJK SC', 'Songti SC', 'STSong', 'SimSun',
-    Georgia, serif;
+    'Noto Serif SC', 'Source Han Serif', '思源宋体', 'Source Han Serif CN',
+    'Noto Serif CJK SC', 'Songti SC', 'STSong', 'SimSun', Georgia, serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
 
   /* ── 字号 ─────────────────────────────────── */
