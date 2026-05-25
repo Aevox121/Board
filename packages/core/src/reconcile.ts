@@ -183,13 +183,87 @@ export function reconcileFiles(input: ReconcileInput): ReconcileResult {
     next[idx] = { ...el, x: pos.x, y: pos.y, autoPlaced: true };
   }
 
-  // ── 5. 各区域增长到能容纳其全部子元素（grow-only）─────────────────
-  // 注：消失但未配对的 file 元素已留在 next 中（R6 缺失态），不删除。
-  const grown = growRegions(next);
+  // ── 4.5 元数据回填 —— 凡 path 在 diskSet 的 file 元素，mime 与 size 均
+  // 重新按 guessMime(path) / sizes[path] 校正一遍。早期 bug 可能让某些元素
+  // 留下过期 mime（如 plain 应为 markdown）；这里顺势刷新。
+  let metaRefreshed = false;
+  for (let i = 0; i < next.length; i += 1) {
+    const el = next[i];
+    if (!el || el.type !== 'file') continue;
+    if (!diskSet.has(el.path)) continue;
+    const wantMime = guessMime(el.path);
+    const wantSize = sizes?.[el.path] ?? el.size;
+    const wantPreviewable = wantSize <= limitBytes;
+    if (
+      el.mime !== wantMime ||
+      el.size !== wantSize ||
+      el.previewable !== wantPreviewable
+    ) {
+      next[i] = {
+        ...el,
+        mime: wantMime,
+        size: wantSize,
+        previewable: wantPreviewable,
+        updatedBy: actor,
+        updatedAt: ts,
+      };
+      metaRefreshed = true;
+    }
+  }
+
+  // ── 5. 同 path 去重 —— 防御性补丁（PRD §5.7 路径即真相）。──────────
+  // 历史 bug 可能在场景里留下多个同 path 的 file 元素（典型：早期版本的移动
+  // 检测仅按 baseName 匹配，扩展名变化的改名 → 旧元素未配对 → 新元素被
+  // 当作「新文件」创建，旧元素留作 R6 缺失，后续又被某次拖拽改回相同 path
+  // → 双份并存）。reconcile 是把场景拉回「fs 真相」的最后机会，这里顺带把
+  // 同 path 多份压缩成一份。
+  //
+  // 保留谁的优先级（从高到低）：
+  //  1) mime 跟当前 path 扩展名匹配的（其他大概是历史快照，留了过期 mime）
+  //  2) createdAt 较晚 —— 新建的通常承载用户最近的尺寸 / 位置编辑
+  //  3) updatedAt 较晚（兜底）
+  //  4) id 字典序（绝对稳定的 tiebreaker）
+  const dropped = new Set<string>();
+  const byPath = new Map<string, FileElement>();
+  /** 返回 a 是否「更应保留」（即 a 优于 b）。 */
+  const prefer = (a: FileElement, b: FileElement): boolean => {
+    const want = guessMime(a.path);
+    const aHit = a.mime === want;
+    const bHit = b.mime === want;
+    if (aHit !== bHit) return aHit;
+    const aC = Date.parse(a.createdAt ?? '') || 0;
+    const bC = Date.parse(b.createdAt ?? '') || 0;
+    if (aC !== bC) return aC > bC;
+    const aU = Date.parse(a.updatedAt ?? '') || 0;
+    const bU = Date.parse(b.updatedAt ?? '') || 0;
+    if (aU !== bU) return aU > bU;
+    return a.id > b.id;
+  };
+  for (const el of next) {
+    if (el.type !== 'file') continue;
+    const cur = byPath.get(el.path);
+    if (!cur) {
+      byPath.set(el.path, el);
+      continue;
+    }
+    if (prefer(el, cur)) {
+      dropped.add(cur.id);
+      byPath.set(el.path, el);
+    } else {
+      dropped.add(el.id);
+    }
+  }
+  const deduped =
+    dropped.size > 0 ? next.filter((e) => !dropped.has(e.id)) : next;
+
+  // ── 6. 各区域增长到能容纳其全部子元素（grow-only）─────────────────
+  // 注：消失但未配对的 file 元素已留在 deduped 中（R6 缺失态），不删除。
+  const grown = growRegions(deduped);
 
   // 仍指向不存在文件的元素 —— 移动检测后未被配对的「消失元素」即缺失态。
+  // 已被 dedupe 丢弃的不算缺失。
   const missing = goneEls
-    .filter((g) => !moveTo.has(g.id))
+    .filter((g) => !moveTo.has(g.id) && !dropped.has(g.id))
     .map((g) => g.path);
 
   return {
@@ -197,13 +271,15 @@ export function reconcileFiles(input: ReconcileInput): ReconcileResult {
     added,
     moved,
     missing,
-    // 缺失文件存在时也置 changed —— 场景字节未变，但需广播让客户端拉取
-    // 最新文件列表、把对应元素渲染为缺失态。
+    // 缺失文件存在 / dedupe 丢弃过元素 / 元数据回填都算 changed —— 场景
+    // 字节有变化，需广播让客户端拉取最新文件列表 / 重渲染。
     changed:
       added.length > 0 ||
       moved.length > 0 ||
       grown.changed ||
-      missing.length > 0,
+      missing.length > 0 ||
+      dropped.size > 0 ||
+      metaRefreshed,
   };
 }
 
