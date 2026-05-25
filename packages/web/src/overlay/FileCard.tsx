@@ -242,13 +242,6 @@ export function FileCard({
   // ── 编辑态（类文本文件）：替换 body 为 textarea ───────────────
   // 优先级最高 —— 即便 markdown/csv 还在拉取，编辑界面立即可见。
   if (editing && kind) {
-    const editorClass =
-      'ov-file__editor' +
-      (kind === 'markdown'
-        ? ' ov-file__editor--md'
-        : kind === 'csv'
-          ? ' ov-file__editor--csv'
-          : ' ov-file__editor--text');
     return (
       <div
         className="ov-card ov-file ov-file--editing"
@@ -266,7 +259,7 @@ export function FileCard({
         </div>
         <textarea
           ref={taRef}
-          className={editorClass}
+          className="ov-file__editor"
           value={draft}
           disabled={saving}
           spellCheck={false}

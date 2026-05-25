@@ -385,6 +385,10 @@
   min-height: 0;
   overflow: auto;
   padding: var(--space-2) var(--space-3);
+  /* 与文本卡 / 区域名一致的手写体（设计系统 §7.4）—— md 正文统一手绘风。
+     代码块 / inline code 在 .ov-md code / pre 规则里另用 --font-mono，
+     这里只影响 plain text / 标题 / 段落 / 列表的字形。 */
+  font-family: var(--font-hand);
   font-size: var(--text-sm);
   line-height: 1.5;
   color: var(--c-ink);
@@ -769,7 +773,9 @@
 .ov-file__csv {
   width: 100%;
   border-collapse: collapse;
-  font-size: var(--text-xs);
+  /* CSV 表格正文与 md / 纯文本预览统一手写体 —— 与其他文件预览保持一致。 */
+  font-family: var(--font-hand);
+  font-size: var(--text-sm);
   color: var(--c-ink);
 }
 
@@ -786,8 +792,7 @@
 
 .ov-file__csv th {
   background: var(--c-surface-sunken);
-  font-family: var(--font-ui);
-  font-weight: 600;
+  font-weight: 700;
 }
 
 /* ── 文件卡片 · 纯文本预览态 ────────────────────────────────── */
@@ -801,8 +806,9 @@
   margin: 0;
   overflow: auto;
   padding: var(--space-2) var(--space-3);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  /* 纯文本预览同样走手写体 —— 与 md / csv / 文本卡保持一致的手绘风。 */
+  font-family: var(--font-hand);
+  font-size: var(--text-sm);
   line-height: 1.5;
   color: var(--c-ink);
   white-space: pre-wrap;
@@ -844,18 +850,14 @@
   outline: none;
   background: var(--c-surface);
   color: var(--c-ink);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  /* 编辑器与预览对齐：手写体 + --text-sm；同款字形让「改字所见即所改」。 */
+  font-family: var(--font-hand);
+  font-size: var(--text-sm);
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
   resize: none;
   overflow: auto;
-}
-
-.ov-file__editor--md {
-  /* Markdown 源码用与预览近似的字号，便于改字时所见即所改。 */
-  font-size: var(--text-sm);
 }
 
 .ov-file__editor:disabled {
