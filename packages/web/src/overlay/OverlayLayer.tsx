@@ -3769,6 +3769,34 @@ export function OverlayLayer({
   }
 
   /**
+   * 设置 file 元素的显示模式（PRD §6.4 三种文件显示模式手动切换）——
+   * 'icon' 紧凑图标态 / 'card' 卡片态（图标+名+元信息）/ 'preview' 预览态
+   *（图片 / PDF / markdown / csv / 纯文本就地预览，不可预览时降级卡片态）。
+   * 由 StylePanel 单选 file 时暴露分段按钮入口。
+   */
+  function setFileDisplayMode(
+    id: string,
+    next: 'icon' | 'card' | 'preview',
+  ): void {
+    const cur = sceneRef.current;
+    const ts = new Date().toISOString();
+    const nextScene: BoardScene = {
+      ...cur,
+      elements: cur.elements.map((e): Element =>
+        e.id === id && e.type === 'file'
+          ? ({
+              ...e,
+              displayMode: next,
+              updatedBy: actorId,
+              updatedAt: ts,
+            } as Element)
+          : e,
+      ),
+    };
+    replaceScene(nextScene, 'canvas');
+  }
+
+  /**
    * 设置元素外链（PRD §6.4「元素挂外链」）—— next 为空（trim 后空字符串）
    * 清除外链；否则记录为 element.link，slot 右上角出现 🔗 角标，点击新窗
    * 打开。任意元素类型可用，由 StylePanel 单选时暴露入口。
@@ -5699,6 +5727,16 @@ export function OverlayLayer({
           onLinkChange={
             selectedEls.length === 1
               ? (next): void => setElementLink(selectedEls[0]!.id, next)
+              : undefined
+          }
+          fileDisplayMode={
+            selectedEls.length === 1 && selectedEls[0]!.type === 'file'
+              ? (selectedEls[0]!.displayMode ?? 'preview')
+              : null
+          }
+          onFileDisplayModeChange={
+            selectedEls.length === 1 && selectedEls[0]!.type === 'file'
+              ? (next): void => setFileDisplayMode(selectedEls[0]!.id, next)
               : undefined
           }
         />

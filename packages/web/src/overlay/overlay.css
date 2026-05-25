@@ -409,6 +409,30 @@
   justify-content: center;
 }
 
+/* 图标态（PRD §6.4 三种模式）：紧凑一行，仅 glyph + 文件名；不撑高，不
+   显示元信息。元素 width/height 沿用用户设值，但内容只占一行，剩余空
+   间靠 align-items:center 居中即可。 */
+.ov-file--icon {
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+}
+
+.ov-file--icon .ov-file__glyph {
+  font-size: var(--text-xl);
+  flex: 0 0 auto;
+}
+
+.ov-file__name--icon {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ── 文件卡片 · 图片预览态 ──────────────────────────────────── */
 .ov-file--image .ov-file__image-wrap {
   flex: 1 1 auto;

@@ -13,6 +13,7 @@
 import type {
   ArrowHead,
   ConnectorRouting,
+  FileDisplayMode,
   FillStyle,
   Style,
   StrokeStyle,
@@ -74,6 +75,15 @@ const ROUTINGS: ReadonlyArray<{ label: string; value: ConnectorRouting }> = [
   { label: '折线', value: 'orthogonal' },
   { label: '曲线', value: 'curved' },
 ];
+/** 文件元素的显示模式三档（PRD §6.4 三种文件显示模式手动切换）。 */
+const FILE_DISPLAY_MODES: ReadonlyArray<{
+  label: string;
+  value: FileDisplayMode;
+}> = [
+  { label: '图标', value: 'icon' },
+  { label: '卡片', value: 'card' },
+  { label: '预览', value: 'preview' },
+];
 /** 选「圆角」时赋给 cornerRadius 的半径值（直角为 0）。 */
 const ROUND_RADIUS = 16;
 
@@ -133,6 +143,13 @@ export interface StylePanelProps {
   link?: string | null;
   /** 提交外链 —— 空字符串 / 全空白 = 清除外链。仅单选时调用。 */
   onLinkChange?: (next: string) => void;
+  /**
+   * 选区单选 file 元素时的显示模式（PRD §6.4 三种模式手动切换）；其它类型
+   * 选区 / 多选时为 null 表示不渲染该节。
+   */
+  fileDisplayMode?: FileDisplayMode | null;
+  /** 切换 file 元素显示模式（icon / card / preview）。仅单选 file 时调用。 */
+  onFileDisplayModeChange?: (next: FileDisplayMode) => void;
 }
 
 /** `<input type="color">` 需合法 #rrggbb；透明 / 异常值回退到白。 */
@@ -207,6 +224,8 @@ export function StylePanel({
   onDistribute,
   link,
   onLinkChange,
+  fileDisplayMode,
+  onFileDisplayModeChange,
 }: StylePanelProps): JSX.Element {
   // 锁定态 —— 面板只给「解锁」入口，不暴露样式 / 变换控件。
   if (locked) {
@@ -406,6 +425,19 @@ export function StylePanel({
             options={ARROW_HEADS}
             value={arrows.endArrow}
             onPick={(v) => onArrowChange({ endArrow: v })}
+          />
+        </section>
+      ) : null}
+
+      {/* 文件显示模式（PRD §6.4 三种模式手动切换）—— 仅当选区是单个 file
+          元素时出现，分段按钮即点即切换。 */}
+      {fileDisplayMode && onFileDisplayModeChange ? (
+        <section className="ov-style-sec">
+          <span className="ov-style-sec__label">显示</span>
+          <Seg
+            options={FILE_DISPLAY_MODES}
+            value={fileDisplayMode}
+            onPick={onFileDisplayModeChange}
           />
         </section>
       ) : null}

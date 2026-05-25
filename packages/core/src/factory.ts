@@ -178,7 +178,7 @@ export function createFileElement(
     path: init.path,
     mime: init.mime,
     size: init.size,
-    displayMode: init.displayMode ?? 'card',
+    displayMode: init.displayMode ?? 'preview',
     previewable: true,
     version: 1,
   };

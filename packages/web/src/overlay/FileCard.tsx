@@ -375,6 +375,27 @@ export function FileCard({
     );
   }
 
+  // 显示模式（PRD §6.4 三种模式手动切换）—— 缺字段时默认 'preview'，保持
+  // 与本组件历史观感（"先试预览，不行再卡片态"）一致。'card' = 强制只显
+  // 元信息，'icon' = 紧凑图标态。
+  const mode = element.displayMode ?? 'preview';
+
+  // ── 图标态：紧凑一行 ────────────────────────────────────────
+  if (mode === 'icon') {
+    return (
+      <div
+        className="ov-card ov-file ov-file--icon"
+        style={cardStyle}
+        title={path}
+      >
+        <span className="ov-file__glyph" aria-hidden="true">
+          {fileGlyph(mime)}
+        </span>
+        <span className="ov-file__name ov-file__name--icon">{name}</span>
+      </div>
+    );
+  }
+
   // ── 大文件：只显示索引卡片（不预览、不就地打开）──────────────
   if (!previewable) {
     return (
@@ -399,6 +420,10 @@ export function FileCard({
     );
   }
 
+  // 'card' 模式跳过所有预览分支，直接走兜底卡片（图标 + 文件名 + 元信息）。
+  // 'preview' 模式继续往下尝试图片 / PDF / md / csv / 文本预览，任何一个
+  // 命中就返回；都不命中再落到底部兜底卡片。
+  if (mode === 'preview') {
   // ── 图片：内联预览图 ─────────────────────────────────────────
   if (isImageMime(mime) && !imageFailed) {
     return (
@@ -515,6 +540,7 @@ export function FileCard({
       </div>
     );
   }
+  } // end mode === 'preview'
 
   // ── 兜底：卡片态（图标 + 文件名 + 元信息）────────────────────
   // 也覆盖「图片加载失败」「文本未取到内容」等降级情形。
