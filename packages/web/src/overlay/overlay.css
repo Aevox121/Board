@@ -21,13 +21,25 @@
   z-index: 3;
 }
 
-/* 变换容器 —— 复刻 Excalidraw 视口变换（translate+scale，见 OverlayLayer.tsx）。 */
+/* 变换容器 —— 复刻 Excalidraw 视口变换（translate+scale，见 OverlayLayer.tsx）。
+ *
+ * 关于「放大后字体变糊」(问题记录 20)：
+ *  - `will-change: transform` 会把容器提升为合成层，子元素一旦以原始分辨率
+ *    光栅化后就被 GPU 直接放大（Chromium 不再重栅化），所以放大 200%+ 时
+ *    文字 / SVG 描边都模糊。
+ *  - 去掉 `will-change` 后，浏览器在 zoom 变化后会重新走 layout/paint 路径,
+ *    文字按缩放后的有效像素重新光栅化 —— 同款 transform: scale 也能保持清晰
+ *    （Chromium DirectComposition 的 contents-scale 机制）。
+ *  - 代价：高频缩放手势可能会有微小帧率下降（重栅化成本）。实测可接受。
+ *  - 与 Excalidraw 的差距：它们用 Canvas2D 每帧 redraw，本质不一样；DOM
+ *    方案能逼近但不能完全消除（极高 zoom 仍可能糊）。后续若要完全无糊
+ *    需要换 Canvas / SVG 渲染或按 zoom 改 fontSize / strokeWidth 反算 token。
+ */
 .ov-transform {
   position: absolute;
   top: 0;
   left: 0;
   /* transform / transform-origin 由组件内联设置 */
-  will-change: transform;
 }
 
 /* 单个元素的定位槽 —— 按画布坐标绝对定位。 */

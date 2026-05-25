@@ -978,6 +978,11 @@ async function handleMoveFile(
           elements: grown.elements,
         }));
         await deps.recordChange('u_local');
+        // R6 修复：把 watcher 内存集 + /api/board files 列表对齐到磁盘
+        // 实情；否则 web 端 missingFileIds 会用旧文件列表把这个刚移过来
+        // 的文件误判为「文件已不在磁盘上」。reconcile 是幂等的，scene
+        // 已是 newPath、disk 也是 newPath，不会再产生 element 改动。
+        await deps.reconcileNow('move');
       } else {
         // 该文件尚无对应画布元素 —— 退回 reconcile 兜底。
         await deps.reconcileNow('move');

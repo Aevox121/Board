@@ -3362,6 +3362,38 @@ export function OverlayLayer({
   }
 
   /**
+   * 空白处双击创建文本(参考 Excalidraw)—— 在落点放一张「空」文本卡 + 立即
+   * 进入就地编辑;commitText 默认会写「文本」占位字,这里 markdown='' 让用户
+   * 直接开始打字。
+   */
+  function createTextAtAndEdit(cx: number, cy: number): void {
+    const cur = sceneRef.current;
+    const el = createTextElement({
+      x: cx - NEW_TEXT_W / 2,
+      y: cy - NEW_TEXT_H / 2,
+      width: NEW_TEXT_W,
+      height: NEW_TEXT_H,
+      createdBy: actorId,
+      z: nextZ(cur.elements),
+      parentId:
+        regionForCard(
+          {
+            x: cx - NEW_TEXT_W / 2,
+            y: cy - NEW_TEXT_H / 2,
+            width: NEW_TEXT_W,
+            height: NEW_TEXT_H,
+          },
+          regionsOf(cur.elements),
+        )?.id ?? null,
+      markdown: '',
+    });
+    replaceScene({ ...cur, elements: [...cur.elements, el] }, 'canvas');
+    selectOnly(el.id);
+    // 进入编辑态 —— TextCard 受控,setEditingTextId 触发自动 focus + select。
+    setEditingTextId(el.id);
+  }
+
+  /**
    * 在画布坐标 (cx,cy) 为中心放下一张图片元素 —— 尺寸由原始像素推算并
    * 限制最长边不超过 460（过大图自动等比缩小）。
    */
@@ -4882,6 +4914,25 @@ export function OverlayLayer({
         tasks.length === 0 &&
         suggestions.length === 0
       }
+      // 空白处双击 → 在落点新建一张空文本卡 + 进入编辑（参考 Excalidraw,
+      // 问题记录 19）。仅 selection 工具 + 落点不在任何元素 / 连线上时触发。
+      onDoubleClick={(e) => {
+        if (activeTool !== 'selection') return;
+        const target = e.target as HTMLElement | null;
+        if (
+          target?.closest('[data-element-id]') ||
+          target?.closest('[data-connector-id]')
+        ) {
+          return; // 落在元素 / 连线上 —— 让该元素自己处理双击
+        }
+        const root = rootRef.current;
+        if (!root) return;
+        const r = root.getBoundingClientRect();
+        const vp = viewportRef.current;
+        const cx = (e.clientX - r.left) / vp.zoom - vp.scrollX;
+        const cy = (e.clientY - r.top) / vp.zoom - vp.scrollY;
+        createTextAtAndEdit(cx, cy);
+      }}
     >
       <div className="ov-transform" style={transformStyle}>
         {/* 建议 → 目标的连线 —— 建议卡 → 目标卡的箭头线，端点裁到 bbox 边
