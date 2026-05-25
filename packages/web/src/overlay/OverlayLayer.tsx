@@ -725,6 +725,24 @@ const COPYABLE_TYPES: ReadonlySet<string> = new Set([
   'connector',
 ]);
 
+/**
+ * 复制 / 粘贴样式（Ctrl/⌘+Shift+C / Ctrl/⌘+Shift+V）共享的应用内剪贴板。
+ * 模块级 —— 跨组件重挂、跨选区变化都保留，符合「拷样式器」的心智模型。
+ *
+ * Why: 用户希望快速把一个元素的样式套到其他元素上（PRD §6.7 统一样式）。
+ *      Excalidraw 类工具的共识快捷键就是 Ctrl+Shift+C/V。
+ */
+interface StyleClipboardEntry {
+  style: Style;
+  /** 仅当源元素是 connector 时填 —— 箭头 / 路由是连线特有的"样貌"字段。 */
+  connector?: {
+    startArrow: ArrowHead;
+    endArrow: ArrowHead;
+    routing: ConnectorRouting;
+  };
+}
+let styleClipboard: StyleClipboardEntry | null = null;
+
 /** 创建手势的瞬时状态。 */
 interface CreatingState {
   /** 创建中的元素类型。 */
@@ -2097,8 +2115,9 @@ export function OverlayLayer({
     const onKey = (e: KeyboardEvent): void => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
       const k = e.key.toLowerCase();
-      // 粘贴（v）不在此处理 —— 改由 window 'paste' 事件统一分发（图片 /
-      // 链接 / 应用内元素），故此处不拦截 Ctrl+V，让 paste 事件正常触发。
+      // 普通粘贴（v 无 shift）不在此处理 —— 改由 window 'paste' 事件统一分发
+      //（图片 / 链接 / 应用内元素）。Ctrl+Shift+V 是"粘贴样式"，必须拦截。
+      const isShiftV = k === 'v' && e.shiftKey;
       if (
         k !== 'c' &&
         k !== 'x' &&
@@ -2106,7 +2125,8 @@ export function OverlayLayer({
         k !== 'a' &&
         k !== 'g' &&
         k !== ']' &&
-        k !== '['
+        k !== '[' &&
+        !isShiftV
       ) {
         return;
       }
@@ -2121,8 +2141,14 @@ export function OverlayLayer({
         return;
       }
       e.preventDefault();
-      if (k === 'c') copySelection();
-      else if (k === 'x') cutSelection();
+      if (k === 'c') {
+        // Ctrl+C 复制元素 / Ctrl+Shift+C 拷样式。
+        if (e.shiftKey) copySelectionStyle();
+        else copySelection();
+      } else if (k === 'v') {
+        // 仅当 isShiftV 才会走到这里 —— 拷样式的粘贴动作。
+        pasteSelectionStyle();
+      } else if (k === 'x') cutSelection();
       else if (k === 'd') duplicateSelection();
       else if (k === 'a') selectAll();
       else if (k === 'g') {
@@ -2932,6 +2958,82 @@ export function OverlayLayer({
       ),
     };
     replaceScene(next, 'canvas');
+  }
+
+  /**
+   * Ctrl/⌘+Shift+C —— 把首个选中元素的样式（Style 全字段 + 连线特有箭头/路由）
+   * 存进模块级 styleClipboard，等候 Ctrl/⌘+Shift+V 套到其它元素上。
+   * 多选时取选区中 z 最小（最先创建的）作为样式源，保证可预测。
+   */
+  function copySelectionStyle(): void {
+    const cur = sceneRef.current;
+    const sel = selectedIdsRef.current;
+    if (sel.size === 0) {
+      toast.info('请先选中元素再拷贝样式');
+      return;
+    }
+    const picked = cur.elements.filter((e) => sel.has(e.id));
+    if (picked.length === 0) return;
+    // 多选取 z 最小（最先创建）的元素作为样式源 —— 行为可预测，且与
+    // 用户"先建好的那个样式我想抄"的直觉一致。
+    const src = [...picked].sort((a, b) => (a.z < b.z ? -1 : 1))[0]!;
+    const entry: StyleClipboardEntry = {
+      style: { ...src.style },
+    };
+    if (src.type === 'connector') {
+      entry.connector = {
+        startArrow: src.startArrow,
+        endArrow: src.endArrow,
+        routing: src.routing,
+      };
+    }
+    styleClipboard = entry;
+    toast.info('样式已拷贝（Ctrl+Shift+V 粘贴）');
+  }
+
+  /**
+   * Ctrl/⌘+Shift+V —— 把 styleClipboard 中的样式套到当前选区所有元素上。
+   * connector 特有字段只套到 connector 元素，其它元素忽略 connector 部分。
+   */
+  function pasteSelectionStyle(): void {
+    if (!styleClipboard) {
+      toast.info('尚未拷贝样式');
+      return;
+    }
+    const sel = selectedIdsRef.current;
+    if (sel.size === 0) {
+      toast.info('请先选中目标元素');
+      return;
+    }
+    const cur = sceneRef.current;
+    const ts = new Date().toISOString();
+    const styleFromClip = styleClipboard.style;
+    const connClip = styleClipboard.connector;
+    let n = 0;
+    const next: BoardScene = {
+      ...cur,
+      elements: cur.elements.map((e): Element => {
+        if (!sel.has(e.id)) return e;
+        n += 1;
+        const base = {
+          ...e,
+          style: { ...e.style, ...styleFromClip },
+          updatedBy: actorId,
+          updatedAt: ts,
+        } as Element;
+        if (connClip && base.type === 'connector') {
+          return {
+            ...base,
+            startArrow: connClip.startArrow,
+            endArrow: connClip.endArrow,
+            routing: connClip.routing,
+          } as Element;
+        }
+        return base;
+      }),
+    };
+    replaceScene(next, 'canvas');
+    toast.info(`已套用到 ${n} 个元素`);
   }
 
   /**
