@@ -1680,6 +1680,101 @@ function pushAgentPresence(
   deps.sse.broadcast(frame);
 }
 
+/**
+ * POST /api/agent-activity —— Agent 工作时报到（PRD §7.4 / §8.2）。
+ *
+ * 适用场景：sub-agent / 外部 CLI / MCP 工具开始/进行/结束一项工作前后调用。
+ * 行为：
+ *  1. actorId 不在 meta.participants 中 → 用入参 name/color 自动注册为 agent
+ *  2. 推一帧 Agent presence（带可选 cursor + targetElementId），让 web 端看
+ *     到 Agent 头像出现 + 光标动画
+ *
+ * Presence 12s 不报会过期消失；要保持活动状态需周期心跳（建议每 5s 一次）。
+ * PresenceBar 同时会从 meta.participants[type=agent] 取曾经参与过的 Agent
+ * 持续显示头像（哪怕 presence 已过期）。
+ *
+ * 请求体: `{ actorId, name?, color?, targetElementId?, cursor?:{x,y} }`
+ */
+function handleAgentActivity(
+  deps: HttpDeps,
+  body: unknown,
+  res: ServerResponse,
+): void {
+  if (typeof body !== 'object' || body === null) {
+    fail(res, 400, '请求体必须为 JSON 对象');
+    return;
+  }
+  const b = body as Record<string, unknown>;
+  const actorId = typeof b['actorId'] === 'string' ? b['actorId'].trim() : '';
+  if (!actorId || !actorId.startsWith('a_')) {
+    fail(res, 400, 'actorId 必须以 a_ 开头（Agent 命名约定）');
+    return;
+  }
+  const name =
+    typeof b['name'] === 'string' && b['name'].trim() ? b['name'].trim() : actorId;
+  const color =
+    typeof b['color'] === 'string' && b['color'].trim() ? b['color'].trim() : '#1971C2';
+  const targetElementId =
+    typeof b['targetElementId'] === 'string' && b['targetElementId']
+      ? b['targetElementId']
+      : null;
+  let cursor: { x: number; y: number } | null = null;
+  const rawCursor = b['cursor'];
+  if (typeof rawCursor === 'object' && rawCursor !== null) {
+    const c = rawCursor as Record<string, unknown>;
+    if (
+      typeof c['x'] === 'number' &&
+      typeof c['y'] === 'number' &&
+      Number.isFinite(c['x']) &&
+      Number.isFinite(c['y'])
+    ) {
+      cursor = { x: c['x'] as number, y: c['y'] as number };
+    }
+  }
+
+  // 自动注册 participant（如缺）
+  const meta = deps.getMeta();
+  const exists = meta.participants.find((p) => p.id === actorId);
+  if (!exists) {
+    deps.setMeta({
+      ...meta,
+      participants: [
+        ...meta.participants,
+        {
+          id: actorId,
+          type: 'agent',
+          name,
+          color,
+          ownerId: 'u_local',
+          avatar: null,
+        },
+      ],
+      updatedAt: new Date().toISOString(),
+    });
+  } else if (exists.type !== 'agent') {
+    fail(res, 409, `${actorId} 已存在于 participants 但 type 不是 agent`);
+    return;
+  }
+
+  // 推 presence：先 target，再带 cursor 覆盖一帧（pushAgentPresence 默认 cursor=null）
+  pushAgentPresence(deps, actorId, targetElementId);
+  if (cursor) {
+    const p = deps.getMeta().participants.find((x) => x.id === actorId)!;
+    const entry = deps.presence.update({
+      clientId: p.id,
+      name: p.name,
+      color: p.color,
+      cursor,
+      targetElementId: targetElementId ?? undefined,
+      isAgent: true,
+    });
+    const frame = { type: 'presence', client: entry };
+    deps.sse.broadcast(frame);
+  }
+
+  ok(res, { actorId, registered: !exists });
+}
+
 function handlePresence(
   deps: HttpDeps,
   body: unknown,
@@ -2227,6 +2322,20 @@ async function route(
       return;
     }
     handlePresence(deps, presenceBody, res);
+    return;
+  }
+  // POST /api/agent-activity —— Agent 工作时报到（CLI / sub-agent 用）
+  // 体: { actorId, name?, color?, targetElementId?, cursor?:{x,y} }
+  // 行为: 缺 participant 时自动注册 + 推一帧 Agent presence（带可选光标）
+  if (path === '/api/agent-activity' && method === 'POST') {
+    let aaBody: unknown;
+    try {
+      aaBody = await readJsonBody(req);
+    } catch (err) {
+      fail(res, 400, errMsg(err));
+      return;
+    }
+    handleAgentActivity(deps, aaBody, res);
     return;
   }
   // GET /api/events/log —— 事件增量拉取；须先于 /api/events 判断

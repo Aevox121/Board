@@ -209,6 +209,22 @@
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--c-accent) 25%, transparent);
 }
 
+/* 不活跃 agent —— 曾参与本板但当前没有 presence 心跳；半透展示，
+   hover 不亮、不可跟随。让用户知道"这板上有过这位 AI"但不抢眼。 */
+.presence-bar__chip--inactive {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.presence-bar__chip--inactive:hover {
+  background: transparent;
+  border-color: var(--c-border, #e6e3d8);
+}
+
+.presence-bar__chip--inactive .presence-bar__avatar {
+  filter: grayscale(0.3);
+}
+
 /* 折叠态：剩余人数计数 */
 .presence-bar__overflow {
   display: inline-flex;
