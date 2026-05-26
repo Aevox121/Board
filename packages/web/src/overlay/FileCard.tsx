@@ -43,10 +43,13 @@ export interface FileCardProps {
   /** 用户按 Esc / 失焦 / Ctrl+Enter 退出编辑时通知调用方清状态。 */
   onEditingChange?: (editing: boolean) => void;
   /**
-   * 当前画布缩放（LOD 用）—— 屏幕高度 = element.height × zoom 决定渲染档位：
-   * - 屏幕高度 < BLUR 阈值：渲染纯模糊占位块（不渲文本、不取文件）
-   * - 屏幕高度 < CARD 阈值：渲染卡片态（图标 + 名 + 元信息，不渲 markdown）
+   * 当前画布缩放（LOD 用）—— 屏幕宽度 = element.width × zoom 决定渲染档位：
+   * - 屏幕宽度 < BLUR 阈值：渲染纯模糊占位块（不渲文本、不取文件）
+   * - 屏幕宽度 < CARD 阈值：渲染卡片态（图标 + 名 + 元信息，不渲 markdown）
    * - 否则：完整 markdown 预览（首次进入时按需 fetch + 自适应高度）
+   *
+   * 不用 height 是因为 autofit 让 height 跟着 md 长度撑到几千 px，按 height
+   * 判定永远不降档；width 是用户控制的稳定维度，符合"卡在屏幕上能多大"。
    */
   zoom?: number;
   /**
@@ -57,10 +60,14 @@ export interface FileCardProps {
 }
 
 /**
- * LOD 阈值（按屏幕 px）—— 屏幕高度 < BLUR：模糊占位；< CARD：卡片态；
- * 否则完整预览。零碎手势缩放在 React.memo 里离散化避免抖动切档。
+ * LOD 阈值（按屏幕 px，看 element.width × zoom）—— 屏幕宽度 < BLUR：模糊占位；
+ * < CARD：卡片态；否则完整预览。
+ *
+ * 为何按 width 不按 height：autofit 会把 element.height 撑到几千 px（长 md
+ * 撑高），按 height × zoom 判定 → 即便缩到很小 screenH 还很大，永远进不了
+ * 降档。width 是用户控制的稳定维度，按它判定才符合"卡屏幕上能多大"的直觉。
  */
-const LOD_BLUR_MAX_PX = 100;
+const LOD_BLUR_MAX_PX = 90;
 const LOD_CARD_MAX_PX = 240;
 
 /** A4 纸比例（1:√2，长边/短边）—— 短文档 markdown preview 维持纸张观感的下限。 */
@@ -187,13 +194,13 @@ function FileCardImpl({
 
   // ── 三档 LOD 解析 ────────────────────────────────────────────
   // displayMode='icon' 永远走 icon（用户显式选）；'card' / 'preview' 受 LOD
-  // 影响：屏幕高度过小 → 降级到 blur / card。
+  // 影响：屏幕宽度过小 → 降级到 blur / card。
   const rawMode = element.displayMode ?? 'preview';
-  const screenH = element.height * zoom;
+  const screenW = element.width * zoom;
   let mode: 'icon' | 'card' | 'preview' | 'blur';
   if (rawMode === 'icon') mode = 'icon';
-  else if (screenH < LOD_BLUR_MAX_PX) mode = 'blur';
-  else if (rawMode === 'card' || screenH < LOD_CARD_MAX_PX) mode = 'card';
+  else if (screenW < LOD_BLUR_MAX_PX) mode = 'blur';
+  else if (rawMode === 'card' || screenW < LOD_CARD_MAX_PX) mode = 'card';
   else mode = 'preview';
 
   // ── 按需 fetch：只在 mode='preview' 才真去拉文件 ────────────────
