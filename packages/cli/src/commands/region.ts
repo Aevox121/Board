@@ -24,12 +24,10 @@ import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
 import { openBoard } from '../util/board-io.js';
+import { resolveActor, buildAgentActivity } from '../util/actor.js';
 
 /** 区域横向平铺时的间隙。 */
 const REGION_GAP = 56;
-
-/** M2 默认参与者 id —— 无 `--actor` 时归属于此。 */
-const DEFAULT_ACTOR = 'u_local';
 
 /**
  * 校验区域名：不允许为空、不允许带路径分隔符或 `..`。
@@ -99,7 +97,7 @@ async function regionCreate(args: ParsedArgs): Promise<CmdResult> {
   // 区域横向平铺、互不重叠；整体置于收件区下方，避开游离文件。
   const x = existing.length * (size.width + REGION_GAP);
   const y = INBOX_RECT.y + INBOX_RECT.height + REGION_GAP;
-  const actor = args.options.get('actor') ?? DEFAULT_ACTOR;
+  const actor = resolveActor(args);
   // 软归属（PRD §8.3）—— `--owner me` / `<id>` / `none`，默认归属创建者。
   const ownerRaw = args.options.get('owner');
   const ownerId =
@@ -127,6 +125,7 @@ async function regionCreate(args: ParsedArgs): Promise<CmdResult> {
 
   scene.elements.push(element);
   await handle.save(scene);
+  await handle.announceAgent(buildAgentActivity(actor, element.id));
 
   return {
     code: EXIT.OK,
@@ -210,7 +209,7 @@ async function regionOwn(args: ParsedArgs): Promise<CmdResult> {
     throw new CliError(`未找到区域：${regionName}`, EXIT.NOT_FOUND);
   }
 
-  const actor = args.options.get('actor') ?? DEFAULT_ACTOR;
+  const actor = resolveActor(args);
   const nextOwnerId =
     ownerRaw === 'me'
       ? actor
@@ -225,6 +224,7 @@ async function regionOwn(args: ParsedArgs): Promise<CmdResult> {
       : e,
   );
   await handle.save({ ...handle.scene, elements: next });
+  await handle.announceAgent(buildAgentActivity(actor, region.id));
 
   const ownerLabel =
     nextOwnerId === null
@@ -269,7 +269,7 @@ async function regionDescribe(args: ParsedArgs): Promise<CmdResult> {
     throw new CliError(`未找到区域：${regionName}`, EXIT.NOT_FOUND);
   }
 
-  const actor = args.options.get('actor') ?? DEFAULT_ACTOR;
+  const actor = resolveActor(args);
   const ts = new Date().toISOString();
   const next = handle.scene.elements.map((e) =>
     e.id === region.id && e.type === 'region'
@@ -277,6 +277,7 @@ async function regionDescribe(args: ParsedArgs): Promise<CmdResult> {
       : e,
   );
   await handle.save({ ...handle.scene, elements: next });
+  await handle.announceAgent(buildAgentActivity(actor, region.id));
   // 区域描述同步落地为文件夹 README.md。
   await writeFile(join(dir, 'files', region.path, 'README.md'), desc, 'utf8');
 
@@ -318,7 +319,7 @@ async function regionAssign(args: ParsedArgs): Promise<CmdResult> {
     throw new CliError(`未找到区域：${regionName}`, EXIT.NOT_FOUND);
   }
 
-  const actor = args.options.get('actor') ?? DEFAULT_ACTOR;
+  const actor = resolveActor(args);
   const ts = new Date().toISOString();
   const next = handle.scene.elements.map((e) =>
     e.id === region.id && e.type === 'region'
@@ -326,6 +327,7 @@ async function regionAssign(args: ParsedArgs): Promise<CmdResult> {
       : e,
   );
   await handle.save({ ...handle.scene, elements: next });
+  await handle.announceAgent(buildAgentActivity(actor, region.id));
 
   return {
     code: EXIT.OK,

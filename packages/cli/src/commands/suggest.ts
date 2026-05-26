@@ -24,8 +24,9 @@ import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
 import { openBoard } from '../util/board-io.js';
+import { resolveActor, buildAgentActivity } from '../util/actor.js';
 
-/** 无 `--actor` / `--agent` 时建议归属的默认 Agent id。 */
+/** 无 `--actor` / `--agent` / `BOARD_AGENT_ID` 时建议归属的默认 Agent id。 */
 const DEFAULT_AGENT = 'a_agent';
 
 /** 命令用法提示。 */
@@ -82,8 +83,7 @@ export async function cmdSuggest(args: ParsedArgs): Promise<CmdResult> {
     throw new CliError(`未找到目标元素：${targetId}`, EXIT.NOT_FOUND);
   }
 
-  const actor =
-    args.options.get('actor') ?? args.options.get('agent') ?? DEFAULT_AGENT;
+  const actor = resolveActor(args, DEFAULT_AGENT);
   const z = nextZ(scene.elements);
   // 建议卡并排在目标右侧。
   const x = target.x + target.width + SUGGESTION_GAP;
@@ -117,6 +117,7 @@ export async function cmdSuggest(args: ParsedArgs): Promise<CmdResult> {
 
   scene.elements.push(suggestion);
   await handle.save(scene);
+  await handle.announceAgent(buildAgentActivity(actor, suggestion.id));
 
   return {
     code: EXIT.OK,

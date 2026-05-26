@@ -41,6 +41,26 @@ export interface ServerHandle {
   putBoard(scene: BoardScene): Promise<void>;
   /** POST /api/boards/<id>/refresh —— 外部写 files/ 后触发服务比对事件流。 */
   refresh(actor?: string): Promise<void>;
+  /**
+   * POST /api/boards/<id>/agent-activity —— 告诉服务"有 Agent 在干活"。
+   * 服务会自动注册 participant(如缺)+ 推一帧 presence,Web 端据此渲染
+   * Agent 头像与围绕 targetElementId 的轨道动画(PRD §7.4 / §8.2)。
+   */
+  agentActivity(opts: AgentActivityInput): Promise<void>;
+}
+
+/** /api/agent-activity 请求体的客户端镜像。 */
+export interface AgentActivityInput {
+  /** Agent id —— 必须以 `a_` 开头(server 端硬约束)。 */
+  actorId: string;
+  /** 显示名;省略时 server 用 actorId 兜底。 */
+  name?: string;
+  /** 主题色 hex(如 `#1971C2`);省略时 server 用默认蓝。 */
+  color?: string;
+  /** 让光标钉到此元素,触发轨道动画(PRD §8.2)。 */
+  targetElementId?: string;
+  /** 自由光标位置;不传则取 server 默认行为(无光标 → 仅显示头像)。 */
+  cursor?: { x: number; y: number };
 }
 
 /** envelope: { ok, data, error } —— GET/PUT/POST /api 端点统一格式。 */
@@ -180,6 +200,24 @@ function createHandle(baseUrl: string, boardId: string): ServerHandle {
         RW_TIMEOUT_MS,
       );
       await unwrap<{ refreshed: true }>(resp, 'POST /refresh');
+    },
+
+    async agentActivity(opts: AgentActivityInput): Promise<void> {
+      // server 端硬约束 —— 提前挡掉,避免无谓的 400 出现在日志里。
+      if (!opts.actorId.startsWith('a_')) return;
+      const resp = await fetchWithTimeout(
+        `${prefix}/agent-activity`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(opts),
+        },
+        RW_TIMEOUT_MS,
+      );
+      await unwrap<{ actorId: string; registered: boolean }>(
+        resp,
+        'POST /agent-activity',
+      );
     },
   };
 }

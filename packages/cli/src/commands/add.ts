@@ -22,10 +22,8 @@ import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
 import { openBoard, type BoardSession } from '../util/board-io.js';
+import { resolveActor, buildAgentActivity } from '../util/actor.js';
 import { autoPlace } from '../util/layout.js';
-
-/** M1/M2 默认参与者 id —— 无 `--actor` 时归属于此。 */
-const DEFAULT_ACTOR = 'u_local';
 
 /** 解析 `--at "x,y"` → `[x,y]`；缺省 / 非法返回 null。 */
 function parseAtOption(raw: string | undefined): [number, number] | null {
@@ -74,7 +72,7 @@ async function addText(args: ParsedArgs): Promise<CmdResult> {
 
   const size = defaultSizeFor('text');
   const z = nextZ(scene.elements);
-  const actor = args.options.get('actor') ?? DEFAULT_ACTOR;
+  const actor = resolveActor(args);
 
   // --at "x,y" 显式定位；否则在收件区碰撞规避落位（不与现有元素重叠）。
   const at = parseAtOption(args.options.get('at'));
@@ -102,6 +100,7 @@ async function addText(args: ParsedArgs): Promise<CmdResult> {
 
   scene.elements.push(element);
   await handle.save(scene);
+  await handle.announceAgent(buildAgentActivity(actor, element.id));
 
   return {
     code: EXIT.OK,
@@ -218,13 +217,15 @@ async function addLocal(
 
   // 扫描 files/ 并 reconcile，使 board.json 出现新增 file 元素
   const diskFiles = await listBoardFiles(dir);
-  const actor = args.options.get('actor') ?? DEFAULT_ACTOR;
+  const actor = resolveActor(args);
   const result = reconcileFiles({
     scene: handle.scene,
     diskFiles,
     actor,
   });
   await handle.save(result.scene);
+  // 用首个新增的 file 元素作 Agent presence 锚点;reconcile 没新增就不传 target。
+  await handle.announceAgent(buildAgentActivity(actor, result.added[0]));
 
   const destRel = regionSeg === '' ? name : `${regionSeg}/${name}`;
   return {

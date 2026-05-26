@@ -16,9 +16,8 @@ import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
 import { openBoard } from '../util/board-io.js';
+import { resolveActor, buildAgentActivity } from '../util/actor.js';
 
-/** 无 `--actor` / `--agent` 时的默认参与者 id。 */
-const DEFAULT_ACTOR = 'u_local';
 const VALID_STROKE_STYLE: ReadonlySet<string> = new Set([
   'solid',
   'dashed',
@@ -75,8 +74,7 @@ export async function cmdStyle(args: ParsedArgs): Promise<CmdResult> {
     throw new CliError(`未找到元素：${elementId}`, EXIT.NOT_FOUND);
   }
 
-  const actor =
-    args.options.get('actor') ?? args.options.get('agent') ?? DEFAULT_ACTOR;
+  const actor = resolveActor(args);
   const ts = new Date().toISOString();
   const next = handle.scene.elements.map((e): Element =>
     e.id === elementId
@@ -84,6 +82,7 @@ export async function cmdStyle(args: ParsedArgs): Promise<CmdResult> {
       : e,
   );
   await handle.save({ ...handle.scene, elements: next });
+  await handle.announceAgent(buildAgentActivity(actor, elementId));
 
   return {
     code: EXIT.OK,

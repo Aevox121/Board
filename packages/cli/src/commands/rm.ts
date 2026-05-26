@@ -13,6 +13,7 @@ import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
 import { openBoard } from '../util/board-io.js';
+import { resolveActor, buildAgentActivity } from '../util/actor.js';
 
 /** 执行 rm 命令。 */
 export async function cmdRm(args: ParsedArgs): Promise<CmdResult> {
@@ -45,6 +46,8 @@ export async function cmdRm(args: ParsedArgs): Promise<CmdResult> {
   // 里的该 file 元素当缺失态保留并回写，覆盖掉本次删除。
   const { scene: next, removedRefs } = removeElement(scene, elementId);
   await handle.save(next);
+  // 元素已删,没有锚点元素;announceAgent 不带 targetElementId,Web 端只显头像无轨道动画。
+  await handle.announceAgent(buildAgentActivity(resolveActor(args)));
 
   // file 元素：真实文件移入回收站 .runtime/trash/（可恢复）。
   let trashed: string | null = null;

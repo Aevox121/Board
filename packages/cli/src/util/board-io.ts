@@ -16,7 +16,11 @@
  */
 import { loadBoard, saveBoard, type BoardHandle } from '@board/core/node';
 import type { BoardMeta, BoardScene } from '@board/core';
-import { findServerForBoard, type ServerHandle } from './server-client.js';
+import {
+  findServerForBoard,
+  type AgentActivityInput,
+  type ServerHandle,
+} from './server-client.js';
 
 /** 一次 CLI 命令的白板会话 —— 拿初始 meta/scene,写完调 save(scene)。 */
 export interface BoardSession {
@@ -39,6 +43,14 @@ export interface BoardSession {
    *  - fs 模式:no-op(本会话内已经/将要走 save 落 board.json)。
    */
   refreshFilesOnly(actor?: string): Promise<void>;
+  /**
+   * 通知服务"Agent 干完一票了" —— 自动注册 participant + 推 presence 帧,
+   * Web 端据此渲染 Agent 头像与围绕 targetElementId 的轨道动画。
+   *  - actorId 不以 `a_` 开头时:no-op(避免 server 端 400)。
+   *  - server 模式 + Agent actor:POST /api/agent-activity。
+   *  - fs 模式:no-op(没有客户端在监听)。
+   */
+  announceAgent(opts: AgentActivityInput): Promise<void>;
   /** 当前会话是否走的 server —— 极少数命令需要分支(如 files/ 操作)。 */
   readonly viaServer: boolean;
 }
@@ -73,6 +85,9 @@ async function openViaServer(
     async refreshFilesOnly(actor?: string): Promise<void> {
       await server.refresh(actor);
     },
+    async announceAgent(opts: AgentActivityInput): Promise<void> {
+      await server.agentActivity(opts);
+    },
   };
 }
 
@@ -88,6 +103,10 @@ function openViaFs(handle: BoardHandle): BoardSession {
     async refreshFilesOnly(): Promise<void> {
       // fs 模式下 CLI 自己负责把 reconcile 后的 scene 通过 save 写盘 ——
       // 没有外部进程需要被"通知",所以这里 no-op。
+      return;
+    },
+    async announceAgent(): Promise<void> {
+      // 服务不在,没有 Web 客户端在监听 SSE —— 推 presence 给谁?直接跳过。
       return;
     },
   };

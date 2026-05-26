@@ -17,9 +17,8 @@ import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
 import { openBoard } from '../util/board-io.js';
+import { resolveActor, buildAgentActivity } from '../util/actor.js';
 
-/** 无 `--actor`/`--agent` 时归属的默认参与者 id。 */
-const DEFAULT_ACTOR = 'u_local';
 const VALID_ARROWS: ReadonlySet<string> = new Set([
   'none',
   'arrow',
@@ -79,8 +78,7 @@ export async function cmdConnect(args: ParsedArgs): Promise<CmdResult> {
   }
   const routing = routingRaw as ConnectorRouting;
 
-  const actor =
-    args.options.get('actor') ?? args.options.get('agent') ?? DEFAULT_ACTOR;
+  const actor = resolveActor(args);
   const z = nextZ(scene.elements);
 
   // 连线几何：源中心 → 目标中心（Web 端渲染时按端点最新位置重算）。
@@ -105,6 +103,7 @@ export async function cmdConnect(args: ParsedArgs): Promise<CmdResult> {
   });
   scene.elements.push(element);
   await handle.save(scene);
+  await handle.announceAgent(buildAgentActivity(actor, element.id));
 
   return {
     code: EXIT.OK,

@@ -18,10 +18,9 @@ import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
 import { openBoard } from '../util/board-io.js';
+import { resolveActor, buildAgentActivity } from '../util/actor.js';
 import { autoPlace } from '../util/layout.js';
 
-/** 无 `--actor`/`--agent` 时归属的默认参与者 id。 */
-const DEFAULT_ACTOR = 'u_local';
 /** 流程图方框默认尺寸。 */
 const DEFAULT_SHAPE_SIZE = { width: 160, height: 72 };
 /** 支持的图形类型。 */
@@ -71,8 +70,7 @@ async function shapeAdd(args: ParsedArgs): Promise<CmdResult> {
   const dir = resolveBoardDir(boardPath, args.options.get('board'));
   const handle = await openBoard(dir);
   const { scene } = handle;
-  const actor =
-    args.options.get('actor') ?? args.options.get('agent') ?? DEFAULT_ACTOR;
+  const actor = resolveActor(args);
   const z = nextZ(scene.elements);
 
   const size = parsePair(args.options.get('size'));
@@ -128,6 +126,7 @@ async function shapeAdd(args: ParsedArgs): Promise<CmdResult> {
   });
   scene.elements.push(element);
   await handle.save(scene);
+  await handle.announceAgent(buildAgentActivity(actor, element.id));
 
   return {
     code: EXIT.OK,

@@ -17,9 +17,7 @@ import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
 import { openBoard } from '../util/board-io.js';
-
-/** M2 默认参与者 id —— 无 `--actor` 时归属于此。 */
-const DEFAULT_ACTOR = 'u_local';
+import { resolveActor, buildAgentActivity } from '../util/actor.js';
 
 /** 校验相对路径不含 `..` 段。 */
 function assertNoDotDot(rel: string, label: string): void {
@@ -95,9 +93,11 @@ export async function cmdMv(args: ParsedArgs): Promise<CmdResult> {
 
   // reconcile：移动检测把该 file 元素重定位到新路径并按区域自动归位
   const diskFiles = await listBoardFiles(dir);
-  const actor = args.options.get('actor') ?? DEFAULT_ACTOR;
+  const actor = resolveActor(args);
   const result = reconcileFiles({ scene: handle.scene, diskFiles, actor });
   await handle.save(result.scene);
+  // 移动通常重定位某个 file 元素 —— 用 moved[0] 作 Agent presence 锚点。
+  await handle.announceAgent(buildAgentActivity(actor, result.moved[0]));
 
   return {
     code: EXIT.OK,

@@ -8,9 +8,7 @@ import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
 import { openBoard } from '../util/board-io.js';
-
-/** 无 `--actor` / `--agent` 时的默认参与者 id。 */
-const DEFAULT_ACTOR = 'u_local';
+import { resolveActor, buildAgentActivity } from '../util/actor.js';
 
 /** 执行 comment 命令。 */
 export async function cmdComment(args: ParsedArgs): Promise<CmdResult> {
@@ -34,8 +32,7 @@ export async function cmdComment(args: ParsedArgs): Promise<CmdResult> {
     throw new CliError(`未找到元素：${elementId}`, EXIT.NOT_FOUND);
   }
 
-  const actor =
-    args.options.get('actor') ?? args.options.get('agent') ?? DEFAULT_ACTOR;
+  const actor = resolveActor(args);
   const comment: ElementComment = {
     by: actor,
     text: text.trim(),
@@ -53,6 +50,7 @@ export async function cmdComment(args: ParsedArgs): Promise<CmdResult> {
       : e,
   );
   await handle.save({ ...handle.scene, elements: next });
+  await handle.announceAgent(buildAgentActivity(actor, elementId));
 
   return {
     code: EXIT.OK,
