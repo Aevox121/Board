@@ -10,7 +10,7 @@
  * 就地编辑（自研画布层增量4）：双击卡片正文进入编辑，文本域改 `draft`，
  * 失焦 / Ctrl+Enter 提交（经 `onCommit` 写回场景），Esc 取消。
  */
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { memo, useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { Style, TextElement } from '@board/core';
 import { useBoard } from '../board/BoardContext';
 import { cardRotation } from './util';
@@ -48,7 +48,7 @@ export interface TextCardProps {
   onEditingChange?: (editing: boolean) => void;
 }
 
-export function TextCard({
+function TextCardImpl({
   element,
   onCommit,
   onResize,
@@ -248,3 +248,17 @@ export function TextCard({
     </div>
   );
 }
+
+/**
+ * 性能优化：跳过 OverlayLayer 高频重渲染（viewport / selection / drag）。
+ * scene 改动经 useBoard 内部触发的重渲染 memo 拦不住，但 scene 变化频率
+ * 远低于 viewport 变化，跳掉后者已是大头。
+ */
+export const TextCard = memo(TextCardImpl, (prev, next) => {
+  if (prev.element !== next.element) return false;
+  if (prev.editing !== next.editing) return false;
+  if (prev.onCommit !== next.onCommit) return false;
+  if (prev.onResize !== next.onResize) return false;
+  if (prev.onEditingChange !== next.onEditingChange) return false;
+  return true;
+});

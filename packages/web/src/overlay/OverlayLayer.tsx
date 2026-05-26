@@ -1409,7 +1409,9 @@ export function OverlayLayer({
   //    （不漏渲染）；旋转 45° 的小元素几乎不会被裁掉。
   //  - 连线 / 建议层另由 ConnectorLayer / SuggestionLayer 渲染，不受此影响；
   //    它们按 id 引用本层元素，off-screen 引用解析仍然有效。
-  const VIRTUALIZATION_THRESHOLD = 80;
+  // 虚拟化阈值：超过此值才按视口筛元素。原 80 偏高（30+ markdown 卡场景
+  // 不触发虚拟化），降到 20 让中等量场景也吃到收益。
+  const VIRTUALIZATION_THRESHOLD = 20;
   const VIEWPORT_PAD_PX = 200;
   // surfaceSize：rootRef 当前像素尺寸，由 ResizeObserver 跟随。
   const [surfaceSize, setSurfaceSize] = useState<{ width: number; height: number }>(
@@ -5513,6 +5515,7 @@ export function OverlayLayer({
                 <FileCard
                   element={el}
                   missing={missingFileIds.has(el.id)}
+                  zoom={zoom}
                   editing={editingFileId === el.id}
                   onEditingChange={(next) =>
                     setEditingFileId(next ? el.id : null)

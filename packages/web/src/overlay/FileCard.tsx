@@ -17,7 +17,7 @@
  * 仅 text/* 系（md / csv / 纯文本）+ 非缺失 + 可预览的文件支持编辑，
  * 是否允许由 `isFileEditable()` 判定，OverlayLayer 据此决定是否触发编辑。
  */
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import type { FileElement } from '@board/core';
 import { fileContentUrl, fetchFileText } from '../server/files';
 import { writeFileText } from '../server/client';
@@ -42,7 +42,19 @@ export interface FileCardProps {
   editing?: boolean;
   /** 用户按 Esc / 失焦 / Ctrl+Enter 退出编辑时通知调用方清状态。 */
   onEditingChange?: (editing: boolean) => void;
+  /**
+   * 当前画布缩放（LOD 用）—— 当 zoom × element.height 小于阈值时，回退
+   * 到卡片态渲染（避免把不可读的 markdown 全 DOM 化），显著降低多卡场景
+   * 的 layout / paint 开销。
+   */
+  zoom?: number;
 }
+
+/**
+ * LOD（level of detail）阈值 —— file 元素 displayMode='preview' 且在屏幕
+ * 上的高度 < 此值时，渲染降级为卡片态。读者也读不清字，DOM 渲全是浪费。
+ */
+const LOW_DETAIL_HEIGHT_PX = 200;
 
 /** 纯文本预览截取的字符上限 —— 卡片只需片段。 */
 const TEXT_SNIPPET_LIMIT = 800;
@@ -111,11 +123,12 @@ function mimeLabel(mime: string): string {
   return tail.toUpperCase();
 }
 
-export function FileCard({
+function FileCardImpl({
   element,
   missing,
   editing: editingProp,
   onEditingChange,
+  zoom = 1,
 }: FileCardProps): JSX.Element {
   const { scene, requestNavigateToElement } = useBoard();
   const { path, mime, size, previewable } = element;
@@ -378,7 +391,11 @@ export function FileCard({
   // 显示模式（PRD §6.4 三种模式手动切换）—— 缺字段时默认 'preview'，保持
   // 与本组件历史观感（"先试预览，不行再卡片态"）一致。'card' = 强制只显
   // 元信息，'icon' = 紧凑图标态。
-  const mode = element.displayMode ?? 'preview';
+  // LOD：'preview' 模式但屏幕高度 < 阈值时，强制降级为卡片态。
+  const rawMode = element.displayMode ?? 'preview';
+  const screenH = element.height * zoom;
+  const mode =
+    rawMode === 'preview' && screenH < LOW_DETAIL_HEIGHT_PX ? 'card' : rawMode;
 
   // ── 图标态：紧凑一行 ────────────────────────────────────────
   if (mode === 'icon') {
@@ -560,3 +577,25 @@ export function FileCard({
     </div>
   );
 }
+
+/**
+ * 性能优化：浅比较 props 跳过无关重渲染。
+ *
+ * 触发重渲染的事件主要是 OverlayLayer 的 viewport / selection / drag 状态
+ * 变化 —— 这些都不传到 FileCard，所以 props 不变 → memo 跳过。同时 zoom
+ * 离散化到 0.05 粒度后，小范围缩放不会重算 LOD（避免缩放手势抖动反复
+ * 切换 preview / card 模式）。
+ *
+ * scene 变化（任意元素更新）仍会经 useBoard() 内部触发重渲染，memo 无法
+ * 拦截 —— 但相比 viewport / selection 高频变化，scene 变化是低频。
+ */
+export const FileCard = memo(FileCardImpl, (prev, next) => {
+  if (prev.element !== next.element) return false;
+  if (prev.missing !== next.missing) return false;
+  if (prev.editing !== next.editing) return false;
+  if (prev.onEditingChange !== next.onEditingChange) return false;
+  // zoom 离散化到 0.05 粒度
+  const pz = Math.round((prev.zoom ?? 1) * 20);
+  const nz = Math.round((next.zoom ?? 1) * 20);
+  return pz === nz;
+});
