@@ -155,25 +155,50 @@ export function createBoardsManager(
       if (runtimes.size <= 1) {
         throw new Error('至少要保留一个 board，不能删最后一个');
       }
+
+      // 先关 runtime（释放 watcher + ws + 定时器），再等一会儿让 Windows
+      // 完成 chokidar 文件句柄释放（Windows 上 watcher.close() 返回后偶发
+      // 仍握句柄几十 ms，导致 rename EBUSY）。
       await rt.close();
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+
+      // .board 移到 _trash/<timestamp>-<basename>。重试 3 次带退避 —— 修
+      // Windows 句柄释放延迟引发的 EBUSY / EPERM。
+      const trashRoot = join(boardsRoot, '_trash');
+      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      const target = join(trashRoot, `${ts}-${basename(rt.dir)}`);
+      let renameErr: unknown = null;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          await mkdir(trashRoot, { recursive: true });
+          await rename(rt.dir, target);
+          renameErr = null;
+          break;
+        } catch (err) {
+          renameErr = err;
+          if (attempt < 2) {
+            await new Promise<void>((resolve) =>
+              setTimeout(resolve, 250 * (attempt + 1)),
+            );
+          }
+        }
+      }
+
+      // 关键：rename 成功后才从 Map 移除，保证"Map 状态"与"磁盘状态"一致。
+      // 即便 rename 失败，runtime 已停 → 同时从 Map 移除避免悬挂（用户重试
+      // 也是新一轮独立的尝试，没必要保留死掉的 runtime）。
       runtimes.delete(id);
       const i = order.indexOf(id);
       if (i >= 0) order.splice(i, 1);
-      // 默认 board 走了 → 顺位递补
-      if (id === defaultId) defaultId = order[0]!;
+      if (id === defaultId && order.length > 0) defaultId = order[0]!;
 
-      // .board 移到 _trash/<timestamp>-<basename> —— 不真删，便于回滚。
-      const trashRoot = join(boardsRoot, '_trash');
-      await mkdir(trashRoot, { recursive: true });
-      const ts = new Date().toISOString().replace(/[:.]/g, '-');
-      const target = join(trashRoot, `${ts}-${basename(rt.dir)}`);
-      try {
-        await rename(rt.dir, target);
-      } catch (err) {
-        // 跨盘 rename 在 Windows 偶发会 EXDEV —— 这里不做 fallback copy，
-        // 让上层暴露错误；boardsRoot 与 _trash 同根理应没事
+      if (renameErr) {
         throw new Error(
-          `移动 ${rt.dir} → _trash 失败: ${err instanceof Error ? err.message : String(err)}`,
+          `已从激活列表移除，但磁盘文件夹未能移入 _trash（多次重试失败，` +
+            `通常是 Windows chokidar 句柄释放延迟）。建议手动 rm 该文件夹` +
+            ` 或重启 server 重新加载该 board。原始错误：${
+              renameErr instanceof Error ? renameErr.message : String(renameErr)
+            }`,
         );
       }
     },
