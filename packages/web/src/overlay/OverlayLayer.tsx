@@ -17,7 +17,7 @@
  *  - 右键：区域 / 背景弹「整理」菜单；右键框选可整理选中文件。
  *  - 橡皮擦删除、样式面板调样式。
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   ArrowHead,
   BoardScene,
@@ -1222,7 +1222,15 @@ export function OverlayLayer({
   onActiveToolChange,
 }: OverlayLayerProps): JSX.Element {
   const { scrollX, scrollY, zoom } = viewport;
-  const { actorId, connection, serverFiles, tasks, replaceScene, meta } = useBoard();
+  const {
+    actorId,
+    connection,
+    serverFiles,
+    tasks,
+    replaceScene,
+    meta,
+    requestNavigateToElement,
+  } = useBoard();
   const participants = meta.participants;
 
   // 连线模式：选中箭头 / 线条工具时为 true —— 卡片停止截获指针（好让箭头能
@@ -1304,6 +1312,18 @@ export function OverlayLayer({
   // 持有最新场景 / 视口，供事件回调（含挂在 window 上的）读取，避免闭包陈旧。
   const sceneRef = useRef(scene);
   sceneRef.current = scene;
+
+  // 给子组件（FileCard 等）的稳定回调 —— useCallback 空 deps 保证引用恒定，
+  // 避免每次重渲都派发新函数 ref 让子组件的 React.memo 失效。
+  // getElements 通过 sceneRef 读最新场景；navigateToElement 直接转发。
+  const getElementsStable = useCallback(
+    (): readonly Element[] => sceneRef.current.elements,
+    [],
+  );
+  const navigateToElementStable = useCallback(
+    (id: string) => requestNavigateToElement(id),
+    [requestNavigateToElement],
+  );
   const viewportRef = useRef(viewport);
   viewportRef.current = viewport;
   const activeToolRef = useRef(activeTool);
@@ -5536,6 +5556,8 @@ export function OverlayLayer({
                   missing={missingFileIds.has(el.id)}
                   zoom={zoom}
                   onResize={(h): void => resizeFileElement(el.id, h)}
+                  getElements={getElementsStable}
+                  navigateToElement={navigateToElementStable}
                   editing={editingFileId === el.id}
                   onEditingChange={(next) =>
                     setEditingFileId(next ? el.id : null)

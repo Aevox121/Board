@@ -18,11 +18,10 @@
  * 是否允许由 `isFileEditable()` 判定，OverlayLayer 据此决定是否触发编辑。
  */
 import { memo, useEffect, useRef, useState } from 'react';
-import type { FileElement } from '@board/core';
+import type { Element, FileElement } from '@board/core';
 import { fileContentUrl, fetchFileText } from '../server/files';
 import { writeFileText } from '../server/client';
 import { toast } from '../components/toast';
-import { useBoard } from '../board/BoardContext';
 import {
   renderMarkdownRich,
   toggleMarkdownTask,
@@ -57,6 +56,16 @@ export interface FileCardProps {
    * OverlayLayer 把新高度写回 element.height。不传则不自适应。
    */
   onResize?: (height: number) => void;
+  /**
+   * 取当前场景的所有元素 —— 用于 markdown 内链 `[[xxx]]` 解析。设计为 ref-
+   * based 稳定函数（OverlayLayer 用 useCallback 包，固定引用），避免每次
+   * 父层重渲都重建 fn 引用击穿 React.memo。
+   */
+  getElements?: () => readonly Element[];
+  /**
+   * 跳转到目标元素的稳定回调（点击 markdown 内链时使用）。
+   */
+  navigateToElement?: (elementId: string) => void;
 }
 
 /**
@@ -154,8 +163,9 @@ function FileCardImpl({
   onEditingChange,
   zoom = 1,
   onResize,
+  getElements,
+  navigateToElement,
 }: FileCardProps): JSX.Element {
-  const { scene, requestNavigateToElement } = useBoard();
   const { path, mime, size, previewable } = element;
   const name = fileBaseName(path);
   const rotation = cardRotation(element.id);
@@ -269,7 +279,9 @@ function FileCardImpl({
    *  + `[[xxx]]` 内链解析。 */
   function applyPreview(text: string, k: 'markdown' | 'csv' | 'plain'): void {
     if (k === 'markdown') {
-      setMarkdownHtml(renderMarkdownRich(text, scene.elements));
+      // getElements 是稳定 fn（OverlayLayer 用 useCallback），调用时拿当前快照
+      const elems = getElements ? getElements() : [];
+      setMarkdownHtml(renderMarkdownRich(text, elems));
     } else if (k === 'csv') {
       setCsvRows(parseCsv(text));
     } else {
@@ -307,7 +319,7 @@ function FileCardImpl({
       if (id) {
         e.preventDefault();
         e.stopPropagation();
-        requestNavigateToElement(id);
+        navigateToElement?.(id);
       }
       return;
     }
@@ -704,11 +716,31 @@ function FileCardImpl({
  * 拦截 —— 但相比 viewport / selection 高频变化，scene 变化是低频。
  */
 export const FileCard = memo(FileCardImpl, (prev, next) => {
-  if (prev.element !== next.element) return false;
+  // element 必须**深度字段比较** —— BoardContext 的 scene 每次 Y.Doc 投影都
+  // 生成新对象引用，浅比较 prev.element !== next.element 永远 false →
+  // memo 形同虚设 → 所有 FileCard 在每帧 viewport 变化时都重渲。
+  // 只比较真正影响 FileCard 渲染的字段。
+  const a = prev.element;
+  const b = next.element;
+  if (
+    a.id !== b.id ||
+    a.path !== b.path ||
+    a.mime !== b.mime ||
+    a.size !== b.size ||
+    a.displayMode !== b.displayMode ||
+    a.previewable !== b.previewable ||
+    a.width !== b.width ||
+    a.height !== b.height ||
+    a.locked !== b.locked ||
+    a.link !== b.link
+  ) {
+    return false;
+  }
   if (prev.missing !== next.missing) return false;
   if (prev.editing !== next.editing) return false;
-  if (prev.onEditingChange !== next.onEditingChange) return false;
-  if (prev.onResize !== next.onResize) return false;
+  // onEditingChange / onResize 是 OverlayLayer 里的内联 arrow function，每次
+  // 重渲都是新 ref 但语义不变（仍把当前 element id 传给同一 resize handler）。
+  // 不比较，避免 memo 被 ref 抖动击穿。
   // zoom 离散化到 0.05 粒度避免缩放手势抖动反复切档
   const pz = Math.round((prev.zoom ?? 1) * 20);
   const nz = Math.round((next.zoom ?? 1) * 20);
