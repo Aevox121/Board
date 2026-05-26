@@ -114,10 +114,18 @@ export function CanvasShell(): JSX.Element {
 
   // 导入 / 首次连接（importTick 自增且 importFit）：把视口聚焦到全部内容。
   // fittedTickRef 保证每个 importTick 只聚焦一次。
+  //
+  // 关键时序：fetchBoard (HTTP) 触发 loadFromServer('initial') 设 fit=true 时，
+  // Y.Doc (ws) 可能尚未把 elements 同步过来 —— 此刻 scene.elements 还是 []，
+  // fitToContent([]) 退回 INITIAL_VIEWPORT 且会标记本 tick 已 fit，后续 Y.Doc
+  // 元素到位时再次触发本 effect 也被跳过。故加 elements.length>0 守门：
+  // 元素未到就不算 fit 过，等元素同步进来后再 fit 一次。空 board 永不 fit
+  // —— 没内容也无可适配。
   const fittedTickRef = useRef(0);
   useEffect(() => {
     if (importTick === 0 || !importFit) return;
     if (importTick === fittedTickRef.current) return;
+    if (scene.elements.length === 0) return;
     fittedTickRef.current = importTick;
     const el = shellRef.current;
     if (!el) return;
