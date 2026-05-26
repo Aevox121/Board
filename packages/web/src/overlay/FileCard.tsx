@@ -65,10 +65,6 @@ const LOD_CARD_MAX_PX = 240;
 
 /** A4 纸比例（1:√2，长边/短边）—— markdown preview 强制此比例（高=宽×√2）。 */
 const A4_RATIO = Math.SQRT2;
-/** ov-file__head 实测高度（含 paddings）—— 用于计算 body 可视高度。 */
-const HEAD_HEIGHT_PX = 40;
-/** ov-file__pager（翻页页脚）实测高度。 */
-const PAGER_HEIGHT_PX = 32;
 
 /** 纯文本预览截取的字符上限 —— 卡片只需片段。 */
 const TEXT_SNIPPET_LIMIT = 800;
@@ -229,42 +225,8 @@ function FileCardImpl({
     if (Math.abs(desired - element.height) > 4) onResize(desired);
   }, [onResize, editing, mode, mime, element.width, element.height]);
 
-  // ── 卡内翻页（markdown 内容超出 body 视窗时分页）────────────────
-  // body 固定高度 = card.height - head - pager；inner wrapper 取真实
-  // scrollHeight，按 body 高度切分页数。translateY 控制当前页位置。
-  const mdBodyRef = useRef<HTMLDivElement | null>(null);
-  const mdInnerRef = useRef<HTMLDivElement | null>(null);
-  const [currentPage, setCurrentPage] = useState(0);
-  const [totalPages, setTotalPages] = useState(1);
-
-  // 测量内容总高度 → 算页数。markdown 渲染完 / 元素宽高变 / 切换文件都触发。
-  useEffect(() => {
-    if (mode !== 'preview') return;
-    if (markdownHtml === null) return;
-    const body = mdBodyRef.current;
-    const inner = mdInnerRef.current;
-    if (!body || !inner) return;
-    const measure = (): void => {
-      const bodyH = body.clientHeight;
-      const contentH = inner.scrollHeight;
-      if (bodyH <= 0 || contentH <= 0) return;
-      const pages = Math.max(1, Math.ceil(contentH / bodyH));
-      setTotalPages((p) => (p === pages ? p : pages));
-      // 当前页越界（如内容删短了）→ 回到末页
-      setCurrentPage((c) => (c >= pages ? pages - 1 : c));
-    };
-    measure();
-    if (typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(measure);
-    ro.observe(body);
-    ro.observe(inner);
-    return () => ro.disconnect();
-  }, [mode, markdownHtml, element.width, element.height]);
-
-  // 文件切换 / 文本变更 → 跳回首页
-  useEffect(() => {
-    setCurrentPage(0);
-  }, [path, rawText]);
+  // markdown body 改为内容上下滚动（overflow:auto，见 .ov-file__md-body
+  // CSS）—— 用户提议：不做翻页，长内容自然滚。
 
   /** 把 rawText 投影到对应预览缓存。markdown 路径同时让 GFM 任务列表可勾
    *  + `[[xxx]]` 内链解析。 */
@@ -586,14 +548,8 @@ function FileCardImpl({
     );
   }
 
-  // ── Markdown：A4 纸比例的卡片 + 内容分页 ────────────────────
+  // ── Markdown：A4 纸比例的卡片 + 内容上下滚动 ─────────────────
   if (isMarkdownMime(mime) && markdownHtml !== null) {
-    // 翻页：body 固定高度 + inner wrapper translateY 切页。
-    const bodyH =
-      element.height - HEAD_HEIGHT_PX - (totalPages > 1 ? PAGER_HEIGHT_PX : 0);
-    const innerOffset = -currentPage * bodyH;
-    const canPrev = currentPage > 0;
-    const canNext = currentPage < totalPages - 1;
     return (
       <div className="ov-card ov-file ov-file--md" style={cardStyle} title={path}>
         <div className="ov-file__head">
@@ -603,53 +559,18 @@ function FileCardImpl({
           <span className="ov-file__name">{name}</span>
         </div>
         <div
-          ref={mdBodyRef}
-          className="ov-file__md-body ov-md ov-file__md-body--paged"
+          className="ov-file__md-body ov-md"
           onPointerDown={handleMarkdownBodyPointerDown}
           onClick={handleMarkdownBodyClick}
-          style={{ height: bodyH > 0 ? bodyH : undefined }}
-        >
-          <div
-            ref={mdInnerRef}
-            className="ov-file__md-inner"
-            style={{ transform: `translateY(${innerOffset}px)` }}
-            // marked 输出为受信内容来源（本地 .board 文件），M2 直接内联。
-            dangerouslySetInnerHTML={{ __html: markdownHtml }}
-          />
-        </div>
-        {totalPages > 1 ? (
-          <div
-            className="ov-file__pager"
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button
-              type="button"
-              className="ov-file__pager-btn"
-              disabled={!canPrev}
-              onClick={() => setCurrentPage((c) => Math.max(0, c - 1))}
-              aria-label="上一页"
-              title="上一页"
-            >
-              ‹
-            </button>
-            <span className="ov-file__pager-pos">
-              {currentPage + 1} / {totalPages}
-            </span>
-            <button
-              type="button"
-              className="ov-file__pager-btn"
-              disabled={!canNext}
-              onClick={() =>
-                setCurrentPage((c) => Math.min(totalPages - 1, c + 1))
-              }
-              aria-label="下一页"
-              title="下一页"
-            >
-              ›
-            </button>
-          </div>
-        ) : null}
+          onWheel={(e) => {
+            // 卡内滚动事件不再上冒到画布，避免触发画布缩放（ctrl+wheel）
+            // 或滚轴平移；同时 overscroll-behavior:contain 防止滚到顶/底
+            // 时仍冒泡。
+            e.stopPropagation();
+          }}
+          // marked 输出为受信内容来源（本地 .board 文件），M2 直接内联。
+          dangerouslySetInnerHTML={{ __html: markdownHtml }}
+        />
       </div>
     );
   }
