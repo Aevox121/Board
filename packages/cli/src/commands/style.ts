@@ -11,11 +11,11 @@
  * 统一样式作用于白板上所有元素：图形 / 连线由 Excalidraw 画布层即时反映，
  * 文件 / 文本 / 区域卡片由 DOM 覆盖层据 strokeColor / backgroundColor 反映。
  */
-import { loadBoard, saveBoard } from '@board/core/node';
 import type { Element, Style, StrokeStyle } from '@board/core';
 import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
+import { openBoard } from '../util/board-io.js';
 
 /** 无 `--actor` / `--agent` 时的默认参与者 id。 */
 const DEFAULT_ACTOR = 'u_local';
@@ -69,7 +69,7 @@ export async function cmdStyle(args: ParsedArgs): Promise<CmdResult> {
   }
 
   const dir = resolveBoardDir(boardPath, args.options.get('board'));
-  const handle = await loadBoard(dir);
+  const handle = await openBoard(dir);
   const target = handle.scene.elements.find((e) => e.id === elementId);
   if (!target) {
     throw new CliError(`未找到元素：${elementId}`, EXIT.NOT_FOUND);
@@ -83,7 +83,7 @@ export async function cmdStyle(args: ParsedArgs): Promise<CmdResult> {
       ? { ...e, style: { ...e.style, ...patch }, updatedBy: actor, updatedAt: ts }
       : e,
   );
-  await saveBoard(dir, handle.meta, { ...handle.scene, elements: next });
+  await handle.save({ ...handle.scene, elements: next });
 
   return {
     code: EXIT.OK,

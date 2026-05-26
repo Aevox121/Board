@@ -7,7 +7,6 @@
  * 连线归 Excalidraw 画布层渲染。两端若都是图形（shape），Web 端会建立
  * Excalidraw 端点绑定 —— 图形移动时连线自动跟随。
  */
-import { loadBoard, saveBoard } from '@board/core/node';
 import {
   createConnectorElement,
   nextZ,
@@ -17,6 +16,7 @@ import {
 import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
+import { openBoard } from '../util/board-io.js';
 
 /** 无 `--actor`/`--agent` 时归属的默认参与者 id。 */
 const DEFAULT_ACTOR = 'u_local';
@@ -50,7 +50,7 @@ export async function cmdConnect(args: ParsedArgs): Promise<CmdResult> {
   }
 
   const dir = resolveBoardDir(boardPath, args.options.get('board'));
-  const handle = await loadBoard(dir);
+  const handle = await openBoard(dir);
   const { scene } = handle;
   const from = scene.elements.find((e) => e.id === fromId);
   const to = scene.elements.find((e) => e.id === toId);
@@ -104,7 +104,7 @@ export async function cmdConnect(args: ParsedArgs): Promise<CmdResult> {
     label,
   });
   scene.elements.push(element);
-  await saveBoard(dir, handle.meta, scene);
+  await handle.save(scene);
 
   return {
     code: EXIT.OK,

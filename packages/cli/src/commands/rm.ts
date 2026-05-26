@@ -9,10 +9,10 @@ import { mkdir, rename } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { removeElement } from '@board/core';
-import { loadBoard, saveBoard } from '@board/core/node';
 import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
+import { openBoard } from '../util/board-io.js';
 
 /** 执行 rm 命令。 */
 export async function cmdRm(args: ParsedArgs): Promise<CmdResult> {
@@ -26,7 +26,7 @@ export async function cmdRm(args: ParsedArgs): Promise<CmdResult> {
   }
 
   const dir = resolveBoardDir(boardPath, args.options.get('board'));
-  const handle = await loadBoard(dir);
+  const handle = await openBoard(dir);
   const { scene } = handle;
   const target = scene.elements.find((e) => e.id === elementId);
   if (!target) {
@@ -44,7 +44,7 @@ export async function cmdRm(args: ParsedArgs): Promise<CmdResult> {
   // 监听该白板的 board-server 会在文件消失瞬间 reconcile，把仍在 board.json
   // 里的该 file 元素当缺失态保留并回写，覆盖掉本次删除。
   const { scene: next, removedRefs } = removeElement(scene, elementId);
-  await saveBoard(dir, handle.meta, next);
+  await handle.save(next);
 
   // file 元素：真实文件移入回收站 .runtime/trash/（可恢复）。
   let trashed: string | null = null;

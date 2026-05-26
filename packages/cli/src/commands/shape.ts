@@ -7,7 +7,6 @@
  * 图形归 Excalidraw 画布层渲染（手绘风方框/圆/菱形）—— Agent 用来画流程图。
  * 手绘（freedraw）不开放给 Agent（PRD §7.2 决策点 10）。
  */
-import { loadBoard, saveBoard } from '@board/core/node';
 import {
   createShapeElement,
   nextZ,
@@ -18,6 +17,7 @@ import {
 import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
+import { openBoard } from '../util/board-io.js';
 import { autoPlace } from '../util/layout.js';
 
 /** 无 `--actor`/`--agent` 时归属的默认参与者 id。 */
@@ -69,7 +69,7 @@ async function shapeAdd(args: ParsedArgs): Promise<CmdResult> {
   }
 
   const dir = resolveBoardDir(boardPath, args.options.get('board'));
-  const handle = await loadBoard(dir);
+  const handle = await openBoard(dir);
   const { scene } = handle;
   const actor =
     args.options.get('actor') ?? args.options.get('agent') ?? DEFAULT_ACTOR;
@@ -127,7 +127,7 @@ async function shapeAdd(args: ParsedArgs): Promise<CmdResult> {
     label,
   });
   scene.elements.push(element);
-  await saveBoard(dir, handle.meta, scene);
+  await handle.save(scene);
 
   return {
     code: EXIT.OK,

@@ -3,11 +3,11 @@
  *
  * 评论存于元素的 `comments` 字段；评论者身份取 `--actor` / `--agent`。
  */
-import { loadBoard, saveBoard } from '@board/core/node';
 import type { ElementComment, Element } from '@board/core';
 import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
+import { openBoard } from '../util/board-io.js';
 
 /** 无 `--actor` / `--agent` 时的默认参与者 id。 */
 const DEFAULT_ACTOR = 'u_local';
@@ -28,7 +28,7 @@ export async function cmdComment(args: ParsedArgs): Promise<CmdResult> {
   }
 
   const dir = resolveBoardDir(boardPath, args.options.get('board'));
-  const handle = await loadBoard(dir);
+  const handle = await openBoard(dir);
   const target = handle.scene.elements.find((e) => e.id === elementId);
   if (!target) {
     throw new CliError(`未找到元素：${elementId}`, EXIT.NOT_FOUND);
@@ -52,7 +52,7 @@ export async function cmdComment(args: ParsedArgs): Promise<CmdResult> {
         }
       : e,
   );
-  await saveBoard(dir, handle.meta, { ...handle.scene, elements: next });
+  await handle.save({ ...handle.scene, elements: next });
 
   return {
     code: EXIT.OK,

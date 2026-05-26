@@ -11,7 +11,6 @@
  *  - `--reason` —— 建议理由（为什么这么改）；**只展示、同意时不并入目标**，可选。
  *  - `--actor` / `--agent` —— 发起建议的 Agent id（默认 `a_agent`）。
  */
-import { loadBoard, saveBoard } from '@board/core/node';
 import {
   createSuggestionElement,
   createTextElement,
@@ -24,6 +23,7 @@ import {
 import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
+import { openBoard } from '../util/board-io.js';
 
 /** 无 `--actor` / `--agent` 时建议归属的默认 Agent id。 */
 const DEFAULT_AGENT = 'a_agent';
@@ -73,7 +73,7 @@ export async function cmdSuggest(args: ParsedArgs): Promise<CmdResult> {
   const reason = args.options.get('reason') ?? '';
 
   const dir = resolveBoardDir(boardPath, args.options.get('board'));
-  const handle = await loadBoard(dir);
+  const handle = await openBoard(dir);
   const { scene } = handle;
 
   // 目标元素必须存在
@@ -116,7 +116,7 @@ export async function cmdSuggest(args: ParsedArgs): Promise<CmdResult> {
   });
 
   scene.elements.push(suggestion);
-  await saveBoard(dir, handle.meta, scene);
+  await handle.save(scene);
 
   return {
     code: EXIT.OK,

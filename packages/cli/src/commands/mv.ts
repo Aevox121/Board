@@ -11,11 +11,12 @@
 import { mkdir, rename, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
-import { loadBoard, saveBoard, listBoardFiles } from '@board/core/node';
+import { listBoardFiles } from '@board/core/node';
 import { reconcileFiles, normalizePath } from '@board/core';
 import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
+import { openBoard } from '../util/board-io.js';
 
 /** M2 默认参与者 id —— 无 `--actor` 时归属于此。 */
 const DEFAULT_ACTOR = 'u_local';
@@ -62,7 +63,7 @@ export async function cmdMv(args: ParsedArgs): Promise<CmdResult> {
   assertNoDotDot(to, '目标相对路径');
 
   const dir = resolveBoardDir(boardPath, args.options.get('board'));
-  const handle = await loadBoard(dir);
+  const handle = await openBoard(dir);
 
   // 防目录穿越：解析后必须仍落在 files/ 内
   const filesRoot = join(dir, 'files');
@@ -96,7 +97,7 @@ export async function cmdMv(args: ParsedArgs): Promise<CmdResult> {
   const diskFiles = await listBoardFiles(dir);
   const actor = args.options.get('actor') ?? DEFAULT_ACTOR;
   const result = reconcileFiles({ scene: handle.scene, diskFiles, actor });
-  await saveBoard(dir, handle.meta, result.scene);
+  await handle.save(result.scene);
 
   return {
     code: EXIT.OK,

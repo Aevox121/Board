@@ -13,7 +13,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadBoard, saveBoard } from '@board/core/node';
 import {
   createRegionElement,
   nextZ,
@@ -24,6 +23,7 @@ import {
 import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
+import { openBoard } from '../util/board-io.js';
 
 /** 区域横向平铺时的间隙。 */
 const REGION_GAP = 56;
@@ -72,7 +72,7 @@ async function regionCreate(args: ParsedArgs): Promise<CmdResult> {
   validateRegionName(regionName);
 
   const dir = resolveBoardDir(boardPath, args.options.get('board'));
-  const handle = await loadBoard(dir);
+  const handle = await openBoard(dir);
   const { scene } = handle;
 
   // 区域重名检查（规格 §1.4 退出码 4）
@@ -126,7 +126,7 @@ async function regionCreate(args: ParsedArgs): Promise<CmdResult> {
   });
 
   scene.elements.push(element);
-  await saveBoard(dir, handle.meta, scene);
+  await handle.save(scene);
 
   return {
     code: EXIT.OK,
@@ -150,7 +150,7 @@ async function regionCreate(args: ParsedArgs): Promise<CmdResult> {
  */
 async function regionLs(args: ParsedArgs): Promise<CmdResult> {
   const dir = resolveBoardDir(args.positionals[0], args.options.get('board'));
-  const handle = await loadBoard(dir);
+  const handle = await openBoard(dir);
   const regions = regionsOf(handle.scene.elements);
 
   // 归属显示：优先取 participants 里的 name，找不到就回退到 id；无归属 = `（公共）`。
@@ -202,7 +202,7 @@ async function regionOwn(args: ParsedArgs): Promise<CmdResult> {
   }
 
   const dir = resolveBoardDir(boardPath, args.options.get('board'));
-  const handle = await loadBoard(dir);
+  const handle = await openBoard(dir);
   const region = regionsOf(handle.scene.elements).find(
     (r) => r.label === regionName || r.path === regionName,
   );
@@ -224,7 +224,7 @@ async function regionOwn(args: ParsedArgs): Promise<CmdResult> {
       ? { ...e, ownerId: nextOwnerId, updatedBy: actor, updatedAt: ts }
       : e,
   );
-  await saveBoard(dir, handle.meta, { ...handle.scene, elements: next });
+  await handle.save({ ...handle.scene, elements: next });
 
   const ownerLabel =
     nextOwnerId === null
@@ -261,7 +261,7 @@ async function regionDescribe(args: ParsedArgs): Promise<CmdResult> {
   }
 
   const dir = resolveBoardDir(boardPath, args.options.get('board'));
-  const handle = await loadBoard(dir);
+  const handle = await openBoard(dir);
   const region = regionsOf(handle.scene.elements).find(
     (r) => r.label === regionName || r.path === regionName,
   );
@@ -276,7 +276,7 @@ async function regionDescribe(args: ParsedArgs): Promise<CmdResult> {
       ? { ...e, description: desc, updatedBy: actor, updatedAt: ts }
       : e,
   );
-  await saveBoard(dir, handle.meta, { ...handle.scene, elements: next });
+  await handle.save({ ...handle.scene, elements: next });
   // 区域描述同步落地为文件夹 README.md。
   await writeFile(join(dir, 'files', region.path, 'README.md'), desc, 'utf8');
 
@@ -310,7 +310,7 @@ async function regionAssign(args: ParsedArgs): Promise<CmdResult> {
   }
 
   const dir = resolveBoardDir(boardPath, args.options.get('board'));
-  const handle = await loadBoard(dir);
+  const handle = await openBoard(dir);
   const region = regionsOf(handle.scene.elements).find(
     (r) => r.label === regionName || r.path === regionName,
   );
@@ -325,7 +325,7 @@ async function regionAssign(args: ParsedArgs): Promise<CmdResult> {
       ? { ...e, assignedAgentId: agent, updatedBy: actor, updatedAt: ts }
       : e,
   );
-  await saveBoard(dir, handle.meta, { ...handle.scene, elements: next });
+  await handle.save({ ...handle.scene, elements: next });
 
   return {
     code: EXIT.OK,

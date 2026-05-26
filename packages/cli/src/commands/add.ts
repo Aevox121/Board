@@ -9,12 +9,7 @@
 import { cp, copyFile, mkdir, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { basename, isAbsolute, join, resolve } from 'node:path';
-import {
-  loadBoard,
-  saveBoard,
-  listBoardFiles,
-  type BoardHandle,
-} from '@board/core/node';
+import { listBoardFiles } from '@board/core/node';
 import {
   createTextElement,
   nextZ,
@@ -26,6 +21,7 @@ import {
 import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
+import { openBoard, type BoardSession } from '../util/board-io.js';
 import { autoPlace } from '../util/layout.js';
 
 /** M1/M2 默认参与者 id —— 无 `--actor` 时归属于此。 */
@@ -73,7 +69,7 @@ async function addText(args: ParsedArgs): Promise<CmdResult> {
   }
 
   const dir = resolveBoardDir(boardPath, args.options.get('board'));
-  const handle = await loadBoard(dir);
+  const handle = await openBoard(dir);
   const { scene } = handle;
 
   const size = defaultSizeFor('text');
@@ -105,7 +101,7 @@ async function addText(args: ParsedArgs): Promise<CmdResult> {
   }
 
   scene.elements.push(element);
-  await saveBoard(dir, handle.meta, scene);
+  await handle.save(scene);
 
   return {
     code: EXIT.OK,
@@ -127,7 +123,7 @@ async function addText(args: ParsedArgs): Promise<CmdResult> {
  */
 function resolveRegionSegment(
   regionOpt: string | undefined,
-  handle: BoardHandle,
+  handle: BoardSession,
 ): string {
   if (regionOpt === undefined) return '';
   const name = regionOpt.trim();
@@ -179,7 +175,7 @@ async function addLocal(
   }
 
   const dir = resolveBoardDir(boardPath, args.options.get('board'));
-  const handle = await loadBoard(dir);
+  const handle = await openBoard(dir);
 
   // 解析本地源路径并校验类型
   const srcAbs = isAbsolute(localPath)
@@ -228,7 +224,7 @@ async function addLocal(
     diskFiles,
     actor,
   });
-  await saveBoard(dir, handle.meta, result.scene);
+  await handle.save(result.scene);
 
   const destRel = regionSeg === '' ? name : `${regionSeg}/${name}`;
   return {
