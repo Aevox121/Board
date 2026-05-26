@@ -63,8 +63,15 @@ export interface FileCardProps {
 const LOD_BLUR_MAX_PX = 100;
 const LOD_CARD_MAX_PX = 240;
 
-/** A4 纸比例（1:√2，长边/短边）—— markdown preview 强制此比例（高=宽×√2）。 */
+/** A4 纸比例（1:√2，长边/短边）—— 短文档 markdown preview 维持纸张观感的下限。 */
 const A4_RATIO = Math.SQRT2;
+/**
+ * LOD 缩小模式下标题的最小屏幕字号 —— card / blur 档时无论 zoom 多小，
+ * 文件名都要至少这么大。CSS 字号 = max(基础字号, MIN / zoom)。
+ */
+const TITLE_MIN_SCREEN_PX = 16;
+/** 卡片态文件名基础字号（与 .ov-file__name css 同步）。 */
+const TITLE_BASE_CSS_PX = 16;
 
 /** 纯文本预览截取的字符上限 —— 卡片只需片段。 */
 const TEXT_SNIPPET_LIMIT = 800;
@@ -214,19 +221,42 @@ function FileCardImpl({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, path, mime, previewable, missing, kind]);
 
-  // ── A4 比例强制（仅 preview + 非编辑态）────────────────────────
-  // markdown 预览强制纸张比例（height = width × √2）。用户拖宽 → 高度跟着
-  // 走；想要不同比例就切到 'card' / 'icon' 模式。偏差超 4px 调 onResize 回写。
+  // ── 自适应高度（autofit）—— 内容多就撑高，避免 body 出 scroll 容器 ─────
+  // 用户反馈：md 预览 overflow:auto 会让 body 单独成层（compositing layer），
+  // bitmap 缩放上去就糊（不像 TextCard 那样跟随 .ov-transform 一起重绘）。
+  // 改成 autofit：body 不滚动，由 ResizeObserver 测内容高度 → onResize 回写
+  // element.height；A4 比例作为 min-height 当下限（短文档保持纸张观感），
+  // 长文档自然撑高，不会糊。
+  //
+  // 仅 preview + 非编辑态 + 父层有 onResize 时启用。
+  const mdBodyRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!onResize || editing) return;
     if (mode !== 'preview') return;
-    if (!isMarkdownMime(mime)) return; // 仅 md，PDF/图片/csv 不受 A4 约束
-    const desired = Math.round(element.width * A4_RATIO);
-    if (Math.abs(desired - element.height) > 4) onResize(desired);
-  }, [onResize, editing, mode, mime, element.width, element.height]);
-
-  // markdown body 改为内容上下滚动（overflow:auto，见 .ov-file__md-body
-  // CSS）—— 用户提议：不做翻页，长内容自然滚。
+    if (!isMarkdownMime(mime)) return;
+    if (markdownHtml === null) return;
+    const body = mdBodyRef.current;
+    if (!body || typeof ResizeObserver === 'undefined') return;
+    const HEAD_H = 40;
+    const minH = Math.round(element.width * A4_RATIO); // A4 当下限
+    const measure = (): void => {
+      const contentH = body.scrollHeight;
+      const desired = Math.max(minH, contentH + HEAD_H);
+      if (Math.abs(desired - element.height) > 4) onResize(desired);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(body);
+    return () => ro.disconnect();
+  }, [
+    onResize,
+    editing,
+    mode,
+    mime,
+    markdownHtml,
+    element.width,
+    element.height,
+  ]);
 
   /** 把 rawText 投影到对应预览缓存。markdown 路径同时让 GFM 任务列表可勾
    *  + `[[xxx]]` 内链解析。 */
@@ -445,9 +475,16 @@ function FileCardImpl({
 
   // mode 已在顶部解析（icon / card / preview / blur 四档，LOD 自动降级）。
 
-  // ── Blur 态：模糊占位块 ────────────────────────────────────
-  // 屏幕高度太小，连卡片信息都看不清；连图标都省，直接渲一片"有内容"
-  // 的视觉提示。DOM 极简，paint 几乎零成本。
+  /** LOD 缩小模式下标题反缩放：CSS 字号 = max(基础, MIN/zoom)；zoom≥1 不
+   *  动。结果在 .ov-transform 缩放后屏幕上至少 TITLE_MIN_SCREEN_PX，恒定可读。 */
+  const titleStyle: React.CSSProperties | undefined =
+    zoom < 1
+      ? { fontSize: Math.max(TITLE_BASE_CSS_PX, TITLE_MIN_SCREEN_PX / zoom) }
+      : undefined;
+
+  // ── Blur 态：模糊占位块 + 反缩放标题 ─────────────────────────
+  // 屏幕高度太小看不清内容，但用户希望仍能看到"这是哪份文档"；叠一层
+  // 反缩放的文件名（屏幕字号恒定 ≥ TITLE_MIN_SCREEN_PX）。
   if (mode === 'blur') {
     return (
       <div
@@ -455,7 +492,11 @@ function FileCardImpl({
         style={cardStyle}
         title={path}
         aria-label={name}
-      />
+      >
+        <span className="ov-file__blur-title" style={titleStyle}>
+          {name}
+        </span>
+      </div>
     );
   }
 
@@ -559,15 +600,10 @@ function FileCardImpl({
           <span className="ov-file__name">{name}</span>
         </div>
         <div
+          ref={mdBodyRef}
           className="ov-file__md-body ov-md"
           onPointerDown={handleMarkdownBodyPointerDown}
           onClick={handleMarkdownBodyClick}
-          onWheel={(e) => {
-            // 卡内滚动事件不再上冒到画布，避免触发画布缩放（ctrl+wheel）
-            // 或滚轴平移；同时 overscroll-behavior:contain 防止滚到顶/底
-            // 时仍冒泡。
-            e.stopPropagation();
-          }}
           // marked 输出为受信内容来源（本地 .board 文件），M2 直接内联。
           dangerouslySetInnerHTML={{ __html: markdownHtml }}
         />
@@ -629,13 +665,16 @@ function FileCardImpl({
 
   // ── 兜底：卡片态（图标 + 文件名 + 元信息）────────────────────
   // 也覆盖「图片加载失败」「文本未取到内容」等降级情形。
+  // 文件名套 titleStyle（LOD 缩小时反缩放确保屏幕字号 ≥ 16px）。
   return (
     <div className="ov-card ov-file ov-file--card" style={cardStyle} title={path}>
       <div className="ov-file__head">
         <span className="ov-file__glyph ov-file__glyph--lg" aria-hidden="true">
           {fileGlyph(mime)}
         </span>
-        <span className="ov-file__name">{name}</span>
+        <span className="ov-file__name" style={titleStyle}>
+          {name}
+        </span>
       </div>
       <div className="ov-file__meta">
         <span>{mimeLabel(mime)}</span>

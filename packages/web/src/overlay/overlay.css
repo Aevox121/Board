@@ -458,10 +458,11 @@
   justify-content: center;
 }
 
-/* Blur 态（LOD：屏幕高度 < LOD_BLUR_MAX_PX）—— 渲染一片模糊横线，让用
+/* Blur 态（LOD：屏幕高度 < LOD_BLUR_MAX_PX）—— 渲染一片模糊横线让用
    户看到"这里有内容"但不去拉文件 / 不渲完整 DOM。视觉提示用 repeating-
    linear-gradient 直接画几条"文字行"，加 blur 滤镜 + 半透，零额外 DOM。
-   缩到看全局时 31 张卡都是这模样，pan/zoom 极致流畅。 */
+   缩到看全局时 31 张卡都是这模样，pan/zoom 极致流畅。叠一层反缩放的
+   文件名让用户能识别这是哪份文档。 */
 .ov-file--blur {
   background:
     repeating-linear-gradient(
@@ -474,8 +475,41 @@
       transparent 16%
     ),
     var(--c-surface, #fffbf3);
-  filter: blur(1px);
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 模糊只作用于背景的伪文字行；标题叠在上面要清晰，故 blur 仅给 ::before
+     而不给整个容器。 */
+}
+
+.ov-file--blur::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: inherit;
+  filter: blur(1.5px);
   opacity: 0.9;
+  pointer-events: none;
+}
+
+/* 反缩放标题层 —— LOD 缩小时屏幕字号恒定 ≥ TITLE_MIN_SCREEN_PX，由
+   JSX 计算 CSS font-size = max(base, MIN/zoom) 内联给到这个元素。 */
+.ov-file__blur-title {
+  position: relative; /* 高于 ::before */
+  font-family: var(--font-hand);
+  font-weight: 500;
+  color: var(--c-ink);
+  line-height: 1.2;
+  text-align: center;
+  padding: 8px 12px;
+  /* 文件名过长截断，多行省略 */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
 }
 
 /* 图标态（PRD §6.4 三种模式）：紧凑一行，仅 glyph + 文件名；不撑高，不
@@ -534,11 +568,11 @@
 .ov-file__md-body {
   flex: 1 1 auto;
   min-height: 0;
-  overflow: auto;
-  /* overscroll-behavior:contain —— 卡内滚动到顶/底时阻止 wheel 事件继续
-     冒泡到画布（否则画布会响应触发缩放 / 平移）。配合 JSX 里 onWheel
-     stopPropagation 双保险。 */
-  overscroll-behavior: contain;
+  /* overflow:visible —— 不要 scroll 容器，避免 body 成独立 compositing
+     layer（bitmap 缩放上去会糊）。内容多就撑高 body，ResizeObserver 测
+     scrollHeight 回写 element.height 让 slot 跟着变高，保持跟 .ov-transform
+     同层重绘，缩放清晰不糊。 */
+  overflow: visible;
   padding: var(--space-2) var(--space-3);
   /* 文件预览正文走衬线体（思源宋体优先，回退系统 Songti/STSong/SimSun）——
      md / txt / csv 阅读首选；代码块 / inline code 在 .ov-md code / pre 规则
