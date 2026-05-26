@@ -545,15 +545,69 @@
   color: var(--c-ink);
 }
 
-/* 自适应高度模式：md body 不再滚动 / 不限高度，由内容自然撑开；
-   ResizeObserver 测得 scrollHeight 后由 OverlayLayer 回写 element.height
-   让 slot 跟着变高。配合 ov-file--autofit 同步解除 ov-card 的 height 限制。 */
-.ov-file--autofit {
-  height: auto !important; /* 覆盖 cardStyle 内联 height */
+/* 分页模式（A4 比例 markdown 预览）—— body 固定高度 + overflow:hidden，
+   inner wrapper 取自然高度，由 translateY 切到当前页。 */
+.ov-file__md-body--paged {
+  overflow: hidden !important;
+  padding: 0; /* padding 移到 inner，避免影响 translateY 计算 */
+  position: relative;
 }
 
-.ov-file--autofit .ov-file__md-body {
-  overflow: visible;
+.ov-file__md-inner {
+  padding: var(--space-2) var(--space-3);
+  /* 不受 body 高度约束，自然撑开；body overflow:hidden 裁住 */
+  transition: transform 160ms ease-out;
+  will-change: transform;
+}
+
+/* 页脚翻页控件 —— 居中页码 + 左右箭头按钮。pointer-events 在 ov-card 上是 auto，
+   按钮自身 stopPropagation 阻断 slot 拖拽。 */
+.ov-file__pager {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: 4px var(--space-2);
+  border-top: 1px solid var(--c-border);
+  background: var(--c-surface-sunken, #f6f4ec);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  color: var(--c-ink);
+  user-select: none;
+}
+
+.ov-file__pager-btn {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  color: var(--c-ink);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+}
+
+.ov-file__pager-btn:hover:not(:disabled) {
+  background: var(--c-surface, #fffbf3);
+  border-color: var(--c-accent);
+}
+
+.ov-file__pager-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.ov-file__pager-pos {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+  min-width: 44px;
+  text-align: center;
 }
 
 /* ── 共用 Markdown 排版（.ov-md）─────────────────────────────

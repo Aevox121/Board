@@ -20,7 +20,9 @@ export interface Rect extends Size {
 export const DEFAULT_SIZES = {
   fileIcon: { width: 120, height: 40 },
   fileCard: { width: 220, height: 120 },
-  filePreview: { width: 320, height: 240 },
+  /** A4 纸比例（1:√2）—— markdown 文件预览渲染为固定纸张比例，超出做卡
+   *  内翻页。width=320，height=320×√2≈452。 */
+  filePreview: { width: 320, height: 452 },
   folder: { width: 200, height: 64 },
   region: { width: 480, height: 320 },
   text: { width: 280, height: 120 },
