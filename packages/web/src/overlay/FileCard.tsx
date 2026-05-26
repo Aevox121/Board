@@ -245,13 +245,17 @@ function FileCardImpl({
   // element.height；A4 比例作为 min-height 当下限（短文档保持纸张观感），
   // 长文档自然撑高，不会糊。
   //
-  // 仅 preview + 非编辑态 + 父层有 onResize 时启用。
+  // 仅 preview + 非编辑态 + 父层有 onResize + autoPlaced=true 时启用。
+  // autoPlaced=false 表示用户手动 resize 过 → autofit 退场让用户在管尺寸，
+  // 否则用户拽小高度立刻被 autofit 弹回来 → 完全没法调。
   const mdBodyRef = useRef<HTMLDivElement | null>(null);
+  const userSized = element.autoPlaced === false;
   useEffect(() => {
     if (!onResize || editing) return;
     if (mode !== 'preview') return;
     if (!isMarkdownMime(mime)) return;
     if (markdownHtml === null) return;
+    if (userSized) return; // 用户在管尺寸，autofit 退场
     const body = mdBodyRef.current;
     if (!body || typeof ResizeObserver === 'undefined') return;
     const HEAD_H = 40;
@@ -271,6 +275,7 @@ function FileCardImpl({
     mode,
     mime,
     markdownHtml,
+    userSized,
     element.width,
     element.height,
   ]);
@@ -620,9 +625,21 @@ function FileCardImpl({
         </div>
         <div
           ref={mdBodyRef}
-          className="ov-file__md-body ov-md"
+          className={
+            'ov-file__md-body ov-md' +
+            (userSized ? ' ov-file__md-body--scrollable' : '')
+          }
           onPointerDown={handleMarkdownBodyPointerDown}
           onClick={handleMarkdownBodyClick}
+          onWheel={
+            userSized
+              ? (e): void => {
+                  // 用户管尺寸 → body 是 scroll 容器，wheel 上冒到画布会
+                  // 触发画布平移 / 缩放；卡内滚动应留给卡。
+                  e.stopPropagation();
+                }
+              : undefined
+          }
           // marked 输出为受信内容来源（本地 .board 文件），M2 直接内联。
           dangerouslySetInnerHTML={{ __html: markdownHtml }}
         />
@@ -732,7 +749,8 @@ export const FileCard = memo(FileCardImpl, (prev, next) => {
     a.width !== b.width ||
     a.height !== b.height ||
     a.locked !== b.locked ||
-    a.link !== b.link
+    a.link !== b.link ||
+    a.autoPlaced !== b.autoPlaced
   ) {
     return false;
   }

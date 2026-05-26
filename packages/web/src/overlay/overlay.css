@@ -568,10 +568,12 @@
 .ov-file__md-body {
   flex: 1 1 auto;
   min-height: 0;
-  /* overflow:visible —— 不要 scroll 容器，避免 body 成独立 compositing
-     layer（bitmap 缩放上去会糊）。内容多就撑高 body，ResizeObserver 测
-     scrollHeight 回写 element.height 让 slot 跟着变高，保持跟 .ov-transform
-     同层重绘，缩放清晰不糊。 */
+  /* overflow:visible —— 默认不要 scroll 容器（避免 body 成独立 compositing
+     layer，bitmap 缩放糊）。内容多就由 autofit 撑高 body+slot，保持跟
+     .ov-transform 同层重绘，缩放清晰不糊。
+     用户手动 resize 过的卡片（autoPlaced=false）切到 --scrollable 变体，
+     用 overflow:auto 让长内容可滚 —— 代价是 user-sized 卡片在大缩放下会
+     轻微糊（compositing layer 副作用），但用户既然手动管尺寸了，接受。 */
   overflow: visible;
   padding: var(--space-2) var(--space-3);
   /* 文件预览正文走衬线体（思源宋体优先，回退系统 Songti/STSong/SimSun）——
@@ -581,6 +583,12 @@
   font-size: var(--text-sm);
   line-height: 1.5;
   color: var(--c-ink);
+}
+
+/* user-sized 卡片：autofit 退场，body 接管滚动 —— autoPlaced=false 触发。 */
+.ov-file__md-body--scrollable {
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 
 /* ── 共用 Markdown 排版（.ov-md）─────────────────────────────
