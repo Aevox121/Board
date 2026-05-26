@@ -74,6 +74,16 @@ export function BoardSwitcher(): JSX.Element | null {
     })();
   }, [open]);
 
+  // Escape 关闭模态 —— 必须在所有早返之前调用（React Hooks 规则）。
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open]);
+
   if (boards === null || boards.length === 0) return null;
 
   const activeId = activeBoardId();
@@ -118,16 +128,6 @@ export function BoardSwitcher(): JSX.Element | null {
       if (mountedRef.current) setBusy(false);
     }
   }
-
-  // Escape 关闭模态。
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setOpen(false);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open]);
 
   return (
     <>
