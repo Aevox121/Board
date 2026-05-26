@@ -97,7 +97,7 @@ export async function cmdMv(args: ParsedArgs): Promise<CmdResult> {
   const result = reconcileFiles({ scene: handle.scene, diskFiles, actor });
   await handle.save(result.scene);
   // 移动通常重定位某个 file 元素 —— 用 moved[0] 作 Agent presence 锚点。
-  await handle.announceAgent(buildAgentActivity(actor, result.moved[0]));
+  await handle.announceAgent(buildAgentActivity(args, actor, result.moved[0]));
 
   return {
     code: EXIT.OK,

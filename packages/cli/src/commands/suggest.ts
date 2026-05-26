@@ -117,7 +117,7 @@ export async function cmdSuggest(args: ParsedArgs): Promise<CmdResult> {
 
   scene.elements.push(suggestion);
   await handle.save(scene);
-  await handle.announceAgent(buildAgentActivity(actor, suggestion.id));
+  await handle.announceAgent(buildAgentActivity(args, actor, suggestion.id));
 
   return {
     code: EXIT.OK,

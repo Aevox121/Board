@@ -100,7 +100,7 @@ async function addText(args: ParsedArgs): Promise<CmdResult> {
 
   scene.elements.push(element);
   await handle.save(scene);
-  await handle.announceAgent(buildAgentActivity(actor, element.id));
+  await handle.announceAgent(buildAgentActivity(args, actor, element.id));
 
   return {
     code: EXIT.OK,
@@ -225,7 +225,7 @@ async function addLocal(
   });
   await handle.save(result.scene);
   // 用首个新增的 file 元素作 Agent presence 锚点;reconcile 没新增就不传 target。
-  await handle.announceAgent(buildAgentActivity(actor, result.added[0]));
+  await handle.announceAgent(buildAgentActivity(args, actor, result.added[0]));
 
   const destRel = regionSeg === '' ? name : `${regionSeg}/${name}`;
   return {

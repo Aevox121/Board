@@ -47,7 +47,7 @@ export async function cmdRm(args: ParsedArgs): Promise<CmdResult> {
   const { scene: next, removedRefs } = removeElement(scene, elementId);
   await handle.save(next);
   // 元素已删,没有锚点元素;announceAgent 不带 targetElementId,Web 端只显头像无轨道动画。
-  await handle.announceAgent(buildAgentActivity(resolveActor(args)));
+  await handle.announceAgent(buildAgentActivity(args, resolveActor(args)));
 
   // file 元素：真实文件移入回收站 .runtime/trash/（可恢复）。
   let trashed: string | null = null;

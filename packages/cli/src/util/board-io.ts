@@ -69,6 +69,9 @@ export async function openBoard(dir: string): Promise<BoardSession> {
   return openViaFs(handle);
 }
 
+/** 同一进程内只对"忘了报家门"提示一次,避免一条命令多次写盘时刷屏。 */
+let agentHintShown = false;
+
 async function openViaServer(
   dir: string,
   server: ServerHandle,
@@ -86,6 +89,23 @@ async function openViaServer(
       await server.refresh(actor);
     },
     async announceAgent(opts: AgentActivityInput): Promise<void> {
+      // server 在跑 + 写命令归属默认 u_local → 大概率是 Agent 调用却忘了
+      // 自报家门;打一行 stderr 让 Agent 看见。设 BOARD_SUPPRESS_AGENT_HINT=1
+      // 关掉(适合知道自己是人类、确认不想要光标的本地用户)。
+      if (
+        !opts.actorId.startsWith('a_') &&
+        !agentHintShown &&
+        !process.env.BOARD_SUPPRESS_AGENT_HINT
+      ) {
+        agentHintShown = true;
+        console.error(
+          '[board] 注意:本次操作归属 u_local(默认本地用户)。\n' +
+            '       如你是 Agent,务必自报家门 —— 用 --actor a_<你的标识>\n' +
+            '       [--agent-name "<显示名>"] [--agent-color "#xxxxxx"],\n' +
+            '       Web 端才能看到拟人化光标 + 头像。\n' +
+            '       (设 BOARD_SUPPRESS_AGENT_HINT=1 关闭此提示)',
+        );
+      }
       await server.agentActivity(opts);
     },
   };

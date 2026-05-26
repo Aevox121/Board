@@ -82,7 +82,7 @@ export async function cmdStyle(args: ParsedArgs): Promise<CmdResult> {
       : e,
   );
   await handle.save({ ...handle.scene, elements: next });
-  await handle.announceAgent(buildAgentActivity(actor, elementId));
+  await handle.announceAgent(buildAgentActivity(args, actor, elementId));
 
   return {
     code: EXIT.OK,

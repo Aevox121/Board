@@ -125,7 +125,7 @@ async function regionCreate(args: ParsedArgs): Promise<CmdResult> {
 
   scene.elements.push(element);
   await handle.save(scene);
-  await handle.announceAgent(buildAgentActivity(actor, element.id));
+  await handle.announceAgent(buildAgentActivity(args, actor, element.id));
 
   return {
     code: EXIT.OK,
@@ -224,7 +224,7 @@ async function regionOwn(args: ParsedArgs): Promise<CmdResult> {
       : e,
   );
   await handle.save({ ...handle.scene, elements: next });
-  await handle.announceAgent(buildAgentActivity(actor, region.id));
+  await handle.announceAgent(buildAgentActivity(args, actor, region.id));
 
   const ownerLabel =
     nextOwnerId === null
@@ -277,7 +277,7 @@ async function regionDescribe(args: ParsedArgs): Promise<CmdResult> {
       : e,
   );
   await handle.save({ ...handle.scene, elements: next });
-  await handle.announceAgent(buildAgentActivity(actor, region.id));
+  await handle.announceAgent(buildAgentActivity(args, actor, region.id));
   // 区域描述同步落地为文件夹 README.md。
   await writeFile(join(dir, 'files', region.path, 'README.md'), desc, 'utf8');
 
@@ -327,7 +327,7 @@ async function regionAssign(args: ParsedArgs): Promise<CmdResult> {
       : e,
   );
   await handle.save({ ...handle.scene, elements: next });
-  await handle.announceAgent(buildAgentActivity(actor, region.id));
+  await handle.announceAgent(buildAgentActivity(args, actor, region.id));
 
   return {
     code: EXIT.OK,

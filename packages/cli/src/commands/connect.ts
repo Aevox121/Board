@@ -103,7 +103,7 @@ export async function cmdConnect(args: ParsedArgs): Promise<CmdResult> {
   });
   scene.elements.push(element);
   await handle.save(scene);
-  await handle.announceAgent(buildAgentActivity(actor, element.id));
+  await handle.announceAgent(buildAgentActivity(args, actor, element.id));
 
   return {
     code: EXIT.OK,

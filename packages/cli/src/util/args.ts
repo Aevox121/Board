@@ -91,6 +91,8 @@ export const GLOBAL_VALUE_KEYS: ReadonlySet<string> = new Set([
   'parent',
   'size',
   'agent',
+  'agent-name',
+  'agent-color',
   'owner',
   'line',
   'markdown',

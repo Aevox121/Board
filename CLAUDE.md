@@ -70,6 +70,26 @@ packages/
 - MCP Server 提供与 CLI 等价的工具集；直接改 `.board` 文件夹为备选路径（仅内容类操作）。
 - 内容类操作有文件系统对应物；画布类操作（图形/连线/定位/样式/进度/建议）只能经 CLI/MCP。
 
+#### Agent 自报家门（**必读 — 涉及拟人化光标 / 协作可见性**）
+
+任何 AI Agent（Claude Code / Codex / Cursor / 子 Agent...）用 `board` CLI 做**写操作**时必须自报身份，否则 Web 端的协作者看不到你的拟人化光标 / 头像 / 操作动画 —— 写操作"无声"发生、人不知道是你干的，会破坏 PRD §8.2 的协作体验。
+
+写命令格式：
+```bash
+board <写命令> ... \
+  --actor a_<你的标识>           # 必填，a_ 开头（server 端硬约束）
+  --agent-name "<显示名>" \      # 可选，默认显示 actor id
+  --agent-color "#xxxxxx"        # 可选，默认蓝色 #1971C2
+```
+
+涉及的写命令：`add` / `shape` / `connect` / `region create|describe|assign|own` / `mv` / `rm` / `style` / `comment` / `suggest`。
+
+`actor` 解析优先级（高 → 低）：`--actor` > `--agent` > `BOARD_AGENT_ID` env > `u_local`（兜底人类用户）。`--agent-name` / `--agent-color` 同理可读 `BOARD_AGENT_NAME` / `BOARD_AGENT_COLOR` env。**不推荐让 Agent 仰赖 env**：env 易漂移、跨进程难追踪，自己每次显式带 `--actor` 才是契约清晰的做法。
+
+标识建议：`a_claude_code` / `a_codex` / `a_cursor` / `a_<工具名>_<会话短ID>`。颜色按工具固定区分（Claude 紫、Codex 橙、Cursor 绿等）。
+
+server 在跑时若 CLI 默认归属 `u_local`，会往 stderr 打一行提示作为软提醒；`BOARD_SUPPRESS_AGENT_HINT=1` 可关。
+
 ### 里程碑（`specs/线框图与里程碑.md`）
 M0 调研验证 → M1 单人画布 → M2 空间文件系统 → M3 单 Agent 协作 → M4 多人多 Agent，串行依赖。
 **当前阶段**：M4（多人多 Agent）进行中；画布层已完全自研（移除 Excalidraw 依赖，见 T-0106「自研画布层」里程碑）。详细进度在来源任务 T-0106 维护。
