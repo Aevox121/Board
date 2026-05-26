@@ -3816,6 +3816,25 @@ export function OverlayLayer({
   }
 
   /**
+   * file 元素自适应高度回写（preview 模式 markdown 内容撑出来的高度）——
+   * 与 resizeTextElement 同款语义，只对 type='file' 生效；偏差小于 4px 跳过。
+   * 不推 updatedBy（"装载性变化"不算 Agent 编辑）。
+   */
+  function resizeFileElement(id: string, height: number): void {
+    const cur = sceneRef.current;
+    const target = cur.elements.find((e) => e.id === id);
+    if (!target || target.type !== 'file') return;
+    if (Math.abs(target.height - height) <= 4) return;
+    const next: BoardScene = {
+      ...cur,
+      elements: cur.elements.map((e): Element =>
+        e.id === id && e.type === 'file' ? ({ ...e, height } as Element) : e,
+      ),
+    };
+    replaceScene(next, 'canvas');
+  }
+
+  /**
    * 设置 file 元素的显示模式（PRD §6.4 三种文件显示模式手动切换）——
    * 'icon' 紧凑图标态 / 'card' 卡片态（图标+名+元信息）/ 'preview' 预览态
    *（图片 / PDF / markdown / csv / 纯文本就地预览，不可预览时降级卡片态）。
@@ -5516,6 +5535,7 @@ export function OverlayLayer({
                   element={el}
                   missing={missingFileIds.has(el.id)}
                   zoom={zoom}
+                  onResize={(h): void => resizeFileElement(el.id, h)}
                   editing={editingFileId === el.id}
                   onEditingChange={(next) =>
                     setEditingFileId(next ? el.id : null)

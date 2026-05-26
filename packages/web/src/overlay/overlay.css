@@ -458,6 +458,26 @@
   justify-content: center;
 }
 
+/* Blur 态（LOD：屏幕高度 < LOD_BLUR_MAX_PX）—— 渲染一片模糊横线，让用
+   户看到"这里有内容"但不去拉文件 / 不渲完整 DOM。视觉提示用 repeating-
+   linear-gradient 直接画几条"文字行"，加 blur 滤镜 + 半透，零额外 DOM。
+   缩到看全局时 31 张卡都是这模样，pan/zoom 极致流畅。 */
+.ov-file--blur {
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent 6%,
+      rgba(58, 42, 27, 0.15) 6%,
+      rgba(58, 42, 27, 0.15) 10%,
+      transparent 10%,
+      transparent 16%
+    ),
+    var(--c-surface, #fffbf3);
+  filter: blur(1px);
+  opacity: 0.9;
+}
+
 /* 图标态（PRD §6.4 三种模式）：紧凑一行，仅 glyph + 文件名；不撑高，不
    显示元信息。元素 width/height 沿用用户设值，但内容只占一行，剩余空
    间靠 align-items:center 居中即可。 */
@@ -523,6 +543,17 @@
   font-size: var(--text-sm);
   line-height: 1.5;
   color: var(--c-ink);
+}
+
+/* 自适应高度模式：md body 不再滚动 / 不限高度，由内容自然撑开；
+   ResizeObserver 测得 scrollHeight 后由 OverlayLayer 回写 element.height
+   让 slot 跟着变高。配合 ov-file--autofit 同步解除 ov-card 的 height 限制。 */
+.ov-file--autofit {
+  height: auto !important; /* 覆盖 cardStyle 内联 height */
+}
+
+.ov-file--autofit .ov-file__md-body {
+  overflow: visible;
 }
 
 /* ── 共用 Markdown 排版（.ov-md）─────────────────────────────

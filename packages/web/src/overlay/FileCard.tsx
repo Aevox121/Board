@@ -43,18 +43,25 @@ export interface FileCardProps {
   /** 用户按 Esc / 失焦 / Ctrl+Enter 退出编辑时通知调用方清状态。 */
   onEditingChange?: (editing: boolean) => void;
   /**
-   * 当前画布缩放（LOD 用）—— 当 zoom × element.height 小于阈值时，回退
-   * 到卡片态渲染（避免把不可读的 markdown 全 DOM 化），显著降低多卡场景
-   * 的 layout / paint 开销。
+   * 当前画布缩放（LOD 用）—— 屏幕高度 = element.height × zoom 决定渲染档位：
+   * - 屏幕高度 < BLUR 阈值：渲染纯模糊占位块（不渲文本、不取文件）
+   * - 屏幕高度 < CARD 阈值：渲染卡片态（图标 + 名 + 元信息，不渲 markdown）
+   * - 否则：完整 markdown 预览（首次进入时按需 fetch + 自适应高度）
    */
   zoom?: number;
+  /**
+   * markdown 预览的自适应高度回写 —— ResizeObserver 测得内容高度变化时调用，
+   * OverlayLayer 把新高度写回 element.height。不传则不自适应。
+   */
+  onResize?: (height: number) => void;
 }
 
 /**
- * LOD（level of detail）阈值 —— file 元素 displayMode='preview' 且在屏幕
- * 上的高度 < 此值时，渲染降级为卡片态。读者也读不清字，DOM 渲全是浪费。
+ * LOD 阈值（按屏幕 px）—— 屏幕高度 < BLUR：模糊占位；< CARD：卡片态；
+ * 否则完整预览。零碎手势缩放在 React.memo 里离散化避免抖动切档。
  */
-const LOW_DETAIL_HEIGHT_PX = 200;
+const LOD_BLUR_MAX_PX = 100;
+const LOD_CARD_MAX_PX = 240;
 
 /** 纯文本预览截取的字符上限 —— 卡片只需片段。 */
 const TEXT_SNIPPET_LIMIT = 800;
@@ -129,6 +136,7 @@ function FileCardImpl({
   editing: editingProp,
   onEditingChange,
   zoom = 1,
+  onResize,
 }: FileCardProps): JSX.Element {
   const { scene, requestNavigateToElement } = useBoard();
   const { path, mime, size, previewable } = element;
@@ -162,6 +170,68 @@ function FileCardImpl({
       mountedRef.current = false;
     };
   }, []);
+
+  /** 已对该 path 发过 fetch（不论成败）—— 避免反复进入 preview LOD 时重抓。
+   *  path 变化时 reset effect 会清空它。失败重试 = null。 */
+  const fetchedPathRef = useRef<string | null>(null);
+
+  // ── 三档 LOD 解析 ────────────────────────────────────────────
+  // displayMode='icon' 永远走 icon（用户显式选）；'card' / 'preview' 受 LOD
+  // 影响：屏幕高度过小 → 降级到 blur / card。
+  const rawMode = element.displayMode ?? 'preview';
+  const screenH = element.height * zoom;
+  let mode: 'icon' | 'card' | 'preview' | 'blur';
+  if (rawMode === 'icon') mode = 'icon';
+  else if (screenH < LOD_BLUR_MAX_PX) mode = 'blur';
+  else if (rawMode === 'card' || screenH < LOD_CARD_MAX_PX) mode = 'card';
+  else mode = 'preview';
+
+  // ── 按需 fetch：只在 mode='preview' 才真去拉文件 ────────────────
+  // 缩到看全局时全部走 blur / card，所有 31 个文件不发请求；放大到某张
+  // 进入 preview 档时才触发它的 fetch，自然变成"看哪儿加载哪儿"。
+  useEffect(() => {
+    if (mode !== 'preview') return;
+    if (missing || !previewable || !kind) return;
+    if (fetchedPathRef.current === path) return; // 已抓过当前 path
+    fetchedPathRef.current = path;
+    let cancelled = false;
+    void (async () => {
+      const text = await fetchFileText(path);
+      if (cancelled || !mountedRef.current) return;
+      if (text === null) {
+        fetchedPathRef.current = null; // 失败允许下次重试
+        return;
+      }
+      setRawText(text);
+      applyPreview(text, kind);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, path, mime, previewable, missing, kind]);
+
+  // ── 自适应高度（仅 preview + 非编辑态）─────────────────────────
+  // ResizeObserver 观察 markdown body 的实际渲染高度，撑出来超过 element.height
+  // 时回写。head ≈ 40px 算进总高度。CSS 同步移除了 md body 的 overflow:auto +
+  // max-height，让内容自然撑开（见 .ov-file--md.ov-file--autofit 选择器）。
+  const mdBodyRef = useRef<HTMLDivElement | null>(null);
+  const HEAD_HEIGHT_PX = 40; // ov-file__head 实测高度，paddings 含在内
+  useEffect(() => {
+    if (!onResize || editing) return;
+    if (mode !== 'preview') return;
+    if (markdownHtml === null) return; // 还没渲 markdown
+    const el = mdBodyRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const measure = (): void => {
+      const desired = el.scrollHeight + HEAD_HEIGHT_PX;
+      if (Math.abs(desired - element.height) > 4) onResize(desired);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [onResize, editing, mode, markdownHtml, element.height]);
 
   /** 把 rawText 投影到对应预览缓存。markdown 路径同时让 GFM 任务列表可勾
    *  + `[[xxx]]` 内链解析。 */
@@ -239,27 +309,17 @@ function FileCardImpl({
     })();
   }
 
-  // 文本族文件（md/csv/纯文本）：拉取正文并按类型解析。
-  // 缺失 / 大文件 / 非文本族不拉取。
+  // path/mime 变化清空缓存（rawText / 派生预览）。
+  // fetch 触发改成按需（见下一个 useEffect）—— 在三档 LOD 中只有 mode='preview'
+  // 才真正下文件，缩到看全局时所有 31 个 markdown 都不去发请求。
   useEffect(() => {
     setRawText(null);
     setMarkdownHtml(null);
     setCsvRows(null);
     setTextSnippet(null);
-    if (missing || !previewable) return;
-    if (!kind) return;
-    let cancelled = false;
-    void (async () => {
-      const text = await fetchFileText(path);
-      if (cancelled || !mountedRef.current) return;
-      if (text === null) return; // server 不可达 / 端点未实现 —— 降级为兜底卡片
-      setRawText(text);
-      applyPreview(text, kind);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [path, mime, previewable, missing, kind]);
+    setImageFailed(false);
+    fetchedPathRef.current = null;
+  }, [path, mime]);
 
   // 进入编辑态：拷 rawText（或 ''）为草稿，聚焦并把光标置于末尾。
   useEffect(() => {
@@ -388,14 +448,21 @@ function FileCardImpl({
     );
   }
 
-  // 显示模式（PRD §6.4 三种模式手动切换）—— 缺字段时默认 'preview'，保持
-  // 与本组件历史观感（"先试预览，不行再卡片态"）一致。'card' = 强制只显
-  // 元信息，'icon' = 紧凑图标态。
-  // LOD：'preview' 模式但屏幕高度 < 阈值时，强制降级为卡片态。
-  const rawMode = element.displayMode ?? 'preview';
-  const screenH = element.height * zoom;
-  const mode =
-    rawMode === 'preview' && screenH < LOW_DETAIL_HEIGHT_PX ? 'card' : rawMode;
+  // mode 已在顶部解析（icon / card / preview / blur 四档，LOD 自动降级）。
+
+  // ── Blur 态：模糊占位块 ────────────────────────────────────
+  // 屏幕高度太小，连卡片信息都看不清；连图标都省，直接渲一片"有内容"
+  // 的视觉提示。DOM 极简，paint 几乎零成本。
+  if (mode === 'blur') {
+    return (
+      <div
+        className="ov-card ov-file ov-file--blur"
+        style={cardStyle}
+        title={path}
+        aria-label={name}
+      />
+    );
+  }
 
   // ── 图标态：紧凑一行 ────────────────────────────────────────
   if (mode === 'icon') {
@@ -487,9 +554,19 @@ function FileCardImpl({
   }
 
   // ── Markdown：marked 渲染的 HTML 预览 ───────────────────────
+  // 启用 onResize 时加 --autofit 修饰 —— CSS 解除 body 的 max-height/overflow，
+  // 让内容自然撑开，由 ResizeObserver 测高度回写 element.height。
   if (isMarkdownMime(mime) && markdownHtml !== null) {
+    const autofit = !!onResize;
     return (
-      <div className="ov-card ov-file ov-file--md" style={cardStyle} title={path}>
+      <div
+        className={
+          'ov-card ov-file ov-file--md' +
+          (autofit ? ' ov-file--autofit' : '')
+        }
+        style={cardStyle}
+        title={path}
+      >
         <div className="ov-file__head">
           <span className="ov-file__glyph" aria-hidden="true">
             {fileGlyph(mime)}
@@ -497,6 +574,7 @@ function FileCardImpl({
           <span className="ov-file__name">{name}</span>
         </div>
         <div
+          ref={mdBodyRef}
           className="ov-file__md-body ov-md"
           onPointerDown={handleMarkdownBodyPointerDown}
           onClick={handleMarkdownBodyClick}
@@ -594,7 +672,8 @@ export const FileCard = memo(FileCardImpl, (prev, next) => {
   if (prev.missing !== next.missing) return false;
   if (prev.editing !== next.editing) return false;
   if (prev.onEditingChange !== next.onEditingChange) return false;
-  // zoom 离散化到 0.05 粒度
+  if (prev.onResize !== next.onResize) return false;
+  // zoom 离散化到 0.05 粒度避免缩放手势抖动反复切档
   const pz = Math.round((prev.zoom ?? 1) * 20);
   const nz = Math.round((next.zoom ?? 1) * 20);
   return pz === nz;
