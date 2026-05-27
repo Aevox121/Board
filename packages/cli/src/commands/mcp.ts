@@ -43,6 +43,8 @@ import { cmdLs } from './ls.js';
 import { cmdDelete } from './delete.js';
 import { cmdSnapshot, cmdRestore } from './snapshot.js';
 import { cmdLog } from './log.js';
+import { cmdElement } from './element.js';
+import { cmdInfo } from './info.js';
 
 /** 由位置参数 / 选项 / 开关构造一个 ParsedArgs（喂给 cmd* 函数）。 */
 function mkArgs(
@@ -62,6 +64,18 @@ function textResult(text: string, isError = false): CallToolResult {
   return { content: [{ type: 'text', text }], isError };
 }
 
+/**
+ * 结构化工具结果 —— text 作为人类可读 fallback，data 作为机器可读载荷
+ * 落到 MCP `structuredContent`（带 `outputSchema` 的工具用，spec 2024-11 后支持）。
+ * 旧版客户端不读 structuredContent，只看 text，向后兼容。
+ */
+function structuredResult(text: string, data: unknown): CallToolResult {
+  return {
+    content: [{ type: 'text', text }],
+    structuredContent: data as Record<string, unknown>,
+  };
+}
+
 /** 尽力通知 server 刷新（写操作后让 Web 实时更新）；server 未运行则忽略。 */
 async function pingRefresh(port: string): Promise<void> {
   try {
@@ -73,9 +87,11 @@ async function pingRefresh(port: string): Promise<void> {
 
 /**
  * 执行一个 CLI 命令函数，把 CmdResult / CliError 转为 MCP 工具结果。
+ * 内部使用 —— `runMcpServer` 里包了一层同名 `runCmd` 闭包来注入启动绑定的
+ * Agent 身份，所有 registerTool 回调透过本地 `runCmd` 调用。
  * @param refreshPort 传入则在命令成功后 ping server 刷新（写操作用）。
  */
-async function runCmd(
+async function runCmdBare(
   label: string,
   fn: (a: ParsedArgs) => Promise<CmdResult>,
   args: ParsedArgs,
@@ -92,7 +108,9 @@ async function runCmd(
       r.data !== undefined
         ? `${baseText}\n${JSON.stringify(r.data, null, 2)}`.trim()
         : baseText || '(已完成)';
-    return textResult(text);
+    // r.data 一律落到 structuredContent（带 outputSchema 的 read 工具直接消费；
+    // 其余工具的客户端不读 structuredContent 则无害）。
+    return r.data !== undefined ? structuredResult(text, r.data) : textResult(text);
   } catch (err) {
     const msg =
       err instanceof CliError
@@ -171,7 +189,7 @@ async function getBoardElement(
   if (!el) {
     return textResult(`board_get_element 失败：未找到元素 ${elementId}`, true);
   }
-  return textResult(JSON.stringify(el, null, 2));
+  return structuredResult(JSON.stringify(el, null, 2), { element: el });
 }
 
 /**
@@ -207,19 +225,189 @@ async function subscribeEvents(
       true,
     );
   }
-  return textResult(JSON.stringify(env.data, null, 2));
+  return structuredResult(JSON.stringify(env.data, null, 2), env.data);
 }
+
+// ── read 工具的输出 schema（spec §4） ────────────────────────────
+// MCP 客户端拿到这些 schema 可以验证 / typed-access structuredContent。
+// shape 写宽松：未知字段 passthrough，避免与 cmd* 实现进化时不同步。
+
+const ElementBriefShape = z
+  .object({
+    id: z.string(),
+    type: z.string(),
+    path: z.string().optional(),
+    summary: z.string(),
+    content: z.string().optional(),
+  })
+  .passthrough();
+
+const RegionViewShape = z
+  .object({
+    id: z.string(),
+    label: z.string(),
+    description: z.string(),
+    fileCount: z.number(),
+    elementCount: z.number(),
+    elements: z.array(ElementBriefShape).optional(),
+  })
+  .passthrough();
+
+const ConnectorViewShape = z
+  .object({
+    id: z.string(),
+    from: z.string(),
+    to: z.string(),
+    label: z.string().nullable(),
+  })
+  .passthrough();
+
+const SuggestionViewShape = z
+  .object({
+    id: z.string(),
+    targetId: z.string(),
+    suggestionType: z.string(),
+    status: z.string(),
+    author: z.string(),
+    reason: z.string(),
+    threadLength: z.number(),
+    payload: z.unknown().optional(),
+    thread: z.array(z.unknown()).optional(),
+  })
+  .passthrough();
+
+const ReadContextOutput = {
+  name: z.string(),
+  depth: z.number(),
+  regions: z.array(RegionViewShape),
+  loose: z
+    .object({
+      fileCount: z.number(),
+      elementCount: z.number(),
+      elements: z.array(ElementBriefShape).optional(),
+    })
+    .passthrough()
+    .optional(),
+  connectorCount: z.number().optional(),
+  suggestionCount: z.number().optional(),
+  connectors: z.array(ConnectorViewShape).optional(),
+  suggestions: z.array(SuggestionViewShape).optional(),
+};
+
+const SearchOutput = {
+  keyword: z.string(),
+  count: z.number(),
+  hits: z.array(
+    z
+      .object({
+        elementId: z.string(),
+        type: z.string(),
+        field: z.string(),
+        snippet: z.string(),
+      })
+      .passthrough(),
+  ),
+};
+
+const GetElementOutput = {
+  element: z.record(z.string(), z.unknown()),
+};
+
+const LogOutput = {
+  entries: z.array(
+    z
+      .object({
+        ts: z.string(),
+        actor: z.string(),
+        op: z.string(),
+        details: z.record(z.string(), z.unknown()).optional(),
+      })
+      .passthrough(),
+  ),
+  source: z.enum(['server', 'disk']),
+};
+
+const InfoOutput = {
+  id: z.string(),
+  name: z.string(),
+  elements: z.number(),
+  regions: z.number(),
+  files: z.number(),
+  participants: z.number(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+};
+
+const SubscribeEventsOutput = {
+  events: z.array(
+    z
+      .object({
+        type: z.string(),
+        actor: z.string().optional(),
+        ts: z.string().optional(),
+        payload: z.unknown().optional(),
+      })
+      .passthrough(),
+  ),
+  cursor: z.number(),
+};
 
 /**
  * 启动 MCP Server（stdio）。Promise 在 Agent 断开 stdio 连接前不会 resolve。
  *
  * @param boardPath 白板目录（.board）路径
- * @param port      board-server 端口（report_progress 与刷新用），默认 4500
+ * @param opts.port            board-server 端口（report_progress 与刷新用），默认 4500
+ * @param opts.agentIdentity   启动时绑定的 Agent 身份；所有 MCP 工具默认以此
+ *   归属操作，工具入参里仍可显式 `actor` 覆盖。`actor` 必填且以 `a_` 开头，
+ *   `name` / `color` 可选。
  */
 export async function runMcpServer(
   boardPath: string,
-  port = '4500',
+  opts: {
+    port?: string;
+    agentIdentity?: {
+      actor?: string;
+      name?: string;
+      color?: string;
+    };
+  } = {},
 ): Promise<void> {
+  const port = opts.port ?? '4500';
+  const boundActor = opts.agentIdentity?.actor;
+  const boundName = opts.agentIdentity?.name;
+  const boundColor = opts.agentIdentity?.color;
+
+  /**
+   * 把启动时绑定的 Agent 身份注入到本次 ParsedArgs：
+   *   - `actor` 已显式传(工具入参 override) → 不动；
+   *   - 未传 → 设为 boundActor。
+   *   - `agent-name` / `agent-color` 同理：未显式传则填 bound 值。
+   *
+   * 注：`agent` 键在某些命令里是 payload（如 region assign 的被指派人），
+   * 故只设 `actor`，不动 `agent`。resolveActor 优先取 actor 故无歧义。
+   */
+  function bindAgent(args: ParsedArgs): ParsedArgs {
+    if (boundActor !== undefined && !args.options.has('actor')) {
+      args.options.set('actor', boundActor);
+    }
+    if (boundName !== undefined && !args.options.has('agent-name')) {
+      args.options.set('agent-name', boundName);
+    }
+    if (boundColor !== undefined && !args.options.has('agent-color')) {
+      args.options.set('agent-color', boundColor);
+    }
+    return args;
+  }
+
+  /** 本地 runCmd —— 注入身份后委托给模块级 runCmdBare。 */
+  const runCmd = (
+    label: string,
+    fn: (a: ParsedArgs) => Promise<CmdResult>,
+    args: ParsedArgs,
+    refreshPort?: string,
+  ): Promise<CallToolResult> =>
+    runCmdBare(label, fn, bindAgent(args), refreshPort);
+
   const server = new McpServer({ name: 'board', version: '0.1.0' });
 
   // ── 读：白板上下文 ──────────────────────────────────────────
@@ -242,6 +430,7 @@ export async function runMcpServer(
           .optional()
           .describe('只看某个区域时传其名称；省略 = 全板'),
       },
+      outputSchema: ReadContextOutput,
     },
     async (a) =>
       runCmd(
@@ -252,6 +441,20 @@ export async function runMcpServer(
           region: a.region,
         }),
       ),
+  );
+
+  // ── 读：白板元信息 + 统计 ────────────────────────────────────
+  server.registerTool(
+    'board_info',
+    {
+      description:
+        '取白板的元信息与全板统计(对照 board_read_context: 那是场景/区域结构,' +
+        '本工具是 meta + counts)。返回 id / name / 元素数 / 区域数 / 文件数 / ' +
+        '参与者数 / 创建与更新时间。',
+      inputSchema: {},
+      outputSchema: InfoOutput,
+    },
+    async () => runCmd('board_info', cmdInfo, mkArgs([boardPath])),
   );
 
   // ── 读：文件树 ──────────────────────────────────────────────
@@ -300,7 +503,7 @@ export async function runMcpServer(
               '重叠）。手工指定时务必为相邻元素留足间距，避免方框 / 连线 / 文字重叠',
           ),
         draft: z.boolean().optional().describe('是否为 draft 草稿态'),
-        agent: z.string().optional().describe('执行的 Agent id（写入 createdBy）'),
+        agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
       },
     },
     async (a) =>
@@ -345,7 +548,7 @@ export async function runMcpServer(
               'w 决定文字换行，要为预期最长行留够宽度。',
           ),
         markdown: z.string().optional().describe('初始 markdown（一般留空，靠 append 喂入）'),
-        agent: z.string().optional().describe('Agent id（写入 createdBy + Agent 焦点光标）'),
+        agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
       },
     },
     async (a) =>
@@ -360,6 +563,7 @@ export async function runMcpServer(
             size: a.size,
             markdown: a.markdown,
             actor: a.agent,
+            port,
           },
         ),
         port,
@@ -382,7 +586,7 @@ export async function runMcpServer(
           .number()
           .optional()
           .describe('行号（0-indexed）—— 让 Agent 焦点光标钉到该行；缺省自动算'),
-        agent: z.string().optional().describe('Agent id（写入 updatedBy + Agent 焦点光标）'),
+        agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
       },
     },
     async (a) =>
@@ -394,8 +598,40 @@ export async function runMcpServer(
           {
             line: a.line !== undefined ? String(a.line) : undefined,
             actor: a.agent,
+            port,
           },
         ),
+        port,
+      ),
+  );
+
+  // ── 写：整体替换文本卡 markdown ────────────────────────────
+  // 与 stream_append 区别:这是「Agent 改主意了,这版用这个」的整体重置;
+  // 走 server 的 Y.Text reset,保证 Y.Doc 与 disk 同步(disk 直写会被 Y.Doc
+  // stale 内容覆盖)。位置/尺寸/连线不动,仅换文本。
+  server.registerTool(
+    'board_edit_text',
+    {
+      description:
+        '整体替换一张 text 元素的 markdown(不动位置/尺寸/连线)。Agent 修订' +
+        'draft 内容、重写整段时使用 —— 比删元素重建保留 elementId 与既有连线。' +
+        '\n\n与 board_text_stream_append 区别:append 是字符级 CRDT 追加(打字' +
+        '动画,流式),本工具是整体重置(一次性,无动画)。需 board-server 在运行。',
+      inputSchema: {
+        elementId: z.string().describe('目标 text 元素 id'),
+        markdown: z.string().describe('新 markdown 全文(覆盖原内容)'),
+        agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
+      },
+    },
+    async (a) =>
+      runCmd(
+        'board_edit_text',
+        cmdText,
+        mkArgs(['set', a.elementId], {
+          markdown: a.markdown,
+          actor: a.agent,
+          port,
+        }),
         port,
       ),
   );
@@ -420,7 +656,7 @@ export async function runMcpServer(
         step: z.string().optional().describe('progress：步骤描述'),
         percent: z.number().optional().describe('progress：进度百分比 0–100'),
         summary: z.string().optional().describe('finish：结果说明'),
-        agent: z.string().optional().describe('start：执行的 Agent id'),
+        agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写（仅 start 阶段生效）'),
       },
     },
     async (a): Promise<CallToolResult> => {
@@ -433,7 +669,7 @@ export async function runMcpServer(
             title: a.title,
             region: a.region,
             at: a.at,
-            agent: a.agent,
+            actor: a.agent,
             port,
           }),
         );
@@ -494,7 +730,7 @@ export async function runMcpServer(
         'board_create_suggestion',
         cmdSuggest,
         mkArgs(
-          [boardPath, a.targetId],
+          ['create', boardPath, a.targetId],
           {
             type: a.suggestionType ?? 'replace',
             as: `text:${a.markdown}`,
@@ -502,6 +738,80 @@ export async function runMcpServer(
             actor: a.agent,
           },
         ),
+        port,
+      ),
+  );
+
+  // ── 写：处理建议 — accept / reject / describe（PRD §7.3 反馈回路）─────
+  // 决策权不只在人手里 —— Agent-to-Agent 建议同样适用：被指派区域的 Agent
+  // 可以直接处理别人提给它的建议（如 Codex 给 Claude 提的建议,Claude 可
+  // accept/reject/describe）。
+  server.registerTool(
+    'board_accept_suggestion',
+    {
+      description:
+        '同意一条建议：replace 替换目标内容 / add 落地新元素,移除建议元素。' +
+        'Agent 处理「提给自己的建议」时使用本工具。',
+      inputSchema: {
+        suggestionId: z.string().describe('被处理的建议元素 id'),
+        agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
+      },
+    },
+    async (a) =>
+      runCmd(
+        'board_accept_suggestion',
+        cmdSuggest,
+        mkArgs(['accept', boardPath, a.suggestionId], { actor: a.agent }),
+        port,
+      ),
+  );
+
+  server.registerTool(
+    'board_reject_suggestion',
+    {
+      description:
+        '拒绝一条建议：删除建议元素,原件不变。Agent 不接受别人提给它的建议时使用。',
+      inputSchema: {
+        suggestionId: z.string().describe('被拒绝的建议元素 id'),
+        agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
+      },
+    },
+    async (a) =>
+      runCmd(
+        'board_reject_suggestion',
+        cmdSuggest,
+        mkArgs(['reject', boardPath, a.suggestionId], { actor: a.agent }),
+        port,
+      ),
+  );
+
+  server.registerTool(
+    'board_describe_suggestion',
+    {
+      description:
+        '向建议追加一条反馈（写入 thread,建议元素保留）。形成「建议 ↔ 反馈」' +
+        '迭代回路：下一轮提建议方读 thread 修订建议。Agent 收到不满意的建议' +
+        '但想给出修改方向时使用,默认 role=agent；人在 Web 端写描述时 role=human。' +
+        '读 thread 用 board_get_element(对 suggestion 元素会返回 thread 字段)。',
+      inputSchema: {
+        suggestionId: z.string().describe('被反馈的建议元素 id'),
+        text: z.string().describe('反馈正文（说明哪里不满意 / 想怎么改）'),
+        role: z
+          .enum(['human', 'agent'])
+          .optional()
+          .describe('反馈来源,默认 agent（本工具被 Agent 调用时合理默认）'),
+        agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
+      },
+    },
+    async (a) =>
+      runCmd(
+        'board_describe_suggestion',
+        cmdSuggest,
+        mkArgs(['describe', boardPath, a.suggestionId], {
+          text: a.text,
+          role: a.role,
+          actor: a.agent,
+        }),
         port,
       ),
   );
@@ -533,7 +843,7 @@ export async function runMcpServer(
           .optional()
           .describe('尺寸 "w,h"；省略用默认 160x72'),
         region: z.string().optional().describe('放入的区域名'),
-        agent: z.string().optional().describe('执行的 Agent id'),
+        agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
       },
     },
     async (a) =>
@@ -571,7 +881,7 @@ export async function runMcpServer(
           .enum(['straight', 'orthogonal', 'curved'])
           .optional()
           .describe('走线方式，默认 straight'),
-        agent: z.string().optional().describe('执行的 Agent id'),
+        agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
       },
     },
     async (a) =>
@@ -597,6 +907,7 @@ export async function runMcpServer(
       inputSchema: {
         keyword: z.string().describe('搜索关键词（大小写不敏感）'),
       },
+      outputSchema: SearchOutput,
     },
     async (a) =>
       runCmd('board_search', cmdSearch, mkArgs([boardPath, a.keyword])),
@@ -630,7 +941,7 @@ export async function runMcpServer(
       inputSchema: {
         elementId: z.string().describe('被评论的元素 id'),
         text: z.string().describe('评论内容'),
-        agent: z.string().optional().describe('评论者 Agent id'),
+        agent: z.string().optional().describe('覆盖启动绑定的评论者 Agent id；通常无需填写'),
       },
     },
     async (a) =>
@@ -701,7 +1012,7 @@ export async function runMcpServer(
           .optional()
           .describe('描边线型'),
         opacity: z.number().optional().describe('不透明度 0–100'),
-        agent: z.string().optional().describe('执行的 Agent id'),
+        agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
       },
     },
     async (a) =>
@@ -742,7 +1053,7 @@ export async function runMcpServer(
           .optional()
           .describe('content 模式下生成的文件名（含扩展名）'),
         region: z.string().optional().describe('放入的区域名；省略 = 收件区'),
-        agent: z.string().optional().describe('执行的 Agent id'),
+        agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
       },
     },
     async (a): Promise<CallToolResult> =>
@@ -786,7 +1097,7 @@ export async function runMcpServer(
       inputSchema: {
         source: z.string().describe('本地目录的绝对路径'),
         region: z.string().optional().describe('放入的区域名；省略 = 收件区'),
-        agent: z.string().optional().describe('执行的 Agent id'),
+        agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
       },
     },
     async (a) =>
@@ -795,6 +1106,41 @@ export async function runMcpServer(
         cmdAdd,
         mkArgs(['folder', boardPath, a.source], {
           region: a.region,
+          actor: a.agent,
+        }),
+        port,
+      ),
+  );
+
+  // ── 写：按画布坐标摆位元素（与 Web 端拖拽 / 缩放等价）────────
+  server.registerTool(
+    'board_move_element',
+    {
+      description:
+        '按画布坐标重新摆位一个元素（可选改尺寸）。与 Web 端用户拖拽 / 缩放元素' +
+        '等价。`board_move_file` 改的是 files/ 内的文件路径（=改归属 region），' +
+        '本工具改的是元素在画布上的 (x, y) / (w, h)。' +
+        '注意：`connector` 不能直接移动（位置由两端点派生，自动跟随被连元素）。' +
+        '排版建议：流程图节点纵向中心间隔 ≥200、横向 ≥240，避免方框 / 连线 / 文字重叠。',
+      inputSchema: {
+        elementId: z.string().describe('目标元素 id'),
+        to: z
+          .string()
+          .describe('新画布坐标 "x,y"（元素左上角）'),
+        size: z
+          .string()
+          .optional()
+          .describe('新尺寸 "w,h"；省略 = 保持原尺寸'),
+        agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
+      },
+    },
+    async (a) =>
+      runCmd(
+        'board_move_element',
+        cmdElement,
+        mkArgs(['move', boardPath, a.elementId], {
+          to: a.to,
+          size: a.size,
           actor: a.agent,
         }),
         port,
@@ -814,7 +1160,7 @@ export async function runMcpServer(
         to: z
           .string()
           .describe('目标相对路径，如 "路线/tickets.pdf"（即移进「路线」区域）'),
-        agent: z.string().optional().describe('执行的 Agent id'),
+        agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
       },
     },
     async (a) =>
@@ -851,6 +1197,7 @@ export async function runMcpServer(
       inputSchema: {
         elementId: z.string().describe('元素 id'),
       },
+      outputSchema: GetElementOutput,
     },
     async (a) =>
       safeHandler('board_get_element', () =>
@@ -878,6 +1225,7 @@ export async function runMcpServer(
           .optional()
           .describe('只看某区域的事件时传其名称；省略 = 全板'),
       },
+      outputSchema: SubscribeEventsOutput,
     },
     async (a) =>
       safeHandler('board_subscribe_events', () =>
@@ -1082,6 +1430,7 @@ export async function runMcpServer(
           .optional()
           .describe('要拉取的末尾条数（默认 50，上限 1000）'),
       },
+      outputSchema: LogOutput,
     },
     async (a) => {
       const opts: Record<string, string | undefined> = { port };
@@ -1134,7 +1483,12 @@ export async function runMcpServer(
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error(`[board mcp] MCP Server 已启动（stdio）— 白板：${boardPath}`);
+  const idLine = boundActor
+    ? `Agent=${boundActor}${boundName ? ` "${boundName}"` : ''}${boundColor ? ` ${boundColor}` : ''}`
+    : 'Agent=（未绑定，回退 u_local）';
+  console.error(
+    `[board mcp] MCP Server 已启动（stdio）— 白板：${boardPath} ｜ ${idLine}`,
+  );
 
   // 阻塞直到 Agent 断开 stdio 连接 —— 否则进程会立即退出、连接中断。
   await new Promise<void>((resolve) => {

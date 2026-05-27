@@ -70,6 +70,7 @@ export const GLOBAL_VALUE_KEYS: ReadonlySet<string> = new Set([
   'format',
   'region',
   'at',
+  'to',
   'display',
   'port',
   'host',
@@ -102,4 +103,6 @@ export const GLOBAL_VALUE_KEYS: ReadonlySet<string> = new Set([
   'percent',
   'summary',
   'task',
+  'text',
+  'role',
 ]);

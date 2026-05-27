@@ -82,13 +82,15 @@ board <写命令> ... \
   --agent-color "#xxxxxx"        # 可选，默认蓝色 #1971C2
 ```
 
-涉及的写命令：`add` / `shape` / `connect` / `region create|describe|assign|own` / `mv` / `rm` / `style` / `comment` / `suggest`。
+涉及的写命令：`add` / `text create|append|set` / `shape` / `connect` / `region create|describe|assign|own` / `mv` / `element move` / `rm` / `style` / `comment` / `suggest create|accept|reject|describe`。
 
 `actor` 解析优先级（高 → 低）：`--actor` > `--agent` > `BOARD_AGENT_ID` env > `u_local`（兜底人类用户）。`--agent-name` / `--agent-color` 同理可读 `BOARD_AGENT_NAME` / `BOARD_AGENT_COLOR` env。**不推荐让 Agent 仰赖 env**：env 易漂移、跨进程难追踪，自己每次显式带 `--actor` 才是契约清晰的做法。
 
 标识建议：`a_claude_code` / `a_codex` / `a_cursor` / `a_<工具名>_<会话短ID>`。颜色按工具固定区分（Claude 紫、Codex 橙、Cursor 绿等）。
 
 server 在跑时若 CLI 默认归属 `u_local`，会往 stderr 打一行提示作为软提醒；`BOARD_SUPPRESS_AGENT_HINT=1` 可关。
+
+**MCP 模式：启动时绑定身份，工具调用不再每次都带**。`board mcp <白板> --actor a_<id> [--agent-name "<名>"] [--agent-color "#hex"]` 启动后，所有工具默认套用该身份；不传 `--actor` 拒绝启动（强契约，避免匿名操作落到 `u_local`）。详见 `specs/CLI与MCP规格.md §3.1`。
 
 ### 里程碑（`specs/线框图与里程碑.md`）
 M0 调研验证 → M1 单人画布 → M2 空间文件系统 → M3 单 Agent 协作 → M4 多人多 Agent，串行依赖。

@@ -46,6 +46,7 @@ import { cmdImport } from './commands/import.js';
 import { cmdServe } from './commands/serve.js';
 import { cmdLog } from './commands/log.js';
 import { cmdDelete } from './commands/delete.js';
+import { cmdElement } from './commands/element.js';
 
 /** 命令处理函数签名。 */
 type Handler = (args: ParsedArgs) => Promise<CmdResult>;
@@ -77,6 +78,7 @@ const HANDLERS: Record<string, Handler> = {
   serve: cmdServe,
   log: cmdLog,
   delete: cmdDelete,
+  element: cmdElement,
 };
 
 /** 已登记但尚未实现的命令（规格 §2，逐里程碑补全）。 */
@@ -146,11 +148,16 @@ function printHelp(): void {
   console.log('  search <路径> "<关键词>"                      搜索元素文字 / 文件名 / 文件内容');
   console.log('  comment <路径> <元素id> "<文本>"              给元素加一条评论');
   console.log('  style <路径> <元素id> [--stroke <色>] [--fill <色>] [--opacity <n>]   改元素样式');
+  console.log('  element move <路径> <元素id> --to "x,y" [--size "w,h"]    按画布坐标摆位元素（connector 除外）');
   console.log('  region describe <路径> <区域名> --desc "<描述>"     改区域描述');
   console.log('  region assign <路径> <区域名> --agent <id>          指派区域给 Agent');
-  console.log('  suggest <路径> <元素id> --type <replace|add> --as text:"<md>"   创建建议');
+  console.log('  suggest create <路径> <元素id> --type <replace|add> --as text:"<md>" [--reason ...]   创建建议');
+  console.log('  suggest accept <路径> <suggestionId>                              同意建议');
+  console.log('  suggest reject <路径> <suggestionId>                              拒绝建议');
+  console.log('  suggest describe <路径> <suggestionId> --text "<反馈>" [--role human|agent]  向建议追加反馈');
   console.log('  add text <路径> "<markdown>" --draft          添加 draft 态文本卡');
-  console.log('  mcp <路径> [--port <n>]                       启动 MCP Server (stdio)');
+  console.log('  mcp <路径> --actor a_<id> [--agent-name "<名>"] [--agent-color "#hex"] [--port <n>]');
+  console.log('                                                启动 MCP Server (stdio)，启动时绑定 Agent 身份');
   console.log('');
   console.log('已实现命令 (M3，需 board-server 在运行):');
   console.log('  task start --title "<做什么>" [--region <名>] [--agent <id>]   新建 Agent 任务');
@@ -166,6 +173,7 @@ function printHelp(): void {
   console.log('  share <路径> [--host <host>] [--port <port>] 生成可分享的白板链接（PRD §4.2）');
   console.log('  text create [--region <名>] [--at x,y] [--size w,h] [--markdown "<初始>"]  开空文本卡（流式起手）');
   console.log('  text append <elementId> "<chunk>" [--line N]  追加 markdown（字符级 CRDT，浏览器看到打字 + Agent 光标）');
+  console.log('  text set <elementId> --markdown "<新全文>"    整体替换 markdown（Y.Text reset，不动位置/尺寸/连线）');
   console.log('');
   console.log('已实现命令 (打包 / 导入 / 起服务):');
   console.log('  export <路径> [--json|--zip] [--out <文件>]   导出白板 JSON / zip（spec §2.6；--png/--svg/--html 暂未实现）');
@@ -196,15 +204,46 @@ async function main(argv: string[]): Promise<number> {
   }
 
   // mcp —— 长驻 stdio MCP Server，不走「命令返回 CmdResult」的常规分发。
+  // 启动时绑定 Agent 身份：所有 MCP 工具操作自动套用，无需每次工具调用都带。
   if (cmd === 'mcp') {
     const boardPath = args.positionals[0];
     if (boardPath === undefined) {
-      emitError('用法: board mcp <白板路径> [--port <n>]', json);
+      emitError(
+        '用法: board mcp <白板路径> --actor a_<id> [--agent-name "<名>"] [--agent-color "#hex"] [--port <n>]',
+        json,
+      );
       return EXIT.USAGE;
     }
     const port =
       args.options.get('port') ?? process.env['BOARD_PORT'] ?? '4500';
-    await runMcpServer(boardPath, port);
+    const actor =
+      args.options.get('actor') ??
+      args.options.get('agent') ??
+      (process.env['BOARD_AGENT_ID']?.trim() || undefined);
+    if (actor === undefined) {
+      emitError(
+        'board mcp 必须显式绑定 Agent 身份（spec §1.5）：请加 --actor a_<id>，或设 BOARD_AGENT_ID env',
+        json,
+      );
+      return EXIT.USAGE;
+    }
+    if (!actor.startsWith('a_')) {
+      emitError(
+        `actor "${actor}" 必须以 a_ 开头（server 端硬约束）`,
+        json,
+      );
+      return EXIT.USAGE;
+    }
+    const agentName =
+      args.options.get('agent-name') ??
+      (process.env['BOARD_AGENT_NAME']?.trim() || undefined);
+    const agentColor =
+      args.options.get('agent-color') ??
+      (process.env['BOARD_AGENT_COLOR']?.trim() || undefined);
+    await runMcpServer(boardPath, {
+      port,
+      agentIdentity: { actor, name: agentName, color: agentColor },
+    });
     return EXIT.OK;
   }
 

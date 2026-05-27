@@ -18,6 +18,7 @@
  *  - POST /api/suggestions/accept  → 同意建议（M3：建议机制，PRD §7.3）
  *  - POST /api/suggestions/reject  → 拒绝建议
  *  - POST /api/suggestions/describe → 向建议追加反馈
+ *  - POST /api/elements/text-set → 整体替换 text 元素 markdown（Y.Text reset）
  *  - POST /api/elements/delete  → 删除元素（file 移入回收站、连带清引用）
  *  - GET  /api/events           → SSE，board-changed + 结构化事件流（M2/M4）
  *  - GET  /api/events/log       → 按游标增量拉取留存事件（M4：事件流）
@@ -1641,6 +1642,71 @@ async function handleTextAppend(
 }
 
 /**
+ * POST /api/elements/text-set —— 整体替换 text 元素 markdown。
+ *
+ * 请求体：`{ actor, elementId, markdown }`。
+ *
+ * 与 text-append 区别：append 是字符级 CRDT 追加（流式打字动画），set 是
+ * 整体重置（Agent「改主意了，这版用这个」场景）。**必须走 Y.Text 重置**
+ * 而不是 disk 直写 —— 否则 Y.Doc 里 markdown 仍是旧值,下次广播会用 stale
+ * 内容覆盖刚写的盘。
+ */
+async function handleTextSet(
+  deps: HttpDeps,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch (err) {
+    fail(res, 400, errMsg(err));
+    return;
+  }
+  if (typeof body !== 'object' || body === null) {
+    fail(res, 400, '请求体必须为 JSON 对象');
+    return;
+  }
+  const rec = body as Record<string, unknown>;
+  const actor = typeof rec['actor'] === 'string' ? rec['actor'] : 'u_local';
+  const elementId =
+    typeof rec['elementId'] === 'string' ? rec['elementId'] : '';
+  const markdown =
+    typeof rec['markdown'] === 'string' ? rec['markdown'] : '';
+  if (!elementId) {
+    fail(res, 400, '缺少 elementId');
+    return;
+  }
+
+  const doc = deps.room.doc;
+  const els = doc.getMap('elements') as Y.Map<Y.Map<unknown>>;
+  const elMap = els.get(elementId);
+  if (!elMap) {
+    fail(res, 404, `元素不存在: ${elementId}`);
+    return;
+  }
+  const elType = elMap.get('type');
+  if (elType !== 'text') {
+    fail(res, 400, `元素 ${elementId} 不是 text 类型（实际：${String(elType)}）`);
+    return;
+  }
+  const md = elMap.get('markdown');
+  if (!(md instanceof Y.Text)) {
+    fail(res, 500, `元素 ${elementId} 的 markdown 字段不是 Y.Text`);
+    return;
+  }
+  doc.transact(() => {
+    if (md.length > 0) md.delete(0, md.length);
+    if (markdown.length > 0) md.insert(0, markdown);
+    elMap.set('updatedBy', actor);
+    elMap.set('updatedAt', new Date().toISOString());
+  }, actor);
+
+  await deps.recordChange(actor);
+  ok(res, { ok: true, length: md.length });
+}
+
+/**
  * POST /api/presence —— 上报在场光标 / 显式离开（M4：拟人化光标，PRD §8.2）。
  *
  * 请求体 `{ clientId, name?, color?, cursor?, leaving? }`：
@@ -2437,6 +2503,11 @@ async function route(
   // POST /api/elements/text-append —— 给 text 元素流式追加 markdown（Y.Text.insert）
   if (path === '/api/elements/text-append' && method === 'POST') {
     await handleTextAppend(deps, req, res);
+    return;
+  }
+  // POST /api/elements/text-set —— 整体替换 text 元素 markdown（Y.Text reset）
+  if (path === '/api/elements/text-set' && method === 'POST') {
+    await handleTextSet(deps, req, res);
     return;
   }
   // POST /api/regions/reparent —— 区域移入 / 移出区域（子区域嵌套）

@@ -1,24 +1,30 @@
 /**
- * `board suggest <白板路径> <目标元素id> --type <replace|add> --as <内容>`
- * —— 建议机制（PRD §7.3）。
+ * `board suggest <子命令> ...` — 建议机制（PRD §7.3）。
  *
- * Agent 要改不属于自己的内容时不直接改原件，而是在旁边产生一条「建议」元素。
- * 人之后在 Web 端对建议做「同意 / 拒绝 / 描述」处理（决策权在人手里）。
+ * Agent 要改不属于自己的内容时不直接改原件，而是在旁边产生一条「建议」元素，
+ * 由人 / 另一 Agent 决定 同意 / 拒绝 / 描述。**Agent-to-Agent 建议同样适用** ——
+ * 区域被指派给 Agent 时，由其他参与者（人或别的 Agent）提出的建议，被指派者
+ * 也可以直接 accept / reject / describe（决定权归被指派者所在的"责任范围"）。
  *
- * 规格 §2.5：board suggest <目标元素id> --type <replace|add> --as <内容来源>
- *  - `--type`   —— `replace` 替换目标内容 / `add` 新增元素；默认 `replace`。
- *  - `--as`     —— 提议内容（**同意后并入白板的纯内容**）；支持 `text:<markdown>`。
- *  - `--reason` —— 建议理由（为什么这么改）；**只展示、同意时不并入目标**，可选。
- *  - `--actor` / `--agent` —— 发起建议的 Agent id（默认 `a_agent`）。
+ * 子命令：
+ *   create   —— 创建建议（原 `board suggest <白板> <目标元素id> ...` 等价）
+ *   accept   —— 同意建议：replace 替换目标内容 / add 落地新元素，移除建议元素
+ *   reject   —— 拒绝建议：删除建议元素，原件不变
+ *   describe —— 向建议追加一条反馈（写入 thread，建议元素保留；下一轮 Agent
+ *               读 thread 修订建议，形成「建议 ↔ 反馈」迭代回路）
  */
 import {
+  acceptSuggestion,
   createSuggestionElement,
   createTextElement,
   defaultSizeFor,
+  describeSuggestion,
   nextZ,
+  rejectSuggestion,
   SUGGESTION_CARD_SIZE,
   SUGGESTION_GAP,
   type SuggestionType,
+  type ThreadMsg,
 } from '@board/core';
 import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
@@ -29,22 +35,19 @@ import { resolveActor, buildAgentActivity } from '../util/actor.js';
 /** 无 `--actor` / `--agent` / `BOARD_AGENT_ID` 时建议归属的默认 Agent id。 */
 const DEFAULT_AGENT = 'a_agent';
 
-/** 命令用法提示。 */
-const USAGE =
-  'board suggest <白板路径> <目标元素id> --type <replace|add> --as text:"<md>" [--reason "<理由>"]';
-
-/** 执行 suggest 命令。 */
-export async function cmdSuggest(args: ParsedArgs): Promise<CmdResult> {
-  const boardPath = args.positionals[0];
-  const targetId = args.positionals[1];
+/** `board suggest create <白板> <目标元素id> --type <replace|add> --as text:"<md>" [--reason ...]` */
+async function suggestCreate(args: ParsedArgs): Promise<CmdResult> {
+  const boardPath = args.positionals[1];
+  const targetId = args.positionals[2];
+  const usage =
+    'board suggest create <白板路径> <目标元素id> --type <replace|add> --as text:"<md>" [--reason "<理由>"]';
   if (boardPath === undefined) {
-    throw new CliError(`缺少白板路径。用法: ${USAGE}`, EXIT.USAGE);
+    throw new CliError(`缺少白板路径。用法: ${usage}`, EXIT.USAGE);
   }
   if (targetId === undefined) {
-    throw new CliError(`缺少目标元素 id。用法: ${USAGE}`, EXIT.USAGE);
+    throw new CliError(`缺少目标元素 id。用法: ${usage}`, EXIT.USAGE);
   }
 
-  // --type replace|add（默认 replace）
   const typeRaw = args.options.get('type') ?? 'replace';
   if (typeRaw !== 'replace' && typeRaw !== 'add') {
     throw new CliError(
@@ -54,7 +57,6 @@ export async function cmdSuggest(args: ParsedArgs): Promise<CmdResult> {
   }
   const suggestionType: SuggestionType = typeRaw;
 
-  // --as text:<markdown>
   const asRaw = args.options.get('as');
   if (!asRaw) {
     throw new CliError(`缺少 --as。当前支持 --as text:"<markdown>"`, EXIT.USAGE);
@@ -70,14 +72,12 @@ export async function cmdSuggest(args: ParsedArgs): Promise<CmdResult> {
     throw new CliError('建议内容不能为空。', EXIT.USAGE);
   }
 
-  // --reason —— 建议理由（可选），与可并入的 payload 内容严格分开。
   const reason = args.options.get('reason') ?? '';
 
   const dir = resolveBoardDir(boardPath, args.options.get('board'));
   const handle = await openBoard(dir);
   const { scene } = handle;
 
-  // 目标元素必须存在
   const target = scene.elements.find((e) => e.id === targetId);
   if (!target) {
     throw new CliError(`未找到目标元素：${targetId}`, EXIT.NOT_FOUND);
@@ -85,11 +85,9 @@ export async function cmdSuggest(args: ParsedArgs): Promise<CmdResult> {
 
   const actor = resolveActor(args, DEFAULT_AGENT);
   const z = nextZ(scene.elements);
-  // 建议卡并排在目标右侧。
   const x = target.x + target.width + SUGGESTION_GAP;
   const y = target.y;
 
-  // payload —— 提议的文本元素（同意 replace 时替换目标内容，add 时成为新元素）。
   const textSize = defaultSizeFor('text');
   const payload = createTextElement({
     x,
@@ -134,4 +132,135 @@ export async function cmdSuggest(args: ParsedArgs): Promise<CmdResult> {
       y,
     },
   };
+}
+
+/** `board suggest accept <白板> <suggestionId>` */
+async function suggestAccept(args: ParsedArgs): Promise<CmdResult> {
+  const boardPath = args.positionals[1];
+  const suggestionId = args.positionals[2];
+  if (boardPath === undefined || suggestionId === undefined) {
+    throw new CliError(
+      '用法: board suggest accept <白板路径> <suggestionId>',
+      EXIT.USAGE,
+    );
+  }
+
+  const dir = resolveBoardDir(boardPath, args.options.get('board'));
+  const handle = await openBoard(dir);
+  const actor = resolveActor(args);
+  const result = acceptSuggestion(handle.scene, suggestionId, actor);
+  if (result.error) {
+    const code = result.error.includes('目标元素已不存在')
+      ? EXIT.CONFLICT
+      : EXIT.NOT_FOUND;
+    throw new CliError(result.error, code);
+  }
+  if (result.changed) {
+    await handle.save(result.scene);
+  }
+  await handle.announceAgent(buildAgentActivity(args, actor, suggestionId));
+
+  return {
+    code: EXIT.OK,
+    text: `已同意建议 ${suggestionId}`,
+    data: { suggestionId, op: 'accept', actor },
+  };
+}
+
+/** `board suggest reject <白板> <suggestionId>` */
+async function suggestReject(args: ParsedArgs): Promise<CmdResult> {
+  const boardPath = args.positionals[1];
+  const suggestionId = args.positionals[2];
+  if (boardPath === undefined || suggestionId === undefined) {
+    throw new CliError(
+      '用法: board suggest reject <白板路径> <suggestionId>',
+      EXIT.USAGE,
+    );
+  }
+
+  const dir = resolveBoardDir(boardPath, args.options.get('board'));
+  const handle = await openBoard(dir);
+  const actor = resolveActor(args);
+  const result = rejectSuggestion(handle.scene, suggestionId);
+  if (result.error) {
+    throw new CliError(result.error, EXIT.NOT_FOUND);
+  }
+  if (result.changed) {
+    await handle.save(result.scene);
+  }
+  await handle.announceAgent(buildAgentActivity(args, actor, suggestionId));
+
+  return {
+    code: EXIT.OK,
+    text: `已拒绝建议 ${suggestionId}`,
+    data: { suggestionId, op: 'reject', actor },
+  };
+}
+
+/** `board suggest describe <白板> <suggestionId> --text "<反馈>" [--role human|agent]` */
+async function suggestDescribe(args: ParsedArgs): Promise<CmdResult> {
+  const boardPath = args.positionals[1];
+  const suggestionId = args.positionals[2];
+  if (boardPath === undefined || suggestionId === undefined) {
+    throw new CliError(
+      '用法: board suggest describe <白板路径> <suggestionId> --text "<反馈>" [--role human|agent]',
+      EXIT.USAGE,
+    );
+  }
+  const text = (args.options.get('text') ?? '').trim();
+  if (!text) {
+    throw new CliError('--text 不能为空', EXIT.USAGE);
+  }
+  const roleRaw = args.options.get('role') ?? 'agent';
+  if (roleRaw !== 'human' && roleRaw !== 'agent') {
+    throw new CliError(
+      `--role 必须为 human 或 agent（实际：${roleRaw}）`,
+      EXIT.USAGE,
+    );
+  }
+  const role = roleRaw as ThreadMsg['role'];
+
+  const dir = resolveBoardDir(boardPath, args.options.get('board'));
+  const handle = await openBoard(dir);
+  const actor = resolveActor(args);
+  const result = describeSuggestion(handle.scene, suggestionId, text, actor, role);
+  if (result.error) {
+    throw new CliError(result.error, EXIT.NOT_FOUND);
+  }
+  if (result.changed) {
+    await handle.save(result.scene);
+  }
+  await handle.announceAgent(buildAgentActivity(args, actor, suggestionId));
+
+  return {
+    code: EXIT.OK,
+    text: `已向建议 ${suggestionId} 追加 ${role} 反馈`,
+    data: { suggestionId, op: 'describe', actor, role },
+  };
+}
+
+/** `board suggest <子命令>` 路由。 */
+export async function cmdSuggest(args: ParsedArgs): Promise<CmdResult> {
+  const sub = args.positionals[0];
+  if (sub === undefined) {
+    throw new CliError(
+      '用法: board suggest <create|accept|reject|describe> ...',
+      EXIT.USAGE,
+    );
+  }
+  switch (sub) {
+    case 'create':
+      return suggestCreate(args);
+    case 'accept':
+      return suggestAccept(args);
+    case 'reject':
+      return suggestReject(args);
+    case 'describe':
+      return suggestDescribe(args);
+    default:
+      throw new CliError(
+        `未知子命令 "suggest ${sub}"。可用: create, accept, reject, describe`,
+        EXIT.USAGE,
+      );
+  }
 }

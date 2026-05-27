@@ -146,12 +146,44 @@ async function textAppend(args: ParsedArgs): Promise<CmdResult> {
   };
 }
 
+/**
+ * `board text set <elementId> --markdown "<新内容>" [--actor <id>]`
+ *
+ * 整体替换 text 元素的 markdown 内容。**走 server**(/api/elements/text-set,
+ * Y.Text reset),不能 disk 直写 —— 否则 Y.Doc 持旧值会反过来覆盖刚写的盘。
+ */
+async function textSet(args: ParsedArgs): Promise<CmdResult> {
+  const elementId = args.positionals[0];
+  if (!elementId) {
+    throw new CliError(
+      '用法: board text set <elementId> --markdown "<新内容>"',
+      EXIT.USAGE,
+    );
+  }
+  const markdown = args.options.get('markdown');
+  if (markdown === undefined) {
+    throw new CliError('缺少 --markdown', EXIT.USAGE);
+  }
+  const actor = args.options.get('actor') ?? DEFAULT_ACTOR;
+
+  const data = await postJson<{ ok: boolean; length: number }>(
+    args,
+    '/api/elements/text-set',
+    { actor, elementId, markdown },
+  );
+  return {
+    code: EXIT.OK,
+    text: `已整体替换 markdown（${data.length} 字符）`,
+    data: { elementId, ...data },
+  };
+}
+
 /** 执行 text 命令。 */
 export async function cmdText(args: ParsedArgs): Promise<CmdResult> {
   const sub = args.positionals[0];
   if (sub === undefined) {
     throw new CliError(
-      '缺少子命令。用法: board text create|append ...',
+      '缺少子命令。用法: board text create|append|set ...',
       EXIT.USAGE,
     );
   }
@@ -165,9 +197,11 @@ export async function cmdText(args: ParsedArgs): Promise<CmdResult> {
       return textCreate(subArgs);
     case 'append':
       return textAppend(subArgs);
+    case 'set':
+      return textSet(subArgs);
     default:
       throw new CliError(
-        `未知子命令 "text ${sub}"。可用: create, append`,
+        `未知子命令 "text ${sub}"。可用: create, append, set`,
         EXIT.USAGE,
       );
   }
