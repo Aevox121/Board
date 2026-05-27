@@ -22,6 +22,7 @@ import type { Element, FileElement } from '@board/core';
 import { fileContentUrl, fetchFileText } from '../server/files';
 import { writeFileText } from '../server/client';
 import { toast } from '../components/toast';
+import { useZoomBucket } from '../canvas/viewportStore';
 import {
   renderMarkdownRich,
   toggleMarkdownTask,
@@ -161,11 +162,13 @@ function FileCardImpl({
   missing,
   editing: editingProp,
   onEditingChange,
-  zoom = 1,
   onResize,
   getElements,
   navigateToElement,
 }: FileCardProps): JSX.Element {
+  // 缩放档（5% 一档）—— 从外部 store 订阅。OverlayLayer 不再 viewport 重渲；
+  // FileCard 自己按需订阅离散缩放档来决定 LOD。
+  const zoom = useZoomBucket() / 20;
   const { path, mime, size, previewable } = element;
   const name = fileBaseName(path);
   const rotation = cardRotation(element.id);
@@ -759,8 +762,6 @@ export const FileCard = memo(FileCardImpl, (prev, next) => {
   // onEditingChange / onResize 是 OverlayLayer 里的内联 arrow function，每次
   // 重渲都是新 ref 但语义不变（仍把当前 element id 传给同一 resize handler）。
   // 不比较，避免 memo 被 ref 抖动击穿。
-  // zoom 离散化到 0.05 粒度避免缩放手势抖动反复切档
-  const pz = Math.round((prev.zoom ?? 1) * 20);
-  const nz = Math.round((next.zoom ?? 1) * 20);
-  return pz === nz;
+  // zoom 不再是 prop —— FileCard 自己用 useZoomBucket 订阅 store。
+  return true;
 });

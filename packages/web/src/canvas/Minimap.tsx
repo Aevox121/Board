@@ -12,6 +12,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Element } from '@board/core';
 import type { CanvasViewport } from './viewport';
+import { useViewport } from './viewportStore';
 import './minimap.css';
 
 const MINIMAP_W = 200;
@@ -66,7 +67,6 @@ function computeBounds(
 
 export interface MinimapProps {
   elements: ReadonlyArray<Element>;
-  viewport: CanvasViewport;
   /** 取主画布当前尺寸（小地图需据此换算视口框 / 落点）。 */
   getViewSize: () => { width: number; height: number };
   /** 点击 / 拖动 落入小地图某画布坐标点时，把主视口跳到该点居中。 */
@@ -75,10 +75,10 @@ export interface MinimapProps {
 
 export function Minimap({
   elements,
-  viewport,
   getViewSize,
   onJump,
 }: MinimapProps): JSX.Element {
+  const viewport = useViewport();
   // 主画布尺寸非画布坐标，需要在缩略图中读取。用 state 让 resize 时跟随。
   const [viewSize, setViewSize] = useState<{ width: number; height: number }>(() =>
     getViewSize(),

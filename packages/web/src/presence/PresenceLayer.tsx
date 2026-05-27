@@ -16,7 +16,7 @@ import { SESSION } from '../session';
 import { sendPresence } from '../server/client';
 import { presenceStore } from './presenceStore';
 import { useBoard } from '../board/BoardContext';
-import type { OverlayViewport } from '../overlay/OverlayLayer';
+import { useViewport, viewportStore } from '../canvas/viewportStore';
 import './presence.css';
 
 /** 光标上报节流间隔（毫秒）。 */
@@ -25,8 +25,6 @@ const THROTTLE_MS = 90;
 const HEARTBEAT_MS = 4000;
 
 export interface PresenceLayerProps {
-  /** 与覆盖层共享的视口（scrollX / scrollY / zoom）。 */
-  viewport: OverlayViewport;
   /**
    * 点击对端光标 / 名牌时回调（PRD §8.2 跟随视角入口）。CanvasShell 据此
    * 切换 followingClientId；不传则名牌不响应点击（保持原 pointer-events:none）。
@@ -36,7 +34,6 @@ export interface PresenceLayerProps {
 
 /** 在场光标层。 */
 export function PresenceLayer({
-  viewport,
   onFollowClient,
 }: PresenceLayerProps): JSX.Element {
   const users = useSyncExternalStore(
@@ -47,9 +44,9 @@ export function PresenceLayer({
   // 给 Agent 轨道光标用 —— Agent 的 targetElementId 解析为 bbox
   const elementById = new Map(scene.elements.map((e) => [e.id, e]));
   const rootRef = useRef<HTMLDivElement>(null);
-  // 视口随平移 / 缩放变化，用 ref 让上报回调读到最新值。
-  const vpRef = useRef(viewport);
-  vpRef.current = viewport;
+  // 渲染对端光标需要随视口实时换算屏幕位置 —— 订阅 viewport store。
+  // 处理函数（mousemove / heartbeat）走 viewportStore.get() 读快照即可。
+  const viewport = useViewport();
 
   // ── 本端光标上报：鼠标移动节流 + 心跳 + 离开 ──────────────────
   useEffect(() => {
@@ -60,7 +57,7 @@ export function PresenceLayer({
     const post = (cursor: { x: number; y: number } | null): void => {
       // viewport（PRD §8.2 跟随视角）—— 视口左上角的画布坐标 + zoom；
       // 受让方按此对齐自己的视口。
-      const { scrollX, scrollY, zoom } = vpRef.current;
+      const { scrollX, scrollY, zoom } = viewportStore.get();
       void sendPresence({
         clientId: SESSION.clientId,
         name: SESSION.name,
@@ -87,7 +84,7 @@ export function PresenceLayer({
       ) {
         return;
       }
-      const { scrollX, scrollY, zoom } = vpRef.current;
+      const { scrollX, scrollY, zoom } = viewportStore.get();
       // 屏幕坐标 → 画布坐标（screen = (canvas + scroll) * zoom 的逆）。
       lastCursor = {
         x: (e.clientX - r.left) / zoom - scrollX,

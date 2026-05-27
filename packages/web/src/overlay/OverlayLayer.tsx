@@ -69,6 +69,11 @@ import { ConfirmDialog, PromptDialog } from '../components/Dialog';
 import { toast } from '../components/toast';
 import { ConnectorLayer } from './ConnectorLayer';
 import { ResizeHandles, type ResizeApi } from './ResizeHandles';
+import { ElementSlot, type SlotActions } from './ElementSlot';
+import { viewportStore } from '../canvas/viewportStore';
+import { renderCounters } from '../canvas/renderCounters';
+import { record } from '../canvas/perfLog';
+import { dragStore } from './dragStore';
 import { StylePanel } from './StylePanel';
 import { ShapeView } from '../canvas/ShapeView';
 import { DrawView, drawHitPath } from '../canvas/DrawView';
@@ -98,6 +103,29 @@ export interface OverlayViewport {
  * 缩放进行中的手绘元素 —— 采样点按比例实时缩放，使笔迹随包围盒一起变
  * （否则缩放过程中笔迹与新尺寸脱节，松手才跳到位）。
  */
+/** 浅比较两组吸附参考线 —— 避免拖动期间反复 setSnapGuides 引用新数组而触发
+ *  父组件重渲（多数 pointermove 帧的 guides 是空数组 [] 但每次都是新 ref）。 */
+function snapGuidesEqual(
+  a: ReadonlyArray<{ axis: string; pos: number; from: number; to: number }>,
+  b: ReadonlyArray<{ axis: string; pos: number; from: number; to: number }>,
+): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i]!;
+    const y = b[i]!;
+    if (
+      x.axis !== y.axis ||
+      x.pos !== y.pos ||
+      x.from !== y.from ||
+      x.to !== y.to
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function liveDrawEl(el: DrawElement, r: ResizeState): DrawElement {
   const sx = r.w0 > 0 ? r.w / r.w0 : 1;
   const sy = r.h0 > 0 ? r.h / r.h0 : 1;
@@ -171,7 +199,7 @@ function ConnectTargetRing({ element }: { element: Element }): JSX.Element {
  * 选中框 —— 选中元素时套一圈细描边，按元素形状走（矩形 / 椭圆 / 菱形），
  * 外扩 4px 贴着元素外缘。渲染在卡槽内，故按卡槽（含缩放中的实时尺寸）定位。
  */
-function SelectionFrame({
+export function SelectionFrame({
   element,
   width,
   height,
@@ -215,8 +243,6 @@ function SelectionFrame({
 export interface OverlayLayerProps {
   /** 内存中的白板场景（board.json 真相源）。 */
   scene: BoardScene;
-  /** 当前视口 —— 由画布外壳下传。 */
-  viewport: OverlayViewport;
   /** 当前工具 id —— 决定创建 / 连线 / 橡皮擦模式。 */
   activeTool: string;
   /** 切换当前工具 —— 创建图形后回到选择工具。 */
@@ -235,7 +261,7 @@ type ContentElement = Extract<
  * （ShapeView / DrawView），与卡片同处一棵渲染树、按 z 统一排序，
  * 不再经 Excalidraw。
  */
-type CanvasElement = Extract<
+export type CanvasElement = Extract<
   Element,
   {
     type:
@@ -265,7 +291,7 @@ function isCanvasElement(el: Element): el is CanvasElement {
 }
 
 /** DragState.kind 的字面量集合 —— 表驱动 dispatch 用。 */
-type DragKind = 'file' | 'region' | 'text' | 'element' | 'group';
+export type DragKind = 'file' | 'region' | 'text' | 'element' | 'group';
 
 /** 拖拽（移动）过程的瞬时状态 —— 文件卡 / 文本卡 / 区域 / 图形手绘共用。 */
 interface DragState {
@@ -679,6 +705,8 @@ const SNAP_THRESHOLD_PX = 6;
  * 的 border-width 三者保持一致。
  */
 const CONNECT_TOL = 12;
+/** 折叠态区域的渲染高度（覆盖 slot height）—— ElementSlot 也读它。 */
+export const COLLAPSED_REGION_HEIGHT = 44;
 /** 区域可缩放到的绝对最小尺寸（画布单位）。 */
 const REGION_MIN_W = 240;
 const REGION_MIN_H = 140;
@@ -765,7 +793,7 @@ function isAgentParticipant(id: string): boolean {
  *
  * 已 ack 的 id 在 ackSet 中直接返回 null。
  */
-function fileAgentStatusOf(
+export function fileAgentStatusOf(
   el: FileElement,
   ackSet: ReadonlySet<string>,
 ): 'new' | 'modified' | null {
@@ -1057,7 +1085,7 @@ function computeResize(
  * 仅当字段偏离默认值时写入对应变量；未偏离则不写 —— 卡片 CSS 用
  * `var(--ov-xxx, <设计默认>)` 兜底，保证未调样式的卡片保持设计系统原貌。
  */
-function styleVars(style: Style): Record<string, string> {
+export function styleVars(style: Style): Record<string, string> {
   const vars: Record<string, string> = {};
   if (style.strokeColor !== DEFAULT_STYLE.strokeColor) {
     vars['--ov-stroke'] = style.strokeColor;
@@ -1217,11 +1245,15 @@ function CreationPreview({
 
 export function OverlayLayer({
   scene,
-  viewport,
   activeTool,
   onActiveToolChange,
 }: OverlayLayerProps): JSX.Element {
-  const { scrollX, scrollY, zoom } = viewport;
+  renderCounters.bump('OverlayLayer');
+  const _renderT0 = performance.now();
+  // 视口不再以 prop 接入 —— viewport 真相源在外部 store（canvas/viewportStore），
+  // 平移 / 缩放走 store.set() 时**直接 mutate `.ov-transform` 的 DOM style**，
+  // 不触发本组件重渲。本组件内部需要 zoom / scroll 时，按需 `viewportStore.get()`
+  // 读快照。
   const {
     actorId,
     connection,
@@ -1324,8 +1356,17 @@ export function OverlayLayer({
     (id: string) => requestNavigateToElement(id),
     [requestNavigateToElement],
   );
-  const viewportRef = useRef(viewport);
-  viewportRef.current = viewport;
+  // 平移容器 ref —— useEffect 里注册到 viewportStore，由 store 直接 mutate
+  // 这层 DOM 的 style.transform，绕开 React。
+  const transformElRef = useRef<HTMLDivElement | null>(null);
+  useEffect(
+    () => viewportStore.registerTransformEl(transformElRef.current),
+    [],
+  );
+  // 诊断：每次本组件完成 render，记一次实际耗时（render 阶段，不含 commit）。
+  useEffect(() => {
+    record('OverlayLayer.render', performance.now() - _renderT0);
+  });
   const activeToolRef = useRef(activeTool);
   activeToolRef.current = activeTool;
   // 创建状态的 ref 镜像 —— 供挂在 window 上的事件回调读取最新值。
@@ -1347,6 +1388,27 @@ export function OverlayLayer({
   });
   // 连线本体拖拽的瞬时状态镜像 —— 连线是 SVG、走 window 监听，回调据此读最新值。
   const connDragRef = useRef<DragState | null>(null);
+  // 拖动期间高频更新的 offset/moved 镜像 —— OverlayLayer 拖动中不再 setDrag，
+  // 这里维护实时值供 pointerup 取最终 offset 提交 scene 用。
+  const dragOffsetRef = useRef<{ dx: number; dy: number; moved: boolean }>({
+    dx: 0,
+    dy: 0,
+    moved: false,
+  });
+  // drag state 的 ref 镜像 —— RAF 回调里要读最新的 drag（闭包陈旧）。
+  const dragStateRef = useRef<DragState | null>(null);
+  dragStateRef.current = drag;
+  // pointermove 的 RAF 节流缓冲 —— 高刷率鼠标（1000Hz 游戏鼠标等）会触发
+  // 远超屏幕刷新率的 pointermove，逐个处理浪费 CPU。把最新事件存进 ref，
+  // 每屏幕帧只处理一次。
+  const moveBufferRef = useRef<{
+    pointerId: number;
+    clientX: number;
+    clientY: number;
+    ctrlKey: boolean;
+    metaKey: boolean;
+  } | null>(null);
+  const moveRafRef = useRef<number | null>(null);
 
   /** 选中单个元素（替换当前选区）—— 用于新建元素等「就选它本身」的场景。 */
   function selectOnly(id: string): void {
@@ -1503,56 +1565,18 @@ export function OverlayLayer({
     return hidden;
   }, [scene.elements, collapsedRegionIds]);
 
-  /** 折叠态区域的渲染高度（覆盖 slot height）。 */
-  const COLLAPSED_REGION_HEIGHT = 44;
-
   const visibleElements = useMemo<CanvasElement[]>(() => {
     // 折叠区域下的元素一律不渲染（无视虚拟化）—— 状态保留也不展示。
-    const base = canvasElements.filter((el) => !hiddenByCollapseIds.has(el.id));
-    if (base.length <= VIRTUALIZATION_THRESHOLD) return base;
-    if (surfaceSize.width === 0 || surfaceSize.height === 0) return base;
-    // 视口画布坐标盒（含 EDGE_PAD）。
-    const padCanvas = VIEWPORT_PAD_PX / zoom;
-    const vx = -scrollX - padCanvas;
-    const vy = -scrollY - padCanvas;
-    const vRight = -scrollX + surfaceSize.width / zoom + padCanvas;
-    const vBottom = -scrollY + surfaceSize.height / zoom + padCanvas;
-    return base.filter((el) => {
-      // 状态相关无条件保留 —— 选中 / 拖拽 / 缩放 / 旋转 / 标签编辑中的元素。
-      if (selectedIds.has(el.id)) return true;
-      if (drag && drag.memberIds.has(el.id)) return true;
-      if (resize && resize.elementId === el.id) return true;
-      if (rotate && rotate.elementId === el.id) return true;
-      if (editingLabelId === el.id) return true;
-      if (editingTextId === el.id) return true;
-      if (editingFileId === el.id) return true;
-      if (editingRegionId === el.id) return true;
-      // 折叠区域用其 chip 高度判定（COLLAPSED_REGION_HEIGHT），bbox 比真实小，
-      // 但 el.width 仍取原值；漏渲染影响小，无需特殊处理。
-      // 轴对齐包围盒与视口盒相交即保留。
-      return !(
-        el.x + el.width < vx ||
-        el.x > vRight ||
-        el.y + el.height < vy ||
-        el.y > vBottom
-      );
-    });
-  }, [
-    canvasElements,
-    hiddenByCollapseIds,
-    surfaceSize,
-    scrollX,
-    scrollY,
-    zoom,
-    selectedIds,
-    drag,
-    resize,
-    rotate,
-    editingLabelId,
-    editingTextId,
-    editingFileId,
-    editingRegionId,
-  ]);
+    //
+    // 视口虚拟化已弃用：之前按 viewport 盒过滤 off-screen 元素，但 OverlayLayer
+    // 不再订阅 viewport（pan 优化），导致 pan 滚到新区域时新元素直到别的
+    // state 变化（如点击）才出现 —— 体感是「自动加载延迟」。
+    //
+    // 取消虚拟化的代价：DOM 多挂一些不可见 slot。但 ElementSlot 已 memo，
+    // off-screen 元素不重渲，仅多占少量 DOM 内存。元素量级 100+ 时如需虚拟化
+    // 应单独做一层（订阅 viewport 节流后通知）。
+    return canvasElements.filter((el) => !hiddenByCollapseIds.has(el.id));
+  }, [canvasElements, hiddenByCollapseIds]);
 
   // 手绘元素的命中裁剪 path —— id → `path('<轮廓>')`，供卡槽 clip-path 把
   // 手绘的命中区裁成笔迹形状（包围盒空白处不再误选）。采样点 <2 的不裁。
@@ -1834,7 +1858,7 @@ export function OverlayLayer({
     /** 屏幕坐标 → 画布坐标。 */
     const toCanvas = (cx: number, cy: number): { x: number; y: number } => {
       const root = rootRef.current;
-      const vp = viewportRef.current;
+      const vp = viewportStore.get();
       if (!root) return { x: 0, y: 0 };
       const rect = root.getBoundingClientRect();
       return {
@@ -2130,7 +2154,7 @@ export function OverlayLayer({
     const onMove = (e: PointerEvent): void => {
       const root = rootRef.current;
       if (!root) return;
-      const vp = viewportRef.current;
+      const vp = viewportStore.get();
       const rect = root.getBoundingClientRect();
       const cx = (e.clientX - rect.left) / vp.zoom - vp.scrollX;
       const cy = (e.clientY - rect.top) / vp.zoom - vp.scrollY;
@@ -2240,7 +2264,7 @@ export function OverlayLayer({
     if (!host) return;
     const toCanvas = (cx: number, cy: number): { x: number; y: number } => {
       const root = rootRef.current;
-      const vp = viewportRef.current;
+      const vp = viewportStore.get();
       if (!root) return { x: 0, y: 0 };
       const rect = root.getBoundingClientRect();
       return {
@@ -2535,7 +2559,7 @@ export function OverlayLayer({
       const root = rootRef.current;
       if (!root) return;
       const r = root.getBoundingClientRect();
-      const vp = viewportRef.current;
+      const vp = viewportStore.get();
       const cx = (e.clientX - r.left) / vp.zoom - vp.scrollX;
       const cy = (e.clientY - r.top) / vp.zoom - vp.scrollY;
       e.preventDefault();
@@ -3743,7 +3767,7 @@ export function OverlayLayer({
   /** 当前视口中心的画布坐标 —— 粘贴的图片 / 嵌入元素落在此处。 */
   function viewportCenter(): { x: number; y: number } {
     const root = rootRef.current;
-    const vp = viewportRef.current;
+    const vp = viewportStore.get();
     if (!root) return { x: 0, y: 0 };
     const rect = root.getBoundingClientRect();
     return {
@@ -4166,6 +4190,10 @@ export function OverlayLayer({
       offsetY: 0,
       moved: false,
     });
+    // 把成员集告诉 dragStore —— 后续 pointermove 通过 store 直接 DOM mutate
+    // 被拖元素的 transform，不再 setDrag 每帧。
+    dragOffsetRef.current = { dx: 0, dy: 0, moved: false };
+    dragStore.begin(members);
   }
 
   /**
@@ -4177,6 +4205,8 @@ export function OverlayLayer({
     rawDx: number,
     rawDy: number,
   ): { dx: number; dy: number; guides: SnapGuide[] } {
+    const _t0 = performance.now();
+    const { zoom } = viewportStore.get();
     const cur = sceneRef.current;
     // 被拖元素的并集包围盒（场景原坐标）。
     let x0 = Infinity;
@@ -4204,30 +4234,73 @@ export function OverlayLayer({
       if (e.type === 'connector' || e.type === 'suggestion') continue;
       refs.push({ x: e.x, y: e.y, width: e.width, height: e.height });
     }
-    return computeSnap(dragged, rawDx, rawDy, refs, SNAP_THRESHOLD_PX / zoom);
+    const res = computeSnap(dragged, rawDx, rawDy, refs, SNAP_THRESHOLD_PX / zoom);
+    record('snapForDrag', performance.now() - _t0);
+    return res;
   }
 
   /**
    * 指针移动 —— 把屏幕位移换算为画布偏移（除以 zoom），应用对齐吸附后更新
    * 拖拽状态。按住 Ctrl/⌘ 临时关闭吸附。
    */
-  function handlePointerMove(e: React.PointerEvent<HTMLDivElement>): void {
-    const d = drag;
-    if (!d || d.pointerId !== e.pointerId) return;
-    const dxScreen = e.clientX - d.startScreenX;
-    const dyScreen = e.clientY - d.startScreenY;
-    const moved = d.moved || Math.hypot(dxScreen, dyScreen) > DRAG_THRESHOLD_PX;
+  function processPointerMove(): void {
+    const _t0 = performance.now();
+    moveRafRef.current = null;
+    const m = moveBufferRef.current;
+    moveBufferRef.current = null;
+    if (!m) return;
+    const { zoom } = viewportStore.get();
+    const d = dragStateRef.current;
+    if (!d || d.pointerId !== m.pointerId) return;
+    // 用 finally 包不便，简单点：函数末尾再 record。
+    const dxScreen = m.clientX - d.startScreenX;
+    const dyScreen = m.clientY - d.startScreenY;
+    const moved =
+      dragOffsetRef.current.moved ||
+      Math.hypot(dxScreen, dyScreen) > DRAG_THRESHOLD_PX;
     let dx = dxScreen / zoom;
     let dy = dyScreen / zoom;
     let guides: SnapGuide[] = [];
-    if (moved && !e.ctrlKey && !e.metaKey) {
+    if (moved && !m.ctrlKey && !m.metaKey) {
       const snap = snapForDrag(d, dx, dy);
       dx = snap.dx;
       dy = snap.dy;
       guides = snap.guides;
     }
-    setDrag({ ...d, offsetX: dx, offsetY: dy, moved });
-    setSnapGuides(guides);
+    // 高频路径：把 offset 写到 dragStore（store 直接 mutate 被拖元素 DOM 的
+    // transform），把可视吸附线写到 snapGuides。React 侧仅在 moved 从 false
+    // 翻到 true 时 setDrag 一次（让 OverlayLayer 知道"拖拽已成立"），之后
+    // 整个手势期间不再 setDrag —— 这是拖动卡顿的核心修复。
+    dragOffsetRef.current = { dx, dy, moved };
+    const _tStore = performance.now();
+    dragStore.setOffset(dx, dy);
+    record('dragStore.setOffset', performance.now() - _tStore);
+    // snapGuides 通常多数帧都是空数组；setSnapGuides([]) 每次都新 ref 会让
+    // 父组件重渲。等价时直接复用旧引用避免无谓重渲。
+    setSnapGuides((prev) => (snapGuidesEqual(prev, guides) ? prev : guides));
+    if (moved && !d.moved) {
+      setDrag({ ...d, moved: true });
+    }
+    record('processPointerMove', performance.now() - _t0);
+  }
+
+  function handlePointerMove(e: React.PointerEvent<HTMLDivElement>): void {
+    // 没在拖动 / 不是当前拖动指针 —— 不安排 RAF。否则非拖动期间的鼠标 hover
+    // 也会反复 RAF 调度（虽然 processPointerMove 内部会早退）。
+    const cur = dragStateRef.current;
+    if (!cur || cur.pointerId !== e.pointerId) return;
+    // RAF 节流 —— 1000Hz 鼠标也只在每屏幕帧处理一次。React synthetic event 在
+    // 回调返回后会被回收，必须同步把需要的字段拷到普通对象里。
+    moveBufferRef.current = {
+      pointerId: e.pointerId,
+      clientX: e.clientX,
+      clientY: e.clientY,
+      ctrlKey: e.ctrlKey,
+      metaKey: e.metaKey,
+    };
+    if (moveRafRef.current === null) {
+      moveRafRef.current = requestAnimationFrame(processPointerMove);
+    }
   }
 
   /** 指针抬起 —— 释放捕获；越过阈值则落点处理，否则视为点击不处理。 */
@@ -4239,10 +4312,21 @@ export function OverlayLayer({
     } catch {
       // 指针捕获可能已自动释放，忽略。
     }
+    // 取消还没消费的 pointermove RAF —— 避免落定后被旧的 move 数据覆盖。
+    if (moveRafRef.current !== null) {
+      cancelAnimationFrame(moveRafRef.current);
+      moveRafRef.current = null;
+    }
+    moveBufferRef.current = null;
+    // dragStore 内的实时 offset / moved 标志是真相源（OverlayLayer 在拖动期间
+    // 不再 setDrag）—— 把它们补回到 d 上再走 finishDrag。
+    const { dx, dy, moved } = dragOffsetRef.current;
+    dragStore.end();
     setDrag(null);
     setSnapGuides([]);
-    if (d.moved) finishDrag(d);
-    else if (d.kind === 'group') {
+    if (moved) {
+      finishDrag({ ...d, offsetX: dx, offsetY: dy, moved: true });
+    } else if (d.kind === 'group') {
       // 多选中对某元素的单击（未拖拽）—— 选区收敛到该元素（属编组则收敛到组）。
       selectGroupOf(d.elementId);
     }
@@ -4250,6 +4334,12 @@ export function OverlayLayer({
 
   /** 指针取消（如系统手势打断）—— 直接丢弃拖拽，不改场景。 */
   function handlePointerCancel(e: React.PointerEvent<HTMLDivElement>): void {
+    if (moveRafRef.current !== null) {
+      cancelAnimationFrame(moveRafRef.current);
+      moveRafRef.current = null;
+    }
+    moveBufferRef.current = null;
+    dragStore.end();
     setDrag((d) => (d && d.pointerId === e.pointerId ? null : d));
     setSnapGuides([]);
   }
@@ -4307,7 +4397,7 @@ export function OverlayLayer({
   function onConnDragMove(e: PointerEvent): void {
     const d = connDragRef.current;
     if (!d || e.pointerId !== d.pointerId) return;
-    const z = viewportRef.current.zoom;
+    const z = viewportStore.get().zoom;
     const dxs = e.clientX - d.startScreenX;
     const dys = e.clientY - d.startScreenY;
     const next: DragState = {
@@ -4402,6 +4492,7 @@ export function OverlayLayer({
    *  - 旋转元素 —— 跳过吸附（本地坐标轴与世界轴不同，对齐线会错位）。
    */
   function handleResizeMove(e: React.PointerEvent<HTMLDivElement>): void {
+    const { scrollX, scrollY, zoom } = viewportStore.get();
     const r = resize;
     if (!r || r.pointerId !== e.pointerId) return;
     const shiftKey = e.shiftKey;
@@ -4533,6 +4624,7 @@ export function OverlayLayer({
    * 按住 Shift 吸附到 15° 整数倍。
    */
   function handleRotateMove(e: React.PointerEvent<HTMLDivElement>): void {
+    const { scrollX, scrollY, zoom } = viewportStore.get();
     const root = rootRef.current;
     if (!root) return;
     const rect = root.getBoundingClientRect();
@@ -4577,6 +4669,7 @@ export function OverlayLayer({
     hx: -1 | 0 | 1,
     hy: -1 | 0 | 1,
   ): void {
+    const { scrollX, scrollY, zoom } = viewportStore.get();
     if (e.button !== 0) return;
     e.stopPropagation();
     const box = groupHandleBox;
@@ -4614,6 +4707,7 @@ export function OverlayLayer({
   function handleGroupResizeMove(
     e: React.PointerEvent<HTMLDivElement>,
   ): void {
+    const { scrollX, scrollY, zoom } = viewportStore.get();
     const r = groupResize;
     if (!r || r.pointerId !== e.pointerId) return;
     const shiftKey = e.shiftKey;
@@ -4707,6 +4801,7 @@ export function OverlayLayer({
 
   /** 成组缩放结束 —— 按比例落定每个成员的位置 / 尺寸（draw 采样点同步）。 */
   function handleGroupResizeUp(e: React.PointerEvent<HTMLDivElement>): void {
+    const { scrollX, scrollY, zoom } = viewportStore.get();
     const r = groupResize;
     if (!r || r.pointerId !== e.pointerId) return;
     try {
@@ -4777,6 +4872,7 @@ export function OverlayLayer({
 
   /** 指针按下成组旋转手柄 —— 冻结成员快照与并集中心，进入成组旋转。 */
   function beginGroupRotate(e: React.PointerEvent<HTMLDivElement>): void {
+    const { scrollX, scrollY, zoom } = viewportStore.get();
     if (e.button !== 0) return;
     e.stopPropagation();
     const box = groupHandleBox;
@@ -4815,6 +4911,7 @@ export function OverlayLayer({
   function handleGroupRotateMove(
     e: React.PointerEvent<HTMLDivElement>,
   ): void {
+    const { scrollX, scrollY, zoom } = viewportStore.get();
     const root = rootRef.current;
     if (!root) return;
     const rect = root.getBoundingClientRect();
@@ -4833,6 +4930,7 @@ export function OverlayLayer({
 
   /** 成组旋转结束 —— 每个成员绕并集中心刚性旋转、角度叠加增量后落定。 */
   function handleGroupRotateUp(e: React.PointerEvent<HTMLDivElement>): void {
+    const { scrollX, scrollY, zoom } = viewportStore.get();
     const r = groupRotate;
     if (!r || r.pointerId !== e.pointerId) return;
     try {
@@ -4887,6 +4985,7 @@ export function OverlayLayer({
   function handleGroupRotateCancel(
     e: React.PointerEvent<HTMLDivElement>,
   ): void {
+    const { scrollX, scrollY, zoom } = viewportStore.get();
     setGroupRotate((r) => (r && r.pointerId === e.pointerId ? null : r));
   }
 
@@ -5220,11 +5319,124 @@ export function OverlayLayer({
   const menuAllLocked =
     menuSel.length > 0 && menuSel.every((e) => e.locked);
 
-  // 变换容器样式 —— 实现 screen = (canvas + scroll) * zoom 的视口变换。
-  const transformStyle: React.CSSProperties = {
-    transform: `translate(${scrollX * zoom}px, ${scrollY * zoom}px) scale(${zoom})`,
-    transformOrigin: '0 0',
+  // 变换容器样式不再走 React inline style —— 由 viewportStore 直接 mutate
+  // transformElRef 的 DOM style.transform / transformOrigin（见上文 useEffect
+  // 把 ref 注册到 store）。`.ov-transform` 上不挂 style。
+
+  // ── 稳定动作束（ElementSlot 用）──────────────────────────────
+  // 每次渲染把最新方法塞进 ref；对外 actions 对象一次创建（useMemo 空 deps）
+  // 跨渲染恒定引用，方法内部都从 ref 读最新闭包 —— 这样 ElementSlot 的
+  // memo 不会因为 ~30 个 handler 引用每帧都新而被击穿。
+  const slotImplRef = useRef<{
+    handlePointerMove: typeof handlePointerMove;
+    handlePointerUp: typeof handlePointerUp;
+    handlePointerCancel: typeof handlePointerCancel;
+    handleResizeMove: typeof handleResizeMove;
+    handleResizeUp: typeof handleResizeUp;
+    handleResizeCancel: typeof handleResizeCancel;
+    handleRotateMove: typeof handleRotateMove;
+    handleRotateUp: typeof handleRotateUp;
+    handleRotateCancel: typeof handleRotateCancel;
+    beginDrag: typeof beginDrag;
+    beginResize: typeof beginResize;
+    beginRotate: typeof beginRotate;
+    toggleInSelection: typeof toggleInSelection;
+    groupMembersOf: typeof groupMembersOf;
+    changeRegionOwner: typeof changeRegionOwner;
+    setRegionCollapsed: typeof setRegionCollapsed;
+    setRegionAutoFile: typeof setRegionAutoFile;
+    setFolderExpanded: typeof setFolderExpanded;
+    setFolderViewMode: typeof setFolderViewMode;
+    commitTextMarkdown: typeof commitTextMarkdown;
+    resizeTextElement: typeof resizeTextElement;
+    commitShapeLabel: typeof commitShapeLabel;
+    resizeFileElement: typeof resizeFileElement;
+  } | null>(null);
+  slotImplRef.current = {
+    handlePointerMove,
+    handlePointerUp,
+    handlePointerCancel,
+    handleResizeMove,
+    handleResizeUp,
+    handleResizeCancel,
+    handleRotateMove,
+    handleRotateUp,
+    handleRotateCancel,
+    beginDrag,
+    beginResize,
+    beginRotate,
+    toggleInSelection,
+    groupMembersOf,
+    changeRegionOwner,
+    setRegionCollapsed,
+    setRegionAutoFile,
+    setFolderExpanded,
+    setFolderViewMode,
+    commitTextMarkdown,
+    resizeTextElement,
+    commitShapeLabel,
+    resizeFileElement,
   };
+  const slotActions = useMemo<SlotActions>(
+    () => ({
+      toggleInSelection: (id) => slotImplRef.current!.toggleInSelection(id),
+      groupMembersOf: (id) => slotImplRef.current!.groupMembersOf(id),
+      setSelectedIds: (ids) => setSelectedIds(ids),
+      selectedIdsHas: (id) => selectedIdsRef.current.has(id),
+      selectedIdsSize: () => selectedIdsRef.current.size,
+      beginDrag: (e, el, kind, m) =>
+        slotImplRef.current!.beginDrag(e, el, kind, m),
+      handlePointerMove: (e) => slotImplRef.current!.handlePointerMove(e),
+      handlePointerUp: (e) => slotImplRef.current!.handlePointerUp(e),
+      handlePointerCancel: (e) =>
+        slotImplRef.current!.handlePointerCancel(e),
+      beginResize: (e, el, hx, hy) =>
+        slotImplRef.current!.beginResize(e, el, hx, hy),
+      handleResizeMove: (e) => slotImplRef.current!.handleResizeMove(e),
+      handleResizeUp: (e) => slotImplRef.current!.handleResizeUp(e),
+      handleResizeCancel: (e) => slotImplRef.current!.handleResizeCancel(e),
+      beginRotate: (e, el) => slotImplRef.current!.beginRotate(e, el),
+      handleRotateMove: (e) => slotImplRef.current!.handleRotateMove(e),
+      handleRotateUp: (e) => slotImplRef.current!.handleRotateUp(e),
+      handleRotateCancel: (e) => slotImplRef.current!.handleRotateCancel(e),
+      changeRegionOwner: (id, owner) =>
+        slotImplRef.current!.changeRegionOwner(id, owner),
+      setRegionCollapsed: (id, v) =>
+        slotImplRef.current!.setRegionCollapsed(id, v),
+      setRegionAutoFile: (id, v) =>
+        slotImplRef.current!.setRegionAutoFile(id, v),
+      setEditingRegionId: (id) => setEditingRegionId(id),
+      setFolderExpanded: (id, v) =>
+        slotImplRef.current!.setFolderExpanded(id, v),
+      setFolderViewMode: (id, m) =>
+        slotImplRef.current!.setFolderViewMode(id, m),
+      commitTextMarkdown: (id, md) =>
+        slotImplRef.current!.commitTextMarkdown(id, md),
+      resizeTextElement: (id, h) =>
+        slotImplRef.current!.resizeTextElement(id, h),
+      setEditingTextId: (id) => setEditingTextId(id),
+      commitShapeLabel: (id, t) =>
+        slotImplRef.current!.commitShapeLabel(id, t),
+      setEditingLabelId: (id) => setEditingLabelId(id),
+      resizeFileElement: (id, h) =>
+        slotImplRef.current!.resizeFileElement(id, h),
+      setEditingFileId: (id) => setEditingFileId(id),
+      getElements: getElementsStable,
+      navigateToElement: navigateToElementStable,
+      openComment: (elementId, anchor) =>
+        setCommentOpen({ elementId, anchor }),
+      ackFileStatus: (id) =>
+        setAckedFileStatusIds((prev) => {
+          const next = new Set(prev);
+          next.add(id);
+          return next;
+        }),
+    }),
+    // 空 deps：方法内部都从 ref 读最新值 / 走稳定 setter；actions 对象本身
+    // 跨渲染恒定引用。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
 
   return (
     <div
@@ -5236,7 +5448,7 @@ export function OverlayLayer({
         suggestions.length === 0
       }
     >
-      <div className="ov-transform" style={transformStyle}>
+      <div className="ov-transform" ref={transformElRef}>
         {/* 建议 → 目标的连线 —— 建议卡 → 目标卡的箭头线，端点裁到 bbox 边
             而非中心，箭头尖正好顶在目标边上。置于卡片之下，只露出卡片之间
             的连接段。 */}
@@ -5270,129 +5482,49 @@ export function OverlayLayer({
         ) : null}
 
         {visibleElements.map((el) => {
-          const isFile = el.type === 'file';
-          const isText = el.type === 'text';
-          const isShape = el.type === 'shape';
-          const isDraw = el.type === 'draw';
-          const isImage = el.type === 'image';
-          const isEmbed = el.type === 'embed';
-
-          // 拖拽偏移：本次拖拽的全部成员（单拖为自身，区域拖含子元素，
-          // 整组拖为整个选区）都实时套上偏移变换，一起跟随指针。
+          // 瞬时变换 —— 仅当本元素正参与拖拽 / 缩放 / 旋转 / 成组变换时为非默认
+          // 值；其余元素拿到的全是 0 / null 等"无变换"基准。这些 primitive 让
+          // ElementSlot 的 memo 在空闲元素上 bail-out。
           let dx = 0;
           let dy = 0;
           if (drag?.moved && drag.memberIds.has(el.id)) {
             dx = drag.offsetX;
             dy = drag.offsetY;
           }
-          const offset = dx !== 0 || dy !== 0;
-
-          // 成组缩放 / 旋转进行中该元素的实时几何（优先于单选变换）。
           const gG = groupGeom.slots.get(el.id);
-          // 缩放：被缩放区域自身实时变矩形（位置 + 尺寸都可能变）。
           const resizing = resize?.elementId === el.id;
-          const rx = gG ? gG.x : resizing && resize ? resize.x : el.x;
-          const ry = gG ? gG.y : resizing && resize ? resize.y : el.y;
-          const rw = gG ? gG.w : resizing && resize ? resize.w : el.width;
-          let rh = gG ? gG.h : resizing && resize ? resize.h : el.height;
-          // 折叠态区域 —— slot 高度覆盖为头部 chip 高度（PRD §6.6）。
-          // element.height 保留原值，展开后立即恢复。
-          const collapsedRegion =
-            el.type === 'region' && collapsedRegionIds.has(el.id);
-          if (collapsedRegion) rh = COLLAPSED_REGION_HEIGHT;
-
-          // 旋转：区域不旋转（容器、轴对齐）；其余按 el.angle，单选旋转中取
-          // rotate.angle、成组变换中取 gG.angle。卡槽绕中心旋转。
           const rotating = rotate?.elementId === el.id;
-          const ang =
-            el.type === 'region'
-              ? 0
-              : gG
-                ? gG.angle
-                : rotating && rotate
-                  ? rotate.angle
-                  : el.angle || 0;
-
+          const liveX = gG
+            ? gG.x
+            : resizing && resize
+              ? resize.x
+              : null;
+          const liveY = gG
+            ? gG.y
+            : resizing && resize
+              ? resize.y
+              : null;
+          const liveW = gG
+            ? gG.w
+            : resizing && resize
+              ? resize.w
+              : null;
+          const liveH = gG
+            ? gG.h
+            : resizing && resize
+              ? resize.h
+              : null;
+          const liveAngle = gG
+            ? gG.angle
+            : rotating && rotate
+              ? rotate.angle
+              : null;
+          const liveDrawPoints = gG?.points ?? null;
+          const collapsed =
+            el.type === 'region' && collapsedRegionIds.has(el.id);
           const regionActive =
             el.type === 'region' &&
             ((drag?.kind === 'region' && drag.elementId === el.id) || resizing);
-
-          const slotStyle: React.CSSProperties = {
-            left: `${rx}px`,
-            top: `${ry}px`,
-            width: `${rw}px`,
-            height: `${rh}px`,
-          };
-          // 卡槽变换：先平移（拖拽偏移）再绕中心旋转。
-          const tParts: string[] = [];
-          if (offset) tParts.push(`translate(${dx}px, ${dy}px)`);
-          if (ang) tParts.push(`rotate(${ang}rad)`);
-          if (tParts.length > 0) {
-            slotStyle.transform = tParts.join(' ');
-          }
-          // 元素样式 → 卡槽 CSS 变量 + 不透明度（仅偏离默认值的字段才覆写）。
-          Object.assign(slotStyle, styleVars(el.style));
-          if (el.style.opacity !== DEFAULT_STYLE.opacity) {
-            slotStyle.opacity = el.style.opacity / 100;
-          }
-
-          const className =
-            'ov-slot' +
-            (isFile ? ' ov-slot--file' : '') +
-            (isText ? ' ov-slot--text' : '') +
-            (isShape || isDraw ? ' ov-slot--shape' : '') +
-            (isImage || isEmbed ? ' ov-slot--media' : '') +
-            (el.state === 'draft' ? ' ov-slot--draft' : '') +
-            (offset ? ' ov-slot--dragging' : '');
-
-          // 区域头部拖拽手柄（仅区域）—— 兼作区域的点选入口。
-          let headerHandlers: PointerHandlers | undefined;
-          if (el.type === 'region') {
-            const region = el;
-            headerHandlers = {
-              onPointerDown: (e) => {
-                if (e.button !== 0) return;
-                if (e.shiftKey) {
-                  // shift 点选 —— 切换区域（连同其编组）在选区中的去留。
-                  toggleInSelection(region.id);
-                  return;
-                }
-                const gset = groupMembersOf(region.id);
-                const keepSel =
-                  selectedIds.has(region.id) && selectedIds.size > 1;
-                if (!keepSel) setSelectedIds(gset);
-                const groupDrag = keepSel || gset.size > 1;
-                beginDrag(
-                  e,
-                  region,
-                  groupDrag ? 'group' : 'region',
-                  !keepSel && groupDrag ? gset : undefined,
-                );
-              },
-              onPointerMove: handlePointerMove,
-              onPointerUp: handlePointerUp,
-              onPointerCancel: handlePointerCancel,
-              // 双击区域头部 —— 进编辑 label/description 弹窗（PRD §6.6）。
-              // 锁定区域不可编辑。
-              onDoubleClick: region.locked
-                ? undefined
-                : () => setEditingRegionId(region.id),
-            };
-          }
-          // 八向缩放 API —— 文件 / 文本 / 文件夹 / 区域所有内容卡通用。
-          const resizeApi: ResizeApi = {
-            onStart: (e, hx, hy) => beginResize(e, el, hx, hy),
-            onMove: handleResizeMove,
-            onUp: handleResizeUp,
-            onCancel: handleResizeCancel,
-            onRotateStart: (e) => beginRotate(e, el),
-            onRotateMove: handleRotateMove,
-            onRotateUp: handleRotateUp,
-            onRotateCancel: handleRotateCancel,
-          };
-
-          // 椭圆 / 菱形：命中区按真实形状裁剪 —— 包围盒「空心角」不再误选 /
-          // 误连。卡槽自身不收指针，由内层 .ov-shape-hit（clip-path 裁形）收。
           const clipPath =
             el.type === 'shape' && el.shape === 'ellipse'
               ? 'ellipse(50% 50%)'
@@ -5401,288 +5533,37 @@ export function OverlayLayer({
                 : el.type === 'draw'
                   ? (drawHitClips.get(el.id) ?? null)
                   : null;
-
-          // 卡槽点选 / 进入待拖拽 —— 区域走头部手柄、不在此。
-          // 该元素在通用路径下的拖拽 kind（null = 不参与，如 region 走 header）。
-          const dragKind = ELEMENT_HANDLERS[el.type as ElementKind].dragKind;
-          const slotPointerDown =
-            dragKind === null
-              ? undefined
-              : (e: React.PointerEvent<HTMLDivElement>): void => {
-                  if (e.button !== 0) return;
-                  if (el.locked) {
-                    // 锁定元素 —— 仅可点选（以便解锁），不拖拽。
-                    if (e.shiftKey) toggleInSelection(el.id);
-                    else setSelectedIds(new Set([el.id]));
-                    return;
-                  }
-                  if (e.shiftKey) {
-                    // shift 点选 —— 切换该元素（连同其编组）在选区中的去留。
-                    toggleInSelection(el.id);
-                    return;
-                  }
-                  // 点中元素属编组则选整组；点中已选元素则保持选区直接拖。
-                  const gset = groupMembersOf(el.id);
-                  const keepSel =
-                    selectedIds.has(el.id) && selectedIds.size > 1;
-                  if (!keepSel) setSelectedIds(gset);
-                  const groupDrag = keepSel || gset.size > 1;
-                  if (groupDrag) {
-                    beginDrag(e, el, 'group', keepSel ? undefined : gset);
-                  } else {
-                    beginDrag(e, el, dragKind);
-                  }
-                };
-          // 双击 —— 锁定元素不可编辑。
-          //   图形 → 标签就地编辑（editingLabelId）
-          //   文本 → 正文就地编辑（editingTextId）—— slot 抢占 pointer
-          //          capture 后内层 body 的 dblclick 不再可达，必须由 slot
-          //          承接才能进编辑态。
-          //   类文本文件 → 内容就地编辑（editingFileId）—— md/csv/txt 等
-          //          UTF-8 文本族文件双击进编辑器，提交时整段覆写磁盘。
-          //          非文本 MIME / 缺失 / 大文件 isFileEditable 返回 false，
-          //          不挂 dblclick。
-          const slotDoubleClick = el.locked
-            ? undefined
-            : isShape
-              ? (): void => setEditingLabelId(el.id)
-              : isText
-                ? (): void => setEditingTextId(el.id)
-                : isFile && isFileEditable(el, missingFileIds.has(el.id))
-                  ? (): void => setEditingFileId(el.id)
-                  : undefined;
-
+          const agentStatus =
+            el.type === 'file'
+              ? fileAgentStatusOf(el, ackedFileStatusIds)
+              : null;
           return (
-            <div
+            <ElementSlot
               key={el.id}
-              className={clipPath ? `${className} ov-slot--clipped` : className}
-              style={slotStyle}
-              data-element-id={el.id}
-              onPointerDown={clipPath ? undefined : slotPointerDown}
-              onPointerMove={
-                clipPath || el.type === 'region'
-                  ? undefined
-                  : handlePointerMove
-              }
-              onPointerUp={
-                clipPath || el.type === 'region' ? undefined : handlePointerUp
-              }
-              onPointerCancel={
-                clipPath || el.type === 'region'
-                  ? undefined
-                  : handlePointerCancel
-              }
-              onDoubleClick={clipPath ? undefined : slotDoubleClick}
-            >
-              {el.type === 'region' ? (
-                <RegionCard
-                  element={el}
-                  highlighted={el.id === dropRegionId}
-                  active={regionActive}
-                  headerHandlers={headerHandlers}
-                  actorId={actorId}
-                  participants={participants}
-                  onChangeOwner={(next) => changeRegionOwner(el.id, next)}
-                  onToggleCollapsed={
-                    el.locked
-                      ? undefined
-                      : (): void => setRegionCollapsed(el.id, !el.collapsed)
-                  }
-                  onToggleAutoFile={
-                    el.locked
-                      ? undefined
-                      : (): void => setRegionAutoFile(el.id, !el.autoFile)
-                  }
-                />
-              ) : el.type === 'folder' ? (
-                <FolderCard
-                  element={el}
-                  onToggleExpanded={
-                    el.locked
-                      ? undefined
-                      : (): void => setFolderExpanded(el.id, !el.expanded)
-                  }
-                  onChangeViewMode={
-                    el.locked
-                      ? undefined
-                      : (mode): void => setFolderViewMode(el.id, mode)
-                  }
-                />
-              ) : el.type === 'text' ? (
-                <TextCard
-                  element={el}
-                  onCommit={(md) => commitTextMarkdown(el.id, md)}
-                  onResize={(h) => resizeTextElement(el.id, h)}
-                  editing={editingTextId === el.id}
-                  onEditingChange={(next) =>
-                    setEditingTextId(next ? el.id : null)
-                  }
-                />
-              ) : el.type === 'shape' ? (
-                <ShapeView
-                  element={
-                    gG || (resizing && resize)
-                      ? { ...el, width: rw, height: rh }
-                      : el
-                  }
-                  editingLabel={editingLabelId === el.id}
-                  onLabelCommit={(t) => {
-                    commitShapeLabel(el.id, t);
-                    setEditingLabelId((cur) =>
-                      cur === el.id ? null : cur,
-                    );
-                  }}
-                  onLabelCancel={() =>
-                    setEditingLabelId((cur) => (cur === el.id ? null : cur))
-                  }
-                />
-              ) : el.type === 'draw' ? (
-                <DrawView
-                  element={
-                    gG?.points
-                      ? { ...el, width: rw, height: rh, points: gG.points }
-                      : resizing && resize
-                        ? liveDrawEl(el, resize)
-                        : el
-                  }
-                />
-              ) : el.type === 'image' ? (
-                <ImageView element={el} />
-              ) : el.type === 'embed' ? (
-                <EmbedView element={el} />
-              ) : (
-                <FileCard
-                  element={el}
-                  missing={missingFileIds.has(el.id)}
-                  zoom={zoom}
-                  onResize={(h): void => resizeFileElement(el.id, h)}
-                  getElements={getElementsStable}
-                  navigateToElement={navigateToElementStable}
-                  editing={editingFileId === el.id}
-                  onEditingChange={(next) =>
-                    setEditingFileId(next ? el.id : null)
-                  }
-                />
-              )}
-              {/* 形状命中层（椭圆 / 菱形）—— clip-path 裁成真实形状，承接
-                  点选 / 拖拽 / 双击；标签编辑态让位给下层 contentEditable。 */}
-              {clipPath ? (
-                <div
-                  className="ov-shape-hit"
-                  style={{
-                    clipPath,
-                    pointerEvents:
-                      editingLabelId === el.id ? 'none' : undefined,
-                  }}
-                  onPointerDown={slotPointerDown}
-                  onPointerMove={handlePointerMove}
-                  onPointerUp={handlePointerUp}
-                  onPointerCancel={handlePointerCancel}
-                  onDoubleClick={slotDoubleClick}
-                />
-              ) : null}
-              {/* 选中态：选择框 —— 选中（含多选）即出现。 */}
-              {selectedIds.has(el.id) ? (
-                <SelectionFrame element={el} width={rw} height={rh} />
-              ) : null}
-              {/* 八向缩放手柄（圆点）—— 仅单选时出现（多选不缩放）；
-                  锁定元素不出手柄；折叠态区域不出手柄（先展开再调整尺寸）。 */}
-              {soloId === el.id && !el.locked && !collapsedRegion ? (
-                <ResizeHandles
-                  api={resizeApi}
-                  rotatable={el.type !== 'region'}
-                />
-              ) : null}
-              {/* 锁定角标 —— 标示该元素已锁定。 */}
-              {el.locked ? (
-                <div className="ov-lock-badge" aria-hidden="true">
-                  🔒
-                </div>
-              ) : null}
-              {/* 外链角标（PRD §6.4 「元素挂外链」）—— element.link 非空时
-                  右上角出现 🔗，点击在新标签页打开外链。 */}
-              {el.link ? (
-                <a
-                  className="ov-link-badge"
-                  href={el.link}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  title={`打开外链：${el.link}`}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={(e) => e.stopPropagation()}
-                  aria-label="打开外链"
-                >
-                  🔗
-                </a>
-              ) : null}
-              {/* 评论角标（PRD §8.4）—— 元素有评论时显示条数；点击展开浮窗 */}
-              {(el.comments?.length ?? 0) > 0
-                ? (() => {
-                    const all = el.comments ?? [];
-                    const unresolved = all.filter((c) => !c.resolved).length;
-                    return (
-                      <button
-                        type="button"
-                        className={
-                          'ov-comment-badge' +
-                          (unresolved === 0 ? ' ov-comment-badge--all-resolved' : '')
-                        }
-                        title={
-                          unresolved > 0
-                            ? `${unresolved} 条未解决 / 共 ${all.length} 条 —— 点击查看`
-                            : `共 ${all.length} 条（已全部解决）—— 点击查看`
-                        }
-                        onPointerDown={(e) => e.stopPropagation()}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                          setCommentOpen({
-                            elementId: el.id,
-                            anchor: { x: r.right, y: r.bottom },
-                          });
-                        }}
-                      >
-                        💬 {unresolved > 0 ? unresolved : all.length}
-                      </button>
-                    );
-                  })()
-                : null}
-              {/* 文件状态角标（PRD §6.4 「新增 / 被 Agent 修改」）—— file 元素
-                  本会话被 Agent 新建 / 修改且未被 ack 时左上角出现；点角标
-                  即 ack。状态信息会进 title，鼠标停留可看到。 */}
-              {el.type === 'file'
-                ? (() => {
-                    const status = fileAgentStatusOf(el, ackedFileStatusIds);
-                    if (!status) return null;
-                    const isNew = status === 'new';
-                    const ts = isNew ? el.createdAt : el.updatedAt;
-                    const who = isNew ? el.createdBy : el.updatedBy;
-                    const label = isNew ? '新增' : '改过';
-                    return (
-                      <button
-                        type="button"
-                        className={
-                          'ov-file-status-badge ov-file-status-badge--' +
-                          (isNew ? 'new' : 'modified')
-                        }
-                        title={`Agent ${label}（${who} · ${ts}）—— 点击标记已读`}
-                        onPointerDown={(e) => e.stopPropagation()}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setAckedFileStatusIds((prev) => {
-                            const next = new Set(prev);
-                            next.add(el.id);
-                            return next;
-                          });
-                        }}
-                        aria-label={`Agent ${label}，点击标记已读`}
-                      >
-                        {isNew ? '✨' : '✎'}
-                      </button>
-                    );
-                  })()
-                : null}
-            </div>
+              element={el}
+              actorId={actorId}
+              participants={participants}
+              dx={dx}
+              dy={dy}
+              liveX={liveX}
+              liveY={liveY}
+              liveW={liveW}
+              liveH={liveH}
+              liveAngle={liveAngle}
+              liveDrawPoints={liveDrawPoints}
+              collapsed={collapsed}
+              selected={selectedIds.has(el.id)}
+              solo={soloId === el.id}
+              dropTarget={el.type === 'region' && el.id === dropRegionId}
+              regionActive={regionActive}
+              editingLabel={editingLabelId === el.id}
+              editingText={editingTextId === el.id}
+              editingFile={editingFileId === el.id}
+              missing={missingFileIds.has(el.id)}
+              agentStatus={agentStatus}
+              clipPath={clipPath}
+              actions={slotActions}
+            />
           );
         })}
 
@@ -5698,7 +5579,6 @@ export function OverlayLayer({
           }
           onBodyDown={beginConnectorDrag}
           interactive={!connectMode}
-          zoom={zoom}
           liveConnectors={groupGeom.conns}
           onEndpointCommit={rebindConnectorEndpoint}
           onEndpointHover={handleEndpointHover}
@@ -5790,7 +5670,8 @@ export function OverlayLayer({
         {/* 拖拽对齐参考线 —— 被拖元素的边 / 中线对齐到其它元素时浮现。
             画布坐标 div 细线，厚度按 1/zoom 折算成恒定 1 屏幕像素。 */}
         {snapGuides.map((g, i) => {
-          const t = 1 / zoom; // 1 屏幕像素对应的画布尺寸
+          // snap 期间 OverlayLayer 因 drag 状态变更已经在重渲，此处快照读 OK。
+          const t = 1 / viewportStore.get().zoom; // 1 屏幕像素对应的画布尺寸
           const gStyle: React.CSSProperties =
             g.axis === 'x'
               ? {
@@ -6005,18 +5886,23 @@ export function OverlayLayer({
       ) : null}
 
       {/* 新建区域弹窗 —— 浮在拖出的区域矩形中心（屏幕坐标，不随缩放）。 */}
-      {regionDraft ? (
-        <RegionCreateDialog
-          screenX={(regionDraft.x + regionDraft.width / 2 + scrollX) * zoom}
-          screenY={(regionDraft.y + regionDraft.height / 2 + scrollY) * zoom}
-          onSubmit={(name, description) => {
-            const rect = regionDraft;
-            setRegionDraft(null);
-            void submitRegion(rect, name, description);
-          }}
-          onCancel={() => setRegionDraft(null)}
-        />
-      ) : null}
+      {regionDraft
+        ? (() => {
+            const vp = viewportStore.get();
+            return (
+              <RegionCreateDialog
+                screenX={(regionDraft.x + regionDraft.width / 2 + vp.scrollX) * vp.zoom}
+                screenY={(regionDraft.y + regionDraft.height / 2 + vp.scrollY) * vp.zoom}
+                onSubmit={(name, description) => {
+                  const rect = regionDraft;
+                  setRegionDraft(null);
+                  void submitRegion(rect, name, description);
+                }}
+                onCancel={() => setRegionDraft(null)}
+              />
+            );
+          })()
+        : null}
       {/* 编辑区域弹窗（PRD §6.6）—— 双击区域头部打开，预填当前 label/description。
           只 patch 元素字段；不重命名 files/ 文件夹（label 与文件夹名解耦后只
           影响 UI 显示，文件夹路径稳定）。 */}
@@ -6026,10 +5912,11 @@ export function OverlayLayer({
               (e) => e.id === editingRegionId && e.type === 'region',
             ) as RegionElement | undefined;
             if (!target) return null;
+            const vp = viewportStore.get();
             return (
               <RegionCreateDialog
-                screenX={(target.x + target.width / 2 + scrollX) * zoom}
-                screenY={(target.y + target.height / 2 + scrollY) * zoom}
+                screenX={(target.x + target.width / 2 + vp.scrollX) * vp.zoom}
+                screenY={(target.y + target.height / 2 + vp.scrollY) * vp.zoom}
                 title="编辑区域"
                 submitLabel="保存"
                 initialName={target.label || ''}

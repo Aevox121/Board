@@ -22,12 +22,27 @@ import { CanvasGrid } from './CanvasGrid';
 import { Toolbar, TOOL_SHORTCUTS } from './Toolbar';
 import { Minimap } from './Minimap';
 import { useViewportGestures } from './useViewportGestures';
-import {
-  INITIAL_VIEWPORT,
-  fitToContent,
-  zoomAt,
-  type CanvasViewport,
-} from './viewport';
+import { fitToContent, zoomAt } from './viewport';
+import { useViewport, viewportStore } from './viewportStore';
+import { PerfHUD } from './PerfHUD';
+import { PERF_ENABLED } from './perfFlag';
+
+/** 缩放百分比徽章 —— 独立订阅 viewport store，避免让父级 CanvasShell 订阅。
+ *  pan / zoom 时只有这个 14 字符的小 span 重渲，不连累整棵画布子树。 */
+function ZoomBadge({ onClick }: { onClick: () => void }): JSX.Element {
+  const { zoom } = useViewport();
+  return (
+    <button
+      type="button"
+      className="cv-pill__pct"
+      onClick={onClick}
+      title="重置为 100%"
+      aria-label="重置缩放为 100%"
+    >
+      {Math.round(zoom * 100)}%
+    </button>
+  );
+}
 import './canvas.css';
 
 /** 缩放控件每次点击的缩放倍率。 */
@@ -46,8 +61,11 @@ export function CanvasShell(): JSX.Element {
     canUndo,
     canRedo,
   } = useBoard();
-  // 视口真相源。
-  const [viewport, setViewport] = useState<CanvasViewport>(INITIAL_VIEWPORT);
+  // CanvasShell **不**订阅 viewport —— viewport 真相源在外部 store，pan / zoom
+  // 走 store.set() 时直接 mutate `.ov-transform` 的 DOM style。如果 CanvasShell
+  // 自己订阅，每次视口变化都会让整棵子树（Minimap / Toolbar / OverlayLayer ...）
+  // 跟着重渲，是 pan 卡顿的核心来源。
+  // 真正需要订阅的小消费者（zoom% 显示）抽成独立子组件 ZoomBadge 自行订阅。
   // 当前工具 —— 由工具栏选择，覆盖层据此进入创建 / 连线 / 橡皮擦模式。
   const [activeTool, setActiveTool] = useState<string>('selection');
   const shellRef = useRef<HTMLDivElement>(null);
@@ -72,20 +90,19 @@ export function CanvasShell(): JSX.Element {
 
   /**
    * 本地交互专用的 viewport setter —— 凡用户手动改动视口都走这条，自动退出
-   * 跟随；跟随驱动的视口对齐则直接 setViewport，不触发退出。
+   * 跟随；跟随驱动的视口对齐则直接写 store，不触发退出。
    */
   const setViewportLocal = useCallback(
-    (updater: CanvasViewport | ((vp: CanvasViewport) => CanvasViewport)) => {
+    (updater: Parameters<typeof viewportStore.set>[0]) => {
       followStore.setFollowing(null);
-      setViewport(updater);
+      viewportStore.set(updater);
     },
     [],
   );
 
   const { panning } = useViewportGestures({
     surfaceRef: shellRef,
-    viewport,
-    onChange: setViewportLocal,
+    onLocalInteract: () => followStore.setFollowing(null),
   });
 
   // 跟随驱动 —— followed.viewport 变化即把本端视口对齐过去。
@@ -93,7 +110,7 @@ export function CanvasShell(): JSX.Element {
     if (!followingClientId) return;
     if (!followed || !followed.viewport) return;
     const { x, y, zoom } = followed.viewport;
-    setViewport({ scrollX: -x, scrollY: -y, zoom });
+    viewportStore.set({ scrollX: -x, scrollY: -y, zoom });
   }, [followingClientId, followed]);
 
   // 被跟随者下线 / 不再上报 → 自动退出跟随。
@@ -253,15 +270,14 @@ export function CanvasShell(): JSX.Element {
       className={'cv-shell' + (panning ? ' cv-shell--panning' : '')}
       ref={shellRef}
     >
-      <CanvasGrid viewport={viewport} />
+      <CanvasGrid />
       <div className="board-canvas">
         <OverlayLayer
           scene={scene}
-          viewport={viewport}
           activeTool={activeTool}
           onActiveToolChange={setActiveTool}
         />
-        <PresenceLayer viewport={viewport} onFollowClient={onFollowClient} />
+        <PresenceLayer onFollowClient={onFollowClient} />
       </div>
       {followed ? (
         <div
@@ -288,7 +304,6 @@ export function CanvasShell(): JSX.Element {
       <Toolbar activeTool={activeTool} onSelect={setActiveTool} />
       <Minimap
         elements={scene.elements}
-        viewport={viewport}
         getViewSize={() => {
           const el = shellRef.current;
           if (!el) return { width: 0, height: 0 };
@@ -330,15 +345,7 @@ export function CanvasShell(): JSX.Element {
           >
             −
           </button>
-          <button
-            type="button"
-            className="cv-pill__pct"
-            onClick={resetZoom}
-            title="重置为 100%"
-            aria-label="重置缩放为 100%"
-          >
-            {Math.round(viewport.zoom * 100)}%
-          </button>
+          <ZoomBadge onClick={resetZoom} />
           <button
             type="button"
             className="cv-pill__btn"
@@ -360,6 +367,7 @@ export function CanvasShell(): JSX.Element {
           </button>
         </div>
       </div>
+      {PERF_ENABLED ? <PerfHUD /> : null}
     </div>
   );
 }

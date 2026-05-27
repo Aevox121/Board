@@ -39,12 +39,23 @@
   position: absolute;
   top: 0;
   left: 0;
-  /* transform / transform-origin 由组件内联设置 */
+  /* transform / transform-origin 由 viewportStore 直接 mutate（不走 React）。 */
+  /* will-change: transform —— 把容器提升为 GPU 合成层，wheel / pan 的 transform
+   * 变化由合成线程独立完成，主线程零成本。代价：高 zoom（≥200%）下文字依
+   * 原始像素 GPU 放大可能微糊；本团队接受为换取手势顺滑的代价。若要在
+   * 静止时恢复清晰，可后续做 gesture-only 的 toggle。 */
+  will-change: transform;
 }
 
-/* 单个元素的定位槽 —— 按画布坐标绝对定位。 */
+/* 单个元素的定位槽 —— 按画布坐标绝对定位。
+ *
+ * will-change: transform —— 把每个 slot 提升为独立的 GPU 合成层。拖动期间
+ * `dragStore.setOffset()` 直接 mutate slot 的 style.transform，合成层让这次
+ * 变更在合成线程完成，主线程零成本（否则会触发整个 .ov-transform 层重绘）。
+ * 代价：每个 slot 多占一些显存；10-20 元素规模可忽略。 */
 .ov-slot {
   position: absolute;
+  will-change: transform;
 }
 
 /* 创建预览槽 —— 拖拽创建过程中的预览，不接收指针。 */

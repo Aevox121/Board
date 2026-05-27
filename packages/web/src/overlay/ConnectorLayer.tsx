@@ -17,6 +17,10 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
+import { useZoomBucket } from '../canvas/viewportStore';
+import { renderCounters } from '../canvas/renderCounters';
+import { record } from '../canvas/perfLog';
+import { dragStore, useDragOffsetVersion } from './dragStore';
 import type {
   BoardScene,
   ConnectorElement,
@@ -302,7 +306,6 @@ export function ConnectorLayer({
   onSelect,
   onBodyDown,
   interactive = true,
-  zoom = 1,
   onEndpointCommit,
   onEndpointHover,
   liveConnectors,
@@ -311,12 +314,27 @@ export function ConnectorLayer({
   onLabelCommit,
   onLabelCancel,
 }: ConnectorLayerProps): JSX.Element | null {
+  renderCounters.bump('ConnectorLayer');
+  const _renderT0 = performance.now();
+  useEffect(() => {
+    record('ConnectorLayer.render', performance.now() - _renderT0);
+  });
+  // 端点手柄半径按 zoom 反向缩放保持恒定屏幕尺寸；连线本体的几何不依赖
+  // zoom（SVG 跟随 .ov-transform 自动缩放）。订阅离散 zoomBucket（5% 一档）
+  // —— 纯 pan 不会让本组件重渲，缩放跨档时才更新手柄尺寸（视觉上 5% 步长
+  // 跳变可接受）。
+  const zoom = useZoomBucket() / 20;
+  // 拖动 offset 版本号 —— 订阅后 dragStore.setOffset 每次都让本组件重渲，
+  // geoms useMemo 把它当依赖参与 invalidation，连线端点跟随被拖元素实时
+  // 跟手。dragSnapshot 在 useMemo 内 dragStore.get() 拿最新值。
+  const dragVersion = useDragOffsetVersion();
   // 端点拖拽瞬时状态；ref 镜像供指针回调读取最新值。
   const [epDrag, setEpDrag] = useState<EndpointDrag | null>(null);
   const epDragRef = useRef<EndpointDrag | null>(null);
   epDragRef.current = epDrag;
 
   const geoms = useMemo<ConnGeom[]>(() => {
+    const dragSnap = dragStore.get();
     // 按 id 去重（保留最后一次出现）—— 防御性兜底。
     const seen = new Set<string>();
     const connectors: ConnectorElement[] = [];
@@ -330,14 +348,28 @@ export function ConnectorLayer({
     if (connectors.length === 0) return [];
 
     const byId = new Map(scene.elements.map((e) => [e.id, e] as const));
-    /** 取元素当前矩形 —— 优先实时覆写，否则读场景。 */
+    /** 取元素当前矩形 —— 优先实时覆写；若该元素正在被拖动则把 dragStore 的
+     *  实时 offset 叠加上去，让连线端点跟随被拖元素。 */
     const rectOf = (id: string): RectLike | null => {
       const live = liveRects.get(id);
-      if (live) return live;
-      const el = byId.get(id);
-      return el
-        ? { x: el.x, y: el.y, width: el.width, height: el.height }
-        : null;
+      const base = live
+        ? live
+        : (() => {
+            const el = byId.get(id);
+            return el
+              ? { x: el.x, y: el.y, width: el.width, height: el.height }
+              : null;
+          })();
+      if (!base) return null;
+      if (dragSnap.active && dragSnap.memberIds.has(id)) {
+        return {
+          x: base.x + dragSnap.offsetX,
+          y: base.y + dragSnap.offsetY,
+          width: base.width,
+          height: base.height,
+        };
+      }
+      return base;
     };
     /** 取元素的形状 —— 图形按其 shape，其余（卡片 / 手绘等）按矩形。 */
     const kindOf = (id: string): ShapeKind => {
@@ -426,7 +458,10 @@ export function ConnectorLayer({
       });
     }
     return out;
-  }, [scene.elements, liveRects, liveConnectors, epDrag]);
+    // dragVersion 进入依赖 —— dragStore.setOffset 每次让本 useMemo 重算，
+    // 连线端点跟随被拖元素实时跟手。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scene.elements, liveRects, liveConnectors, epDrag, dragVersion]);
 
   // ── 端点拖拽指针处理 ─────────────────────────────────────────
   // 移动 / 抬起监听挂在 window 上（不靠 SVG 元素的 setPointerCapture ——

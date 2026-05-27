@@ -6,17 +6,19 @@
  *
  * 滚轮 / 中键在**捕获阶段**于画布外壳上拦截并 preventDefault；左键不拦截，
  * 下穿给覆盖层用于创建 / 选择 / 拖拽。
+ *
+ * 视口读写都走 `viewportStore`（外部 store）—— set 时 store 直接 mutate
+ * 已注册的 transform 容器 DOM，绕开 React 调度。订阅者另收到通知。
  */
 import { useEffect, useRef, useState } from 'react';
-import { panBy, zoomAt, type CanvasViewport } from './viewport';
+import { panBy, zoomAt } from './viewport';
+import { viewportStore } from './viewportStore';
 
 export interface ViewportGesturesOptions {
   /** 手势作用的外壳元素（换算屏幕坐标 + 挂事件监听）。 */
   surfaceRef: React.RefObject<HTMLElement>;
-  /** 当前视口 —— hook 不持有视口，由调用方持有。 */
-  viewport: CanvasViewport;
-  /** 视口变化回调。 */
-  onChange: (next: CanvasViewport) => void;
+  /** 本地用户交互触发前的回调 —— 用于退出跟随视角等。 */
+  onLocalInteract?: () => void;
 }
 
 /** 缩放灵敏度 —— deltaY 经 exp 映射为缩放系数，正负对称、缩放手感平滑。 */
@@ -27,29 +29,28 @@ const ZOOM_SENSITIVITY = 0.0015;
  */
 export function useViewportGestures({
   surfaceRef,
-  viewport,
-  onChange,
+  onLocalInteract,
 }: ViewportGesturesOptions): { panning: boolean } {
   const [panning, setPanning] = useState(false);
 
-  // 监听器只在挂载时绑一次 —— 用 ref 让回调读到最新视口 / 最新 onChange。
-  const vpRef = useRef(viewport);
-  vpRef.current = viewport;
-  const onChangeRef = useRef(onChange);
-  onChangeRef.current = onChange;
+  const onLocalInteractRef = useRef(onLocalInteract);
+  onLocalInteractRef.current = onLocalInteract;
 
   useEffect(() => {
     const surface = surfaceRef.current;
     if (!surface) return;
 
+    const notifyLocal = (): void => onLocalInteractRef.current?.();
+
     // ── 滚轮：平移；Ctrl/⌘ + 滚轮：以光标为锚缩放 ──────────────
     const onWheel = (e: WheelEvent): void => {
       e.preventDefault();
       e.stopPropagation();
-      const vp = vpRef.current;
+      notifyLocal();
+      const vp = viewportStore.get();
       if (e.ctrlKey || e.metaKey) {
         const rect = surface.getBoundingClientRect();
-        onChangeRef.current(
+        viewportStore.set(
           zoomAt(
             vp,
             vp.zoom * Math.exp(-e.deltaY * ZOOM_SENSITIVITY),
@@ -58,7 +59,7 @@ export function useViewportGestures({
           ),
         );
       } else {
-        onChangeRef.current(panBy(vp, -e.deltaX, -e.deltaY));
+        viewportStore.set(panBy(vp, -e.deltaX, -e.deltaY));
       }
     };
 
@@ -71,6 +72,7 @@ export function useViewportGestures({
       if (e.button !== 1) return; // 仅中键 —— 左键留给覆盖层创建 / 选择
       e.preventDefault();
       e.stopPropagation();
+      notifyLocal();
       panPointerId = e.pointerId;
       lastX = e.clientX;
       lastY = e.clientY;
@@ -89,7 +91,7 @@ export function useViewportGestures({
       lastX = e.clientX;
       lastY = e.clientY;
       if (dx !== 0 || dy !== 0) {
-        onChangeRef.current(panBy(vpRef.current, dx, dy));
+        viewportStore.set(panBy(viewportStore.get(), dx, dy));
       }
     };
 

@@ -42,6 +42,7 @@ import {
 } from '@board/core';
 import { createYjsClient, type YjsClient, type YjsClientStatus } from './yjs-client';
 import { yjsWsUrl } from '../server/boardSession';
+import { record } from '../canvas/perfLog';
 
 /** 当前单人白板的参与者 id（M1 固定一个本地用户）。 */
 export const LOCAL_USER_ID: ParticipantId = 'u_local';
@@ -132,8 +133,12 @@ export function BoardProvider({
   // 直到下次 Y.Doc 更新），避免无限重渲染。
   const sceneCacheRef = useRef<BoardScene>(yDocToScene(client.doc));
   useEffect(() => {
-    const handler = (): void => {
+    const handler = (_update: Uint8Array, origin: unknown): void => {
+      record('YDoc.update');
+      record(`YDoc.update[${String(origin) || 'unknown'}]`);
+      const t0 = performance.now();
       sceneCacheRef.current = yDocToScene(client.doc);
+      record('yDocToScene', performance.now() - t0);
     };
     client.doc.on('update', handler);
     return () => {
@@ -144,7 +149,10 @@ export function BoardProvider({
   const scene = useSyncExternalStore(
     useCallback(
       (cb) => {
-        const handler = (): void => cb();
+        const handler = (): void => {
+          record('BoardCtx.scene-cb');
+          cb();
+        };
         client.doc.on('update', handler);
         return () => {
           client.doc.off('update', handler);
@@ -155,6 +163,7 @@ export function BoardProvider({
     () => sceneCacheRef.current,
     () => sceneCacheRef.current,
   );
+  record('BoardCtx.render');
 
   const [meta, setMeta] = useState<BoardMeta>(() =>
     createBoardMeta({
