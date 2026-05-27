@@ -1,20 +1,21 @@
 /**
- * CLI 端 board 读写抽象 —— "server 在跑就走 HTTP,否则回退 fs"。
+ * CLI 端 board 写会话 —— **必须经 server / Y.Doc 路径**。
  *
- * 用法:把命令里的
- *     const handle = await loadBoard(dir);
- *     ... 改 handle.scene ...
- *     await saveBoard(dir, handle.meta, scene);
- * 替换为
- *     const session = await openBoard(dir);
+ * 设计原则(2026-05 立项):CLI / MCP 的写操作不能 disk 直写 board.json,因为
+ *   server 用 Y.Doc 作运行态权威源 + 节流投影回盘;若 CLI 直写 fs,会和
+ *   Y.Doc 反向丢写 + 跳过 oplog/SSE 事件流。Agent 直接修改 `.board/files/`
+ *   下的文件是允许的(用自己的 fs 工具),由 server 的 chokidar 自动 reconcile;
+ *   `board` CLI/MCP 的范围只覆盖"通过命令修改内容"。
+ *
+ * 用法:
+ *     const session = await openBoard(dir);   // server 不可达直接抛错,不回退 fs
  *     ... 改 session.scene ...
  *     await session.save(session.scene);
  *
- * 为什么不直接修改 @board/core/node 的 loadBoard/saveBoard:
- *   core/node 也被 server 自身用 —— server 内部肯定走 fs。本抽象只对
- *   "外部进程"(CLI) 有意义,放在 CLI 包里。
+ * 读操作不走本抽象 —— info/show/search/export 直接用 @board/core/node 的
+ * loadBoard 读 disk(server 节流投影后 disk 总是接近最新)。
  */
-import { loadBoard, saveBoard, type BoardHandle } from '@board/core/node';
+import { CliError, EXIT } from './io.js';
 import type { BoardMeta, BoardScene } from '@board/core';
 import {
   findServerForBoard,
@@ -51,22 +52,48 @@ export interface BoardSession {
    *  - fs 模式:no-op(没有客户端在监听)。
    */
   announceAgent(opts: AgentActivityInput): Promise<void>;
-  /** 当前会话是否走的 server —— 极少数命令需要分支(如 files/ 操作)。 */
+  /** 当前会话是否走的 server —— 历史字段,严格模式后恒为 true。 */
   readonly viaServer: boolean;
+  /**
+   * 底层 server handle —— 暴露给需要直接调 endpoint 的 cmd(uploadFile /
+   * moveFile / deleteElement / suggestionOp 等),省得每个 cmd 再 findServerForBoard。
+   */
+  readonly server: ServerHandle;
 }
 
 /**
- * 打开一份白板会话。优先尝试 server 旁路,失败回退 fs。
+ * 读 board 最新状态 —— 写路径上 server 是权威源(Y.Doc),disk 投影有 ~300ms
+ * 节流;若 server 可达,**读也必须经 server**,否则会读到过期 disk 快照。
+ *
+ * read-only 命令(info/show/search/get_element 等)用本函数;server 不可达
+ * 回退 loadBoard 读 disk(read 不像 write 那样有数据竞争,允许 fallback)。
+ */
+export async function readBoard(
+  dir: string,
+): Promise<{ meta: BoardMeta; scene: BoardScene }> {
+  const server = await findServerForBoard(dir);
+  if (server) return server.fetchBoard();
+  const { loadBoard } = await import('@board/core/node');
+  const h = await loadBoard(dir);
+  return { meta: h.meta, scene: h.scene };
+}
+
+/**
+ * 打开一份白板会话(写操作专用)。server 不可达直接抛 USAGE 错。
  *
  * `dir` 必须已是绝对路径(由 resolveBoardDir 保证)。
  */
 export async function openBoard(dir: string): Promise<BoardSession> {
   const server = await findServerForBoard(dir);
-  if (server) {
-    return openViaServer(dir, server);
+  if (!server) {
+    throw new CliError(
+      'board 写命令需要 board-server 在跑且管理本白板。' +
+        '请先 `board serve <白板路径>`(或确认 BOARD_SERVER_URL / 默认 :4500 指向了正确的 server)。' +
+        '\n\n设计原则:CLI/MCP 的写操作必须经 server/Y.Doc;Agent 想直接改 .board/files/ 内文件请用 fs 工具(server 的 chokidar 会自动同步)。',
+      EXIT.GENERAL,
+    );
   }
-  const handle = await loadBoard(dir);
-  return openViaFs(handle);
+  return openViaServer(dir, server);
 }
 
 /** 同一进程内只对"忘了报家门"提示一次,避免一条命令多次写盘时刷屏。 */
@@ -82,6 +109,7 @@ async function openViaServer(
     meta,
     scene,
     viaServer: true,
+    server,
     async save(next: BoardScene): Promise<void> {
       await server.putBoard(next);
     },
@@ -111,23 +139,3 @@ async function openViaServer(
   };
 }
 
-function openViaFs(handle: BoardHandle): BoardSession {
-  return {
-    dir: handle.dir,
-    meta: handle.meta,
-    scene: handle.scene,
-    viaServer: false,
-    async save(next: BoardScene): Promise<void> {
-      await saveBoard(handle.dir, handle.meta, next);
-    },
-    async refreshFilesOnly(): Promise<void> {
-      // fs 模式下 CLI 自己负责把 reconcile 后的 scene 通过 save 写盘 ——
-      // 没有外部进程需要被"通知",所以这里 no-op。
-      return;
-    },
-    async announceAgent(): Promise<void> {
-      // 服务不在,没有 Web 客户端在监听 SSE —— 推 presence 给谁?直接跳过。
-      return;
-    },
-  };
-}

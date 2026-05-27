@@ -6,11 +6,11 @@
  */
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { loadBoard } from '@board/core/node';
 import { guessMime, type Element } from '@board/core';
 import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
+import { readBoard } from '../util/board-io.js';
 
 /** 一条搜索命中。 */
 interface SearchHit {
@@ -63,10 +63,10 @@ export async function cmdSearch(args: ParsedArgs): Promise<CmdResult> {
     typeof s === 'string' && s.toLowerCase().includes(kwLower);
 
   const dir = resolveBoardDir(boardPath, args.options.get('board'));
-  const handle = await loadBoard(dir);
+  const { scene } = await readBoard(dir);
   const hits: SearchHit[] = [];
 
-  for (const el of handle.scene.elements) {
+  for (const el of scene.elements) {
     if (el.type === 'text') {
       if (has(el.markdown)) {
         hits.push({ elementId: el.id, type: el.type, field: 'text', snippet: snippetOf(el.markdown, kw) });

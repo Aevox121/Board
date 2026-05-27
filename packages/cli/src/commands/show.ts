@@ -12,7 +12,6 @@
  */
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { loadBoard } from '@board/core/node';
 import {
   guessMime,
   regionsOf,
@@ -23,6 +22,7 @@ import {
 import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
+import { readBoard } from '../util/board-io.js';
 
 /** depth 2 内联文件正文的字符上限（超出截断）。 */
 const CONTENT_CAP = 2000;
@@ -167,8 +167,7 @@ function isListableElement(el: Element): boolean {
 /** 执行 show 命令。 */
 export async function cmdShow(args: ParsedArgs): Promise<CmdResult> {
   const dir = resolveBoardDir(args.positionals[0], args.options.get('board'));
-  const handle = await loadBoard(dir);
-  const { scene } = handle;
+  const { meta, scene } = await readBoard(dir);
   const elements = scene.elements;
 
   const depth = parseDepth(args.options.get('depth'));
@@ -212,7 +211,7 @@ export async function cmdShow(args: ParsedArgs): Promise<CmdResult> {
 
   // data —— 机器可读上下文包。
   const data: Record<string, unknown> = {
-    name: handle.meta.name,
+    name: meta.name,
     depth,
     regions: regionViews,
   };

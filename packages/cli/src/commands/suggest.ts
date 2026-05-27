@@ -14,13 +14,10 @@
  *               读 thread 修订建议，形成「建议 ↔ 反馈」迭代回路）
  */
 import {
-  acceptSuggestion,
   createSuggestionElement,
   createTextElement,
   defaultSizeFor,
-  describeSuggestion,
   nextZ,
-  rejectSuggestion,
   SUGGESTION_CARD_SIZE,
   SUGGESTION_GAP,
   type SuggestionType,
@@ -134,7 +131,7 @@ async function suggestCreate(args: ParsedArgs): Promise<CmdResult> {
   };
 }
 
-/** `board suggest accept <白板> <suggestionId>` */
+/** `board suggest accept <白板> <suggestionId>` (走 server /api/suggestions/accept) */
 async function suggestAccept(args: ParsedArgs): Promise<CmdResult> {
   const boardPath = args.positionals[1];
   const suggestionId = args.positionals[2];
@@ -144,22 +141,11 @@ async function suggestAccept(args: ParsedArgs): Promise<CmdResult> {
       EXIT.USAGE,
     );
   }
-
   const dir = resolveBoardDir(boardPath, args.options.get('board'));
   const handle = await openBoard(dir);
   const actor = resolveActor(args);
-  const result = acceptSuggestion(handle.scene, suggestionId, actor);
-  if (result.error) {
-    const code = result.error.includes('目标元素已不存在')
-      ? EXIT.CONFLICT
-      : EXIT.NOT_FOUND;
-    throw new CliError(result.error, code);
-  }
-  if (result.changed) {
-    await handle.save(result.scene);
-  }
+  await handle.server.suggestionOp('accept', suggestionId, { actor });
   await handle.announceAgent(buildAgentActivity(args, actor, suggestionId));
-
   return {
     code: EXIT.OK,
     text: `已同意建议 ${suggestionId}`,
@@ -167,7 +153,7 @@ async function suggestAccept(args: ParsedArgs): Promise<CmdResult> {
   };
 }
 
-/** `board suggest reject <白板> <suggestionId>` */
+/** `board suggest reject <白板> <suggestionId>` (走 server /api/suggestions/reject) */
 async function suggestReject(args: ParsedArgs): Promise<CmdResult> {
   const boardPath = args.positionals[1];
   const suggestionId = args.positionals[2];
@@ -177,19 +163,11 @@ async function suggestReject(args: ParsedArgs): Promise<CmdResult> {
       EXIT.USAGE,
     );
   }
-
   const dir = resolveBoardDir(boardPath, args.options.get('board'));
   const handle = await openBoard(dir);
   const actor = resolveActor(args);
-  const result = rejectSuggestion(handle.scene, suggestionId);
-  if (result.error) {
-    throw new CliError(result.error, EXIT.NOT_FOUND);
-  }
-  if (result.changed) {
-    await handle.save(result.scene);
-  }
+  await handle.server.suggestionOp('reject', suggestionId, { actor });
   await handle.announceAgent(buildAgentActivity(args, actor, suggestionId));
-
   return {
     code: EXIT.OK,
     text: `已拒绝建议 ${suggestionId}`,
@@ -197,7 +175,7 @@ async function suggestReject(args: ParsedArgs): Promise<CmdResult> {
   };
 }
 
-/** `board suggest describe <白板> <suggestionId> --text "<反馈>" [--role human|agent]` */
+/** `board suggest describe <白板> <suggestionId> --text "<反馈>" [--role human|agent]` (走 server) */
 async function suggestDescribe(args: ParsedArgs): Promise<CmdResult> {
   const boardPath = args.positionals[1];
   const suggestionId = args.positionals[2];
@@ -223,15 +201,8 @@ async function suggestDescribe(args: ParsedArgs): Promise<CmdResult> {
   const dir = resolveBoardDir(boardPath, args.options.get('board'));
   const handle = await openBoard(dir);
   const actor = resolveActor(args);
-  const result = describeSuggestion(handle.scene, suggestionId, text, actor, role);
-  if (result.error) {
-    throw new CliError(result.error, EXIT.NOT_FOUND);
-  }
-  if (result.changed) {
-    await handle.save(result.scene);
-  }
+  await handle.server.suggestionOp('describe', suggestionId, { actor, text, role });
   await handle.announceAgent(buildAgentActivity(args, actor, suggestionId));
-
   return {
     code: EXIT.OK,
     text: `已向建议 ${suggestionId} 追加 ${role} 反馈`,

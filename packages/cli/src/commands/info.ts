@@ -3,11 +3,12 @@
  *
  * 规格 §2.1：白板元信息与统计（id / 名称 / 元素数 / 文件数 ...）。
  */
-import { loadBoard, listBoardFiles } from '@board/core/node';
+import { listBoardFiles } from '@board/core/node';
 import { regionsOf } from '@board/core';
 import type { ParsedArgs } from '../util/args.js';
 import { EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
+import { readBoard } from '../util/board-io.js';
 
 /**
  * 执行 info 命令。
@@ -16,19 +17,19 @@ import { resolveBoardDir } from '../util/board.js';
  */
 export async function cmdInfo(args: ParsedArgs): Promise<CmdResult> {
   const dir = resolveBoardDir(args.positionals[0], args.options.get('board'));
-  const handle = await loadBoard(dir);
+  const { meta, scene } = await readBoard(dir);
   const files = await listBoardFiles(dir);
-  const regions = regionsOf(handle.scene.elements);
+  const regions = regionsOf(scene.elements);
 
   const data = {
-    id: handle.meta.id,
-    name: handle.meta.name,
-    elements: handle.scene.elements.length,
+    id: meta.id,
+    name: meta.name,
+    elements: scene.elements.length,
     regions: regions.length,
     files: files.length,
-    participants: handle.meta.participants.length,
-    createdAt: handle.meta.createdAt,
-    updatedAt: handle.meta.updatedAt,
+    participants: meta.participants.length,
+    createdAt: meta.createdAt,
+    updatedAt: meta.updatedAt,
   };
 
   const text = [

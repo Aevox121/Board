@@ -10,12 +10,7 @@
  *   - 区域描述落地为该文件夹的 `README.md`；
  *   - 场景里建一个 region 元素，path 指向该文件夹相对路径。
  */
-import { mkdir, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import {
-  createRegionElement,
-  nextZ,
   defaultSizeFor,
   regionsOf,
   INBOX_RECT,
@@ -79,65 +74,36 @@ async function regionCreate(args: ParsedArgs): Promise<CmdResult> {
     throw new CliError(`区域已存在: ${regionName}`, EXIT.CONFLICT);
   }
 
-  // 1. 在磁盘建文件夹 + 写 README.md
-  const regionDir = join(dir, 'files', regionName);
-  if (existsSync(regionDir)) {
-    throw new CliError(
-      `目标文件夹已存在: files/${regionName}`,
-      EXIT.CONFLICT,
-    );
-  }
-  await mkdir(regionDir, { recursive: true });
-  const description = args.options.get('desc') ?? '';
-  await writeFile(join(regionDir, 'README.md'), description, 'utf8');
-
-  // 2. 建 region 元素并推入场景
-  const size = defaultSizeFor('region');
-  const z = nextZ(scene.elements);
   // 区域横向平铺、互不重叠；整体置于收件区下方，避开游离文件。
+  const size = defaultSizeFor('region');
   const x = existing.length * (size.width + REGION_GAP);
   const y = INBOX_RECT.y + INBOX_RECT.height + REGION_GAP;
+  const description = args.options.get('desc') ?? '';
   const actor = resolveActor(args);
-  // 软归属（PRD §8.3）—— `--owner me` / `<id>` / `none`，默认归属创建者。
-  const ownerRaw = args.options.get('owner');
-  const ownerId =
-    ownerRaw === undefined
-      ? actor
-      : ownerRaw === 'me'
-        ? actor
-        : ownerRaw === 'none' || ownerRaw === ''
-          ? null
-          : ownerRaw;
 
-  const element = createRegionElement({
+  // 走 server: 原子完成 mkdir files/<name>/ + 写 README.md + scene 追加 region 元素。
+  // (ownerId 选项暂在 server 端不支持,需要后续 server 加 owner 参数。先不传)
+  const { elementId } = await handle.server.createRegion({
+    name: regionName,
+    description,
     x,
     y,
     width: size.width,
     height: size.height,
-    createdBy: actor,
-    z,
-    autoPlaced: true,
-    path: regionName,
-    label: regionName,
-    description,
-    ownerId,
+    actor,
   });
-
-  scene.elements.push(element);
-  await handle.save(scene);
-  await handle.announceAgent(buildAgentActivity(args, actor, element.id));
+  await handle.announceAgent(buildAgentActivity(args, actor, elementId));
 
   return {
     code: EXIT.OK,
-    text: `已创建区域 "${regionName}"  (元素 ${element.id}, 文件夹 files/${regionName}/)`,
+    text: `已创建区域 "${regionName}"  (元素 ${elementId}, 文件夹 files/${regionName}/)`,
     data: {
-      elementId: element.id,
-      label: element.label,
-      path: element.path,
-      description: element.description,
-      x: element.x,
-      y: element.y,
-      z: element.z,
+      elementId,
+      label: regionName,
+      path: regionName,
+      description,
+      x,
+      y,
     },
   };
 }
@@ -278,8 +244,12 @@ async function regionDescribe(args: ParsedArgs): Promise<CmdResult> {
   );
   await handle.save({ ...handle.scene, elements: next });
   await handle.announceAgent(buildAgentActivity(args, actor, region.id));
-  // 区域描述同步落地为文件夹 README.md。
-  await writeFile(join(dir, 'files', region.path, 'README.md'), desc, 'utf8');
+  // 区域描述同步落地为文件夹 README.md(走 server upload,允许 overwrite)。
+  await handle.server.uploadFile(
+    `${region.path}/README.md`,
+    Buffer.from(desc, 'utf8'),
+    { overwrite: true },
+  );
 
   return {
     code: EXIT.OK,

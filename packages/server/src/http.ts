@@ -1298,7 +1298,11 @@ async function handleSuggestionOp(
       fail(res, 400, '描述内容 text 不能为空');
       return;
     }
-    result = describeSuggestion(handle.scene, suggestionId, text, actor, 'human');
+    // role 默认 'human'(Web 端写描述场景);Agent-to-Agent 回路时客户端显式传 'agent'。
+    const roleRaw = rec['role'];
+    const role: 'human' | 'agent' =
+      roleRaw === 'agent' ? 'agent' : 'human';
+    result = describeSuggestion(handle.scene, suggestionId, text, actor, role);
   }
 
   if (result.error) {

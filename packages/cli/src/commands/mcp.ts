@@ -17,8 +17,8 @@ import { readFile, writeFile, stat, mkdtemp, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
-import { loadBoard } from '@board/core/node';
 import { guessMime } from '@board/core';
+import { readBoard } from '../util/board-io.js';
 import type { ParsedArgs } from '../util/args.js';
 import { CliError, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
@@ -184,8 +184,8 @@ async function getBoardElement(
   elementId: string,
 ): Promise<CallToolResult> {
   const dir = resolveBoardDir(boardPath, undefined);
-  const handle = await loadBoard(dir);
-  const el = handle.scene.elements.find((e) => e.id === elementId);
+  const { scene } = await readBoard(dir);
+  const el = scene.elements.find((e) => e.id === elementId);
   if (!el) {
     return textResult(`board_get_element 失败：未找到元素 ${elementId}`, true);
   }

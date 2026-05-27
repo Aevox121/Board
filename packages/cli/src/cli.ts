@@ -240,6 +240,9 @@ async function main(argv: string[]): Promise<number> {
     const agentColor =
       args.options.get('agent-color') ??
       (process.env['BOARD_AGENT_COLOR']?.trim() || undefined);
+    // 把 MCP 自己绑定的 board-server URL 落到 env,让 cmd*(走 openBoard 探 server)
+    // 探得到正确端口。否则默认 :4500,如果 dev 时常驻一个老 server 在 4500 会撞到。
+    process.env['BOARD_SERVER_URL'] = `http://127.0.0.1:${port}`;
     await runMcpServer(boardPath, {
       port,
       agentIdentity: { actor, name: agentName, color: agentColor },

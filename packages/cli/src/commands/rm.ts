@@ -1,14 +1,13 @@
 /**
  * `board rm <白板路径> <元素id>` — 删除元素。
  *
- * 规格 §2.2：删除元素。`file` 元素的真实文件移入回收站 `.runtime/trash/`
- * （可恢复，导出时随 .runtime 一并剔除）。同时清理引用该元素的连线与建议，
- * 避免悬空。`region` / `folder` 元素背后是真实文件夹，不在本命令删除范围。
+ * 规格 §2.2:删除元素。`file` 元素的真实文件移入回收站 `.runtime/trash/`
+ * (可恢复,导出时随 .runtime 一并剔除)。同时清理引用该元素的连线与建议,
+ * 避免悬空。`region` / `folder` 元素背后是真实文件夹,不在本命令删除范围。
+ *
+ * 实现:走 server 的 POST /api/elements/delete(server 端处理 trash 移动 +
+ * 引用清理 + scene 同步)。CLI 不在本机 fs 上直接 rename。
  */
-import { mkdir, rename } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { basename, join } from 'node:path';
-import { removeElement } from '@board/core';
 import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
@@ -28,52 +27,30 @@ export async function cmdRm(args: ParsedArgs): Promise<CmdResult> {
 
   const dir = resolveBoardDir(boardPath, args.options.get('board'));
   const handle = await openBoard(dir);
-  const { scene } = handle;
-  const target = scene.elements.find((e) => e.id === elementId);
+  const target = handle.scene.elements.find((e) => e.id === elementId);
   if (!target) {
     throw new CliError(`未找到元素：${elementId}`, EXIT.NOT_FOUND);
   }
   if (target.type === 'region' || target.type === 'folder') {
     throw new CliError(
-      `不支持用 rm 删除 ${target.type} 元素（其背后是真实文件夹，请直接操作文件夹）。`,
+      `不支持用 rm 删除 ${target.type} 元素(其背后是真实文件夹,请直接操作文件夹)。`,
       EXIT.USAGE,
     );
   }
 
-  // 移除目标，并连带清理引用它的连线 / 建议（避免悬空引用），先落盘。
-  // 顺序要点：先存「不含该元素」的 board.json、再动真实文件 —— 否则正在
-  // 监听该白板的 board-server 会在文件消失瞬间 reconcile，把仍在 board.json
-  // 里的该 file 元素当缺失态保留并回写，覆盖掉本次删除。
-  const { scene: next, removedRefs } = removeElement(scene, elementId);
-  await handle.save(next);
-  // 元素已删,没有锚点元素;announceAgent 不带 targetElementId,Web 端只显头像无轨道动画。
-  await handle.announceAgent(buildAgentActivity(args, resolveActor(args)));
-
-  // file 元素：真实文件移入回收站 .runtime/trash/（可恢复）。
-  let trashed: string | null = null;
-  if (target.type === 'file') {
-    const src = join(dir, 'files', target.path);
-    if (existsSync(src)) {
-      const trashDir = join(dir, '.runtime', 'trash');
-      await mkdir(trashDir, { recursive: true });
-      await rename(src, join(trashDir, `${Date.now()}-${basename(target.path)}`));
-      trashed = target.path;
-    }
-  }
+  const actor = resolveActor(args);
+  await handle.server.deleteElement(elementId, actor);
+  await handle.announceAgent(buildAgentActivity(args, actor));
 
   return {
     code: EXIT.OK,
     text:
-      `已删除元素 ${elementId}（${target.type}）` +
-      (trashed ? '，文件移入回收站' : '') +
-      (removedRefs.length > 0
-        ? `；连带清理 ${removedRefs.length} 个引用元素`
-        : ''),
+      `已删除元素 ${elementId}(${target.type})` +
+      (target.type === 'file' ? ',文件移入回收站' : ''),
     data: {
       removed: elementId,
       type: target.type,
-      trashedFile: trashed,
-      removedRefs,
+      trashedFile: target.type === 'file' ? target.path : null,
     },
   };
 }

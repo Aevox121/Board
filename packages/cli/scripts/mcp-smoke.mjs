@@ -355,18 +355,25 @@ async function main() {
     } else bad('建议应已被删除', JSON.stringify(rGone.content));
   }
 
-  // 11. log 只验 schema 形状 —— entries 内容受架构限制(见下)
-  // 已知 gap:CLI/MCP 走 disk 直写绕过 Y.Doc,server.recordChange 比对的是
-  // room.getScene()(Y.Doc 视图)且 drafts.count=0,因此 oplog 不写。要让
-  // MCP 写入也进 oplog,需 server 端把 disk 变更 reconcile 进 Y.Doc。
-  section('board_log (shape only,内容存在已知 gap)');
+  // 11. log 现在应该有真实 oplog 条目 —— 2026-05 strict-server 改造后所有
+  // CLI/MCP 写都过 Y.Doc,触发 recordChange + oplog.append。
+  section('board_log');
   {
-    const r = await call('board_log', { tail: 10 });
+    const r = await call('board_log', { tail: 50 });
     const s = r.structuredContent;
-    if (Array.isArray(s?.entries) && (s.source === 'server' || s.source === 'disk')) {
-      ok('log 形状', `entries=${s.entries.length} source=${s.source}（entries 空是已知 gap,见注释）`);
+    if (
+      Array.isArray(s?.entries) &&
+      s.entries.length > 0 &&
+      (s.source === 'server' || s.source === 'disk')
+    ) {
+      const actors = new Set(s.entries.map((e) => e.actor));
+      if (actors.has(ACTOR)) {
+        ok('oplog 含 ACTOR 操作', `entries=${s.entries.length} actors=${[...actors].slice(0,3).join('/')}`);
+      } else {
+        bad('oplog 应含 ACTOR', `actors=${[...actors].join(',')}`);
+      }
     } else {
-      bad('log 形状', JSON.stringify(s)?.slice(0, 100));
+      bad('log 应有 entries', JSON.stringify(s)?.slice(0, 100));
     }
   }
 
@@ -379,6 +386,29 @@ async function main() {
       ok('事件流形状', `events=${s.events.length} cursor=${s.cursor}`);
     } else {
       bad('事件流字段', JSON.stringify(s)?.slice(0, 100));
+    }
+  }
+
+  // 12b. 严格模式:写命令在错误 BOARD_SERVER_URL 下应直接 fail
+  // (验证 disk fallback 被干掉了)
+  section('strict-server: 错 server URL 时写命令应 fail');
+  {
+    const { spawn: spawnSync } = await import('node:child_process');
+    const proc = spawnSync(process.execPath, [
+      CLI_DIST, 'shape', 'add', boardPath, 'rectangle',
+      '--label', 'should-fail',
+      '--actor', 'a_no_server',
+    ], {
+      env: { ...process.env, BOARD_SERVER_URL: 'http://127.0.0.1:9' },  // 9 几乎不可能在跑
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    proc.stderr.on('data', (b) => stderr += b.toString());
+    const code = await new Promise((res) => proc.on('exit', (c) => res(c ?? 0)));
+    if (code !== 0 && /需要 board-server 在跑/.test(stderr)) {
+      ok('server 不可达时正确报错', `exit=${code}`);
+    } else {
+      bad('应报「需要 board-server 在跑」', `exit=${code} stderr=${stderr.slice(0, 200)}`);
     }
   }
 

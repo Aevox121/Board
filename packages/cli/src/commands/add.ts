@@ -6,16 +6,14 @@
  *   `board add file <白板路径> <本地文件> [--region <区域名>]`
  *   `board add folder <白板路径> <本地目录> [--region <区域名>]`
  */
-import { cp, copyFile, mkdir, stat } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { basename, isAbsolute, join, resolve } from 'node:path';
-import { listBoardFiles } from '@board/core/node';
+import { basename, isAbsolute, join, resolve, relative, sep } from 'node:path';
 import {
   createTextElement,
   nextZ,
   defaultSizeFor,
   regionsOf,
-  reconcileFiles,
   INBOX_RECT,
 } from '@board/core';
 import type { ParsedArgs } from '../util/args.js';
@@ -191,54 +189,63 @@ async function addLocal(
     throw new CliError(`不是目录: ${localPath}`, EXIT.USAGE);
   }
 
-  // 解析目标区域段
+  // 解析目标区域段(基于当前 server 视图)
   const regionSeg = resolveRegionSegment(args.options.get('region'), handle);
   const name = basename(srcAbs);
-  const destDir =
-    regionSeg === ''
-      ? join(dir, 'files')
-      : join(dir, 'files', regionSeg);
-  const destAbs = join(destDir, name);
 
-  if (existsSync(destAbs)) {
-    throw new CliError(
-      `目标已存在: files/${regionSeg === '' ? '' : regionSeg + '/'}${name}`,
-      EXIT.CONFLICT,
-    );
-  }
-
-  // 复制进 files/
-  await mkdir(destDir, { recursive: true });
-  if (kind === 'file') {
-    await copyFile(srcAbs, destAbs);
-  } else {
-    await cp(srcAbs, destAbs, { recursive: true });
-  }
-
-  // 扫描 files/ 并 reconcile，使 board.json 出现新增 file 元素
-  const diskFiles = await listBoardFiles(dir);
   const actor = resolveActor(args);
-  const result = reconcileFiles({
-    scene: handle.scene,
-    diskFiles,
-    actor,
-  });
-  await handle.save(result.scene);
-  // 用首个新增的 file 元素作 Agent presence 锚点;reconcile 没新增就不传 target。
-  await handle.announceAgent(buildAgentActivity(args, actor, result.added[0]));
+
+  // 单文件:读字节直传 server,server 写盘 + reconcileNow 建 file 元素。
+  // 多文件目录:递归 walk + 逐文件直传。server 每次 upload 都 reconcile,
+  // 大目录会偏慢但 MVP 范围内可接受。
+  const uploaded: string[] = [];
+  if (kind === 'file') {
+    const destRel = regionSeg === '' ? name : `${regionSeg}/${name}`;
+    const buf = await readFile(srcAbs);
+    await handle.server.uploadFile(destRel, buf);
+    uploaded.push(destRel);
+  } else {
+    // 递归 walk srcAbs 下所有文件,目录名作为 path 前缀(srcAbs basename 包进去)
+    async function walk(absDir: string): Promise<void> {
+      const entries = await readdir(absDir, { withFileTypes: true });
+      for (const e of entries) {
+        const full = join(absDir, e.name);
+        if (e.isDirectory()) {
+          await walk(full);
+        } else if (e.isFile()) {
+          // 相对 srcAbs 的父目录,得到 "<folder>/sub/file.ext"
+          const rel = relative(srcAbs + sep + '..', full).split(sep).join('/');
+          const dest = regionSeg === '' ? rel : `${regionSeg}/${rel}`;
+          const buf = await readFile(full);
+          await handle.server.uploadFile(dest, buf);
+          uploaded.push(dest);
+        }
+      }
+    }
+    await walk(srcAbs);
+  }
+
+  // server 已 reconcile,重新拉一次 scene 找出新加的 file 元素(用于 announceAgent)
+  const { scene: nextScene } = await handle.server.fetchBoard();
+  const firstAdded = nextScene.elements.find(
+    (e) => e.type === 'file' && uploaded.includes(e.path ?? ''),
+  );
+  await handle.announceAgent(
+    buildAgentActivity(args, actor, firstAdded?.id),
+  );
 
   const destRel = regionSeg === '' ? name : `${regionSeg}/${name}`;
   return {
     code: EXIT.OK,
     text:
       kind === 'file'
-        ? `已添加文件 files/${destRel}  (新增 ${result.added.length} 个 file 元素)`
-        : `已添加目录 files/${destRel}/  (新增 ${result.added.length} 个 file 元素)`,
+        ? `已添加文件 files/${destRel}`
+        : `已添加目录 files/${destRel}/  (上传 ${uploaded.length} 个文件)`,
     data: {
       dest: destRel,
       region: regionSeg === '' ? null : regionSeg,
-      added: result.added,
-      moved: result.moved,
+      uploaded,
+      elementId: firstAdded?.id ?? null,
     },
   };
 }

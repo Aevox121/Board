@@ -47,6 +47,51 @@ export interface ServerHandle {
    * Agent 头像与围绕 targetElementId 的轨道动画(PRD §7.4 / §8.2)。
    */
   agentActivity(opts: AgentActivityInput): Promise<void>;
+  /**
+   * POST /api/boards/<id>/files/upload?path=<rel>&overwrite=<0|1>
+   * 上传文件二进制到 `<board>/files/<rel>`,server 内部 reconcileNow 建 file 元素。
+   */
+  uploadFile(
+    relPath: string,
+    body: Buffer | Uint8Array,
+    opts?: { overwrite?: boolean },
+  ): Promise<{ path: string; size: number }>;
+  /**
+   * POST /api/boards/<id>/files/move { from, to, x?, y?, actor? }
+   * 服务端 fs rename + 同步 scene 元素 path / parentId。
+   */
+  moveFile(
+    from: string,
+    to: string,
+    opts?: { x?: number; y?: number; actor?: string },
+  ): Promise<void>;
+  /**
+   * POST /api/boards/<id>/elements/delete { elementId, actor? }
+   * 删元素;file 元素同时把磁盘文件移入 `.runtime/trash/`。
+   */
+  deleteElement(elementId: string, actor?: string): Promise<void>;
+  /**
+   * POST /api/boards/<id>/suggestions/<op> { suggestionId, actor?, text? }
+   * 建议处理三操作(PRD §7.3)。
+   */
+  suggestionOp(
+    op: 'accept' | 'reject' | 'describe',
+    suggestionId: string,
+    opts?: { actor?: string; text?: string; role?: 'human' | 'agent' },
+  ): Promise<void>;
+  /**
+   * POST /api/boards/<id>/regions { name, description?, x?, y?, width?, height?, actor? }
+   * 服务端原子完成 mkdir files/<name>/ + 写 README.md + scene 追加 region 元素。
+   */
+  createRegion(opts: {
+    name: string;
+    description?: string;
+    x?: number;
+    y?: number;
+    width?: number;
+    height?: number;
+    actor?: string;
+  }): Promise<{ elementId: string; path: string }>;
 }
 
 /** /api/agent-activity 请求体的客户端镜像。 */
@@ -218,6 +263,116 @@ function createHandle(baseUrl: string, boardId: string): ServerHandle {
         resp,
         'POST /agent-activity',
       );
+    },
+
+    async uploadFile(
+      relPath: string,
+      body: Buffer | Uint8Array,
+      opts?: { overwrite?: boolean },
+    ): Promise<{ path: string; size: number }> {
+      const qs = new URLSearchParams({ path: relPath });
+      if (opts?.overwrite) qs.set('overwrite', '1');
+      const resp = await fetchWithTimeout(
+        `${prefix}/files/upload?${qs.toString()}`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/octet-stream' },
+          body,
+        },
+        RW_TIMEOUT_MS,
+      );
+      return unwrap<{ path: string; size: number }>(
+        resp,
+        `POST /files/upload (${relPath})`,
+      );
+    },
+
+    async moveFile(
+      from: string,
+      to: string,
+      opts?: { x?: number; y?: number; actor?: string },
+    ): Promise<void> {
+      const body: Record<string, unknown> = { from, to };
+      if (opts?.x !== undefined) body['x'] = opts.x;
+      if (opts?.y !== undefined) body['y'] = opts.y;
+      if (opts?.actor) body['actor'] = opts.actor;
+      const resp = await fetchWithTimeout(
+        `${prefix}/files/move`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+        RW_TIMEOUT_MS,
+      );
+      await unwrap<unknown>(resp, 'POST /files/move');
+    },
+
+    async deleteElement(elementId: string, actor?: string): Promise<void> {
+      const body: Record<string, unknown> = { elementId };
+      if (actor) body['actor'] = actor;
+      const resp = await fetchWithTimeout(
+        `${prefix}/elements/delete`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+        RW_TIMEOUT_MS,
+      );
+      await unwrap<unknown>(resp, 'POST /elements/delete');
+    },
+
+    async createRegion(opts: {
+      name: string;
+      description?: string;
+      x?: number;
+      y?: number;
+      width?: number;
+      height?: number;
+      actor?: string;
+    }): Promise<{ elementId: string; path: string }> {
+      const body: Record<string, unknown> = { name: opts.name };
+      if (opts.description !== undefined) body['description'] = opts.description;
+      if (opts.x !== undefined) body['x'] = opts.x;
+      if (opts.y !== undefined) body['y'] = opts.y;
+      if (opts.width !== undefined) body['width'] = opts.width;
+      if (opts.height !== undefined) body['height'] = opts.height;
+      if (opts.actor) body['actor'] = opts.actor;
+      const resp = await fetchWithTimeout(
+        `${prefix}/regions`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+        RW_TIMEOUT_MS,
+      );
+      return unwrap<{ elementId: string; path: string }>(
+        resp,
+        'POST /regions',
+      );
+    },
+
+    async suggestionOp(
+      op: 'accept' | 'reject' | 'describe',
+      suggestionId: string,
+      opts?: { actor?: string; text?: string; role?: 'human' | 'agent' },
+    ): Promise<void> {
+      const body: Record<string, unknown> = { suggestionId };
+      if (opts?.actor) body['actor'] = opts.actor;
+      if (opts?.text !== undefined) body['text'] = opts.text;
+      if (opts?.role) body['role'] = opts.role;
+      const resp = await fetchWithTimeout(
+        `${prefix}/suggestions/${op}`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+        RW_TIMEOUT_MS,
+      );
+      await unwrap<unknown>(resp, `POST /suggestions/${op}`);
     },
   };
 }

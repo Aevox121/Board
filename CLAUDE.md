@@ -67,7 +67,9 @@ packages/
 
 ### Agent 操作模型（`specs/CLI与MCP规格.md`）
 - Agent 操作白板**默认走 `board` CLI**；CLI 命令刻意贴近文件目录操作。
-- MCP Server 提供与 CLI 等价的工具集；直接改 `.board` 文件夹为备选路径（仅内容类操作）。
+- MCP Server 提供与 CLI 等价的工具集。
+- **写通道唯一性(2026-05 strict-server)**:`board` CLI / MCP 的**写操作必须经 server / Y.Doc**;server 不可达直接报错,不回退 disk 直写。理由:server 用 Y.Doc 作运行态权威源 + 节流投影回盘,CLI 直写 fs 会和 Y.Doc 反向丢写 + 跳过 oplog/SSE 事件流。
+- **Agent 直改 `.board/files/` 内文件**(用自己的 fs 工具如 Write/Edit/mv)是**另一条通道**,允许直接 fs 操作,server 的 chokidar 自动 reconcile。这条通道是 PRD §7.2 ② 的"备选路径"语义。
 - 内容类操作有文件系统对应物；画布类操作（图形/连线/定位/样式/进度/建议）只能经 CLI/MCP。
 
 #### Agent 自报家门（**必读 — 涉及拟人化光标 / 协作可见性**）
