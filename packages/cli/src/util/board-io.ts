@@ -16,7 +16,7 @@
  * loadBoard 读 disk(server 节流投影后 disk 总是接近最新)。
  */
 import { CliError, EXIT } from './io.js';
-import type { BoardMeta, BoardScene } from '@board/core';
+import { diffScene, type BoardMeta, type BoardScene } from '@board/core';
 import {
   findServerForBoard,
   type AgentActivityInput,
@@ -104,6 +104,9 @@ async function openViaServer(
   server: ServerHandle,
 ): Promise<BoardSession> {
   const { meta, scene } = await server.fetchBoard();
+  // 基线 = 本次会话 fetch 到的场景快照。save 时只发「相对基线」的元素级 op，
+  // server 把它应用到活 Y.Doc —— 故并发写不再整场景互删（见 core diffScene）。
+  let baseScene: BoardScene = structuredClone(scene);
   return {
     dir,
     meta,
@@ -111,7 +114,12 @@ async function openViaServer(
     viaServer: true,
     server,
     async save(next: BoardScene): Promise<void> {
-      await server.putBoard(next);
+      const ops = diffScene(baseScene, next);
+      if (ops.added.length > 0 || ops.updated.length > 0 || ops.removed.length > 0) {
+        await server.applyOps(ops);
+      }
+      // 更新基线，使同一会话内的后续 save 相对「已写入的状态」继续差分。
+      baseScene = structuredClone(next);
     },
     async refreshFilesOnly(actor?: string): Promise<void> {
       await server.refresh(actor);

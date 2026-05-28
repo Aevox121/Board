@@ -50,10 +50,13 @@ import {
   rejectSuggestion,
   removeElement,
   SCHEMA_VERSION,
+  applySceneOps,
   type BoardEventType,
   type BoardMeta,
   type BoardScene,
   type BoardTask,
+  type Element,
+  type SceneOps,
   type SuggestionResult,
 } from '@board/core';
 import type { EventLog } from './events.js';
@@ -1350,6 +1353,67 @@ async function handleSuggestionOp(
 }
 
 /**
+ * POST /api/elements/apply —— 原子应用一组元素级 op（CLI/MCP 写路径核心）。
+ *
+ * 请求体 `{ added?, updated?, removed?, actor? }`（= core `SceneOps` + actor）。
+ *
+ * 为什么存在：CLI/MCP 旧写路径是「fetch 整场景 → 本地改 → PUT 整场景」，server 用
+ * applySceneDiff 把「活文档有、传入没有」的元素删掉 —— 两个 Agent 并发写时，各自
+ * 揣着一份过期全量快照，互相把对方刚加的元素删掉。本端点改成：客户端只发「相对它
+ * fetch 的基线」的最小 op，server 把这些 op 应用到**当时的活 Y.Doc**（mutator 收到
+ * 的是活场景），故并发各加各的永不互删 —— 真正兑现 Board「多人多 Agent 同时操作」
+ * 的设计。删除走简单移除（不级联文件；file/region 的级联删除仍走 /elements/delete）。
+ */
+async function handleApplyOps(
+  deps: HttpDeps,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch (err) {
+    fail(res, 400, errMsg(err));
+    return;
+  }
+  if (typeof body !== 'object' || body === null) {
+    fail(res, 400, '请求体必须为 JSON 对象');
+    return;
+  }
+  const rec = body as Record<string, unknown>;
+  const actor = typeof rec['actor'] === 'string' && rec['actor'] ? rec['actor'] : 'u_local';
+  const added = Array.isArray(rec['added']) ? (rec['added'] as Element[]) : [];
+  const removed = Array.isArray(rec['removed'])
+    ? (rec['removed'] as unknown[]).filter((v): v is string => typeof v === 'string')
+    : [];
+  const updated = Array.isArray(rec['updated'])
+    ? (rec['updated'] as unknown[]).filter(
+        (u): u is { id: string; patch: Record<string, unknown> } =>
+          typeof u === 'object' &&
+          u !== null &&
+          typeof (u as Record<string, unknown>)['id'] === 'string' &&
+          typeof (u as Record<string, unknown>)['patch'] === 'object',
+      )
+    : [];
+
+  if (added.length === 0 && removed.length === 0 && updated.length === 0) {
+    ok(res, { applied: 0 });
+    return;
+  }
+
+  const ops: SceneOps = { added, updated, removed };
+  // mutator 收到的是**活场景** —— 对它应用 op，applySceneDiff 只产真实 delta。
+  deps.room.mutate(actor, (live) => applySceneOps(live, ops));
+  await deps.recordChange(actor);
+  ok(res, {
+    applied: added.length + updated.length + removed.length,
+    added: added.length,
+    updated: updated.length,
+    removed: removed.length,
+  });
+}
+
+/**
  * POST /api/elements/delete —— 删除一个元素。
  *
  * 请求体 `{ elementId }`。与 CLI `board rm` 同语义（specs §2.2）：
@@ -2536,6 +2600,11 @@ async function route(
   }
   if (path === '/api/suggestions/describe' && method === 'POST') {
     await handleSuggestionOp(deps, req, res, 'describe');
+    return;
+  }
+  // POST /api/elements/apply —— 原子应用元素级 op（并发安全的 CLI/MCP 写路径）
+  if (path === '/api/elements/apply' && method === 'POST') {
+    await handleApplyOps(deps, req, res);
     return;
   }
   // POST /api/elements/delete —— 删除元素（含 file 移入回收站、连带清引用）

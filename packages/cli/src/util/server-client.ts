@@ -12,7 +12,7 @@
  *   / 落盘 / 广播;不在跑回退 loadBoard + saveBoard。
  */
 import { resolve } from 'node:path';
-import type { BoardMeta, BoardScene } from '@board/core';
+import type { BoardMeta, BoardScene, SceneOps } from '@board/core';
 
 /** 默认 server 地址 —— 与 Dev/CLAUDE.md 端口登记表 board-server 一致。 */
 const DEFAULT_BASE_URL = 'http://127.0.0.1:4500';
@@ -37,8 +37,13 @@ export interface ServerHandle {
   boardId: string;
   /** GET /api/boards/<id>/board → { meta, scene }。 */
   fetchBoard(): Promise<{ meta: BoardMeta; scene: BoardScene }>;
-  /** PUT /api/boards/<id>/board { scene } —— 整场景写入。 */
+  /** PUT /api/boards/<id>/board { scene } —— 整场景写入（import/restore 等全量替换用）。 */
   putBoard(scene: BoardScene): Promise<void>;
+  /**
+   * POST /api/boards/<id>/elements/apply —— 原子应用元素级 op（并发安全写路径）。
+   * server 把 op 应用到活 Y.Doc，故并发各加各的永不互删（见 core `diffScene`）。
+   */
+  applyOps(ops: SceneOps, actor?: string): Promise<void>;
   /** POST /api/boards/<id>/refresh —— 外部写 files/ 后触发服务比对事件流。 */
   refresh(actor?: string): Promise<void>;
   /**
@@ -232,6 +237,25 @@ function createHandle(baseUrl: string, boardId: string): ServerHandle {
         RW_TIMEOUT_MS,
       );
       await unwrap<{ saved: true }>(resp, 'PUT /board');
+    },
+
+    async applyOps(ops: SceneOps, actor?: string): Promise<void> {
+      const body: Record<string, unknown> = {
+        added: ops.added,
+        updated: ops.updated,
+        removed: ops.removed,
+      };
+      if (actor) body['actor'] = actor;
+      const resp = await fetchWithTimeout(
+        `${prefix}/elements/apply`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+        RW_TIMEOUT_MS,
+      );
+      await unwrap<unknown>(resp, 'POST /elements/apply');
     },
 
     async refresh(actor?: string): Promise<void> {

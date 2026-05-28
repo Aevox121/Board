@@ -226,6 +226,85 @@ export function applySceneDiff(
   }
 }
 
+/**
+ * 元素级写操作集合 —— CLI/MCP 把「整场景写」降级为「相对基线的最小 op」，
+ * server 端对**活 Y.Doc** 原子应用，从而并发各加各的永不互删（见
+ * `diffScene` 注释）。
+ */
+export interface SceneOps {
+  /** 基线里没有、目标里有 —— 新增的整元素。 */
+  added: Element[];
+  /** 两边都有但有字段变化 —— 只带变化的顶层字段（字段级 patch）。 */
+  updated: Array<{ id: string; patch: Record<string, unknown> }>;
+  /** 基线里有、目标里没有 —— 删除的元素 id。 */
+  removed: string[];
+}
+
+/**
+ * 算「基线场景 → 目标场景」的元素级差分（CLI 端用）。
+ *
+ * 关键：CLI 命令打开会话时 fetch 一份场景作 **基线**，在其上增删改后调 save。
+ * 把 save 从「PUT 整场景替换」改成「diffScene(基线, 目标) → 发最小 op」，server
+ * 再把这些 op 应用到**当时的活 Y.Doc**上。这样两个 Agent 并发各加各的元素时，
+ * 谁的 op 都只描述「我动了什么」、不含「整场景应该长啥样」，故不会把对方刚加的
+ * 元素当成「该删的」删掉 —— 这正是整场景 PUT 互删的根因（applySceneDiff 会把
+ * 「活文档有、传入没有」的元素删掉）。
+ *
+ * `updated` 走字段级 patch（只带变化的顶层字段）：两 Agent 同改同一元素的不同
+ * 字段时也尽量都保留。嵌套对象（style / label / start / end 等）整体比较、变了
+ * 就整块带上。
+ */
+export function diffScene(base: BoardScene, next: BoardScene): SceneOps {
+  const baseById = new Map(base.elements.map((e) => [e.id, e]));
+  const nextById = new Map(next.elements.map((e) => [e.id, e]));
+
+  const added: Element[] = [];
+  const updated: Array<{ id: string; patch: Record<string, unknown> }> = [];
+  const removed: string[] = [];
+
+  for (const id of baseById.keys()) {
+    if (!nextById.has(id)) removed.push(id);
+  }
+
+  for (const el of next.elements) {
+    const old = baseById.get(el.id);
+    if (!old) {
+      added.push(el);
+      continue;
+    }
+    const patch: Record<string, unknown> = {};
+    const cur = el as unknown as Record<string, unknown>;
+    const prev = old as unknown as Record<string, unknown>;
+    for (const k of Object.keys(cur)) {
+      if (JSON.stringify(cur[k]) !== JSON.stringify(prev[k])) patch[k] = cur[k];
+    }
+    if (Object.keys(patch).length > 0) updated.push({ id: el.id, patch });
+  }
+
+  return { added, updated, removed };
+}
+
+/**
+ * 把一组元素级 op 应用到一份场景上，返回新场景（server 端在 `room.mutate` 的
+ * mutator 里对**活场景**调用本函数）。纯函数、不碰 Y.Doc —— 由调用方把返回值
+ * 交给 applySceneDiff 落进 Y.Doc。
+ */
+export function applySceneOps(live: BoardScene, ops: SceneOps): BoardScene {
+  const removedSet = new Set(ops.removed);
+  const patchById = new Map(ops.updated.map((u) => [u.id, u.patch]));
+  let elements = live.elements
+    .filter((e) => !removedSet.has(e.id))
+    .map((e) => {
+      const patch = patchById.get(e.id);
+      return patch ? ({ ...e, ...patch } as Element) : e;
+    });
+  const existing = new Set(elements.map((e) => e.id));
+  for (const a of ops.added) {
+    if (!existing.has(a.id)) elements.push(a);
+  }
+  return { ...live, elements };
+}
+
 function updateElementYMap(
   m: Y.Map<unknown>,
   oldEl: Element,
