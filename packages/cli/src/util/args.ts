@@ -111,4 +111,7 @@ export const GLOBAL_VALUE_KEYS: ReadonlySet<string> = new Set([
   'layout',
   'gap',
   'cols',
+  'nodes',
+  'edges',
+  'direction',
 ]);

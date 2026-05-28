@@ -47,6 +47,7 @@ import { cmdLog } from './log.js';
 import { cmdElement } from './element.js';
 import { cmdInfo } from './info.js';
 import { cmdArrangeCommand } from './arrange.js';
+import { cmdFlow } from './flow.js';
 
 /** 由位置参数 / 选项 / 开关构造一个 ParsedArgs（喂给 cmd* 函数）。 */
 function mkArgs(
@@ -1357,6 +1358,75 @@ export async function runMcpServer(
           gap: a.gap !== undefined ? String(a.gap) : undefined,
           cols: a.cols !== undefined ? String(a.cols) : undefined,
           at: a.at,
+          actor: a.agent,
+        }),
+        port,
+      )),
+  );
+
+  // ── 写：声明式流程图（M5 L3，dagre 分层）────────────────────
+  server.registerTool(
+    'board_add_flow',
+    {
+      description:
+        '声明式画一张流程图 / 有向图：你只给「节点 + 边 + 方向」，引擎用 dagre 算出' +
+        '互不重叠、按数据流分层的整批坐标，一次性建好全部节点（shape）+ 连线（connector），' +
+        '返回每个节点 id → 实际元素 id。**画结构化的图（流程 / 树状 / 依赖）首选本工具**，' +
+        '省去逐个 board_add_shape + 精算坐标 + board_connect。节点高度按 label 自动撑高（不出框）。' +
+        '只是把若干无连线的卡片排齐用 board_arrange；单个图形用 board_add_shape。',
+      inputSchema: {
+        ...boardSelector,
+        nodes: z
+          .array(
+            z.object({
+              id: z.string().describe('节点局部 id（仅用于在 edges 里引用，与画布元素 id 无关）'),
+              label: z.string().optional().describe('节点内文字'),
+              kind: z
+                .enum(['rectangle', 'ellipse', 'diamond'])
+                .optional()
+                .describe('图形类型，默认 rectangle'),
+              width: z.number().optional().describe('显式宽度，默认 160'),
+              height: z.number().optional().describe('显式高度；省略按 label 折行自动撑高'),
+            }),
+          )
+          .describe('节点列表'),
+        edges: z
+          .array(
+            z.object({
+              from: z.string().describe('源节点 id（nodes 里的 id）'),
+              to: z.string().describe('目标节点 id'),
+              label: z.string().optional().describe('连线上的文字'),
+            }),
+          )
+          .optional()
+          .describe('有向边列表；省略 = 无连线（只分层摆节点）'),
+        direction: z
+          .enum(['TB', 'BT', 'LR', 'RL'])
+          .optional()
+          .describe('布局方向，默认 TB（自上而下）'),
+        at: z
+          .string()
+          .optional()
+          .describe('整图左上角锚点 "x,y"；省略 = 自动找空位（不压现有元素）'),
+        region: z.string().optional().describe('把整图放进该区域（节点 parentId 设为区域）'),
+        arrow: z
+          .enum(['none', 'arrow', 'triangle', 'dot'])
+          .optional()
+          .describe('连线末端箭头，默认 arrow'),
+        agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
+      },
+    },
+    withBoard(async (boardPath, a) =>
+      runCmd(
+        'board_add_flow',
+        cmdFlow,
+        mkArgs([boardPath], {
+          nodes: JSON.stringify(a.nodes),
+          edges: JSON.stringify(a.edges ?? []),
+          direction: a.direction,
+          at: a.at,
+          region: a.region,
+          arrow: a.arrow,
           actor: a.agent,
         }),
         port,

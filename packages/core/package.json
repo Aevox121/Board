@@ -22,6 +22,7 @@
     "@types/node": "^20.14.0"
   },
   "dependencies": {
+    "@dagrejs/dagre": "^3.0.0",
     "yjs": "^13.6.30"
   }
 }
