@@ -56,9 +56,12 @@ export function apiUrl(sub: string): string {
  * Yjs ws URL —— 路径 `/yjs[/<boardId>]`。
  *
  * 生产 / 反向代理：走同源 `loc.host`，路径透传到 server。
- * dev：vite 5.x 的 ws proxy 偶发 ECONNABORTED 导致 yjs sync 失败 ——
- *   默认直连 board-server 端口（4500），bypass vite ws proxy。
+ * dev（仅本机 localhost/127.0.0.1）：vite 5.x 的 ws proxy 偶发 ECONNABORTED 导致
+ *   yjs sync 失败 —— 故本机直连 board-server 端口（4500），bypass vite ws proxy。
  *   通过 VITE_BOARD_WS_PORT 环境变量覆盖端口（如多 board server 调试）。
+ * dev（局域网他人用 `http://<IP>:<vite端口>` 访问）：board-server 只听 127.0.0.1，
+ *   远端直连 `<IP>:4500` 连不上 → 白板空。故**非 localhost 一律走同源**，由 vite
+ *   的 `/yjs` ws proxy 转发到本机 4500 —— 远端只需能连页面端口本身（同 HTTP /api）。
  *
  * token 若存在则自动追加 `?token=` 查询。
  */
@@ -70,12 +73,19 @@ export function yjsWsUrl(): string {
   const env = (import.meta as ImportMeta & { env?: Record<string, string> }).env;
   const devPortOverride = env?.['VITE_BOARD_WS_PORT'];
   const isDev = !!env?.['DEV'];
+  const isLocalhost =
+    loc.hostname === 'localhost' ||
+    loc.hostname === '127.0.0.1' ||
+    loc.hostname === '[::1]' ||
+    loc.hostname === '::1';
   let base: string;
   if (devPortOverride) {
     base = `${proto}//${loc.hostname}:${devPortOverride}/yjs`;
-  } else if (isDev) {
+  } else if (isDev && isLocalhost) {
+    // 本机 dev：直连 4500（绕开偶发抽风的 vite ws proxy）。
     base = `${proto}//${loc.hostname}:4500/yjs`;
   } else {
+    // 生产 / 反代 / 局域网他人访问：走同源，由 vite/反代把 /yjs 转发到 4500。
     base = `${proto}//${loc.host}/yjs`;
   }
   const path =
