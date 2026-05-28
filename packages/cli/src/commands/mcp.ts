@@ -1326,8 +1326,9 @@ export async function runMcpServer(
     'board_delete_element',
     {
       description:
-        '删除一个元素。file 元素的真实文件移入回收站；引用该元素的连线 / 建议' +
-        '一并清理。region / folder 元素不在删除范围。',
+        '删除一个元素（text / shape / file / connector / image / suggestion）。file 元素的' +
+        '真实文件移入回收站；引用该元素的连线 / 建议一并清理。' +
+        '删区域请用 board_delete_region（级联 + 回收站）；folder 元素不在删除范围。',
       inputSchema: {
         ...boardSelector,
         elementId: z.string().describe('要删除的元素 id'),
@@ -1379,6 +1380,28 @@ export async function runMcpServer(
         'board_describe_region',
         cmdRegion,
         mkArgs(['describe', boardPath, a.region], { desc: a.description }),
+        port,
+      )),
+  );
+
+  // ── 写：删除区域（级联 + 回收站）────────────────────────────
+  server.registerTool(
+    'board_delete_region',
+    {
+      description:
+        '删除一个区域：级联删除其内的文件 / 子区域，引用被删元素的连线一并清理，' +
+        '区域文件夹移入回收站（.runtime/trash/，可恢复）。按区域名删。' +
+        '（区域是 file 元素的容器，不能用 board_delete_element 删——那个针对单个非容器元素。）',
+      inputSchema: {
+        ...boardSelector,
+        region: z.string().describe('要删除的区域名'),
+      },
+    },
+    withBoard(async (boardPath, a) =>
+      runCmd(
+        'board_delete_region',
+        cmdRegion,
+        mkArgs(['rm', boardPath, a.region]),
         port,
       )),
   );

@@ -149,6 +149,7 @@ function printHelp(): void {
   console.log('  comment <路径> <元素id> "<文本>"              给元素加一条评论');
   console.log('  style <路径> <元素id> [--stroke <色>] [--fill <色>] [--opacity <n>]   改元素样式');
   console.log('  element move <路径> <元素id> --to "x,y" [--size "w,h"]    按画布坐标摆位元素（connector 除外）');
+  console.log('  region rm <路径> <区域名>                          删除区域（级联删内容 + 文件夹移回收站，可恢复）');
   console.log('  region describe <路径> <区域名> --desc "<描述>"     改区域描述');
   console.log('  region assign <路径> <区域名> --agent <id>          指派区域给 Agent');
   console.log('  suggest create <路径> <元素id> --type <replace|add> --as text:"<md>" [--reason ...]   创建建议');

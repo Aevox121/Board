@@ -307,9 +307,45 @@ async function regionAssign(args: ParsedArgs): Promise<CmdResult> {
 }
 
 /**
+ * `board region rm <白板路径> <区域名>`
+ *
+ * 按区域名删除区域 —— 级联删除其内文件 / 子区域 + 区域文件夹移入回收站
+ * （server 端 handleDeleteElement 的 region 分支处理，可恢复）。
+ */
+async function regionRemove(args: ParsedArgs): Promise<CmdResult> {
+  const boardPath = args.positionals[0];
+  const regionName = args.positionals[1];
+  if (boardPath === undefined || regionName === undefined) {
+    throw new CliError(
+      '用法: board region rm <白板路径> <区域名>',
+      EXIT.USAGE,
+    );
+  }
+
+  const dir = resolveBoardDir(boardPath, args.options.get('board'));
+  const handle = await openBoard(dir);
+  const region = regionsOf(handle.scene.elements).find(
+    (r) => r.label === regionName || r.path === regionName,
+  );
+  if (!region) {
+    throw new CliError(`未找到区域：${regionName}`, EXIT.NOT_FOUND);
+  }
+
+  const actor = resolveActor(args);
+  await handle.server.deleteElement(region.id, actor);
+  await handle.announceAgent(buildAgentActivity(args, actor));
+
+  return {
+    code: EXIT.OK,
+    text: `已删除区域「${region.label}」（及其内容，文件夹 files/${region.path}/ 移入回收站，可恢复）`,
+    data: { removed: region.id, label: region.label, path: region.path },
+  };
+}
+
+/**
  * 执行 region 命令。
  *
- * @param args 位置参数[0] = 子命令（create/ls/describe/assign）；其余按子命令解析
+ * @param args 位置参数[0] = 子命令（create/ls/rm/describe/assign/own）；其余按子命令解析
  */
 export async function cmdRegion(args: ParsedArgs): Promise<CmdResult> {
   const sub = args.positionals[0];
@@ -332,6 +368,8 @@ export async function cmdRegion(args: ParsedArgs): Promise<CmdResult> {
       return regionCreate(subArgs);
     case 'ls':
       return regionLs(subArgs);
+    case 'rm':
+      return regionRemove(subArgs);
     case 'describe':
       return regionDescribe(subArgs);
     case 'assign':
@@ -340,7 +378,7 @@ export async function cmdRegion(args: ParsedArgs): Promise<CmdResult> {
       return regionOwn(subArgs);
     default:
       throw new CliError(
-        `未知子命令 "region ${sub}"。可用: create, ls, describe, assign, own`,
+        `未知子命令 "region ${sub}"。可用: create, ls, rm, describe, assign, own`,
         EXIT.USAGE,
       );
   }
