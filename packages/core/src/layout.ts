@@ -232,6 +232,104 @@ export function placeNearAnchor(
   return { x: anchor.x, y: anchor.y };
 }
 
+// ── 几何排版（M5 L3 board_arrange）────────────────────────────
+// 把一批元素重排成整齐布局。与 L2「摆放仲裁」分工：L2 只保证不堆叠（找最近
+// 空位塞行），L3 才负责语义对齐 / 成组（grid / row / column）。
+// 纯几何、零依赖；调用方（CLI/MCP）拿结果原子批量改 x/y。
+
+/** board_arrange 支持的几何布局。tree / 层级图归 board_add_flow（dagre）。 */
+export type ArrangeLayout = 'grid' | 'row' | 'column';
+
+/** 参与排版的元素：id + 当前矩形（尺寸用于算间距，位置用于推断默认锚点）。 */
+export interface ArrangeItem extends Rect {
+  id: string;
+}
+
+export interface ArrangeLayoutOptions {
+  /** 元素间距，默认 LAYOUT.gap。 */
+  gap?: number;
+  /** grid 列数；省略 = 自动 ceil(sqrt(n))（接近正方形）。 */
+  cols?: number;
+  /** 整块左上角锚点；省略 = 取当前元素包围盒左上角（原地重排）。 */
+  origin?: { x: number; y: number };
+}
+
+/**
+ * 把一批元素排成 grid / row / column —— M5 L3。
+ *
+ * - **row**：左→右一行平铺，顶端对齐（同 y）。
+ * - **column**：上→下一列堆叠，左端对齐（同 x）。
+ * - **grid**：行主序填 `cols` 列；列宽取该列最宽元素、行高取该行最高元素
+ *   （列对齐 + 行对齐，变长元素也不重叠）。
+ *
+ * 入参 `items` 的顺序即排布顺序。返回每个元素的新左上角坐标（不改尺寸）；
+ * 结果内部互不重叠。**不做对「集合外」元素的二次避让**（设计 §3 L3：直接精确
+ * 落，由调用方决定整块落点）—— 需放到空白处时调用方传 `origin`。
+ */
+export function arrangeElements(
+  items: ArrangeItem[],
+  layout: ArrangeLayout,
+  opts: ArrangeLayoutOptions = {},
+): Array<{ id: string; x: number; y: number }> {
+  if (items.length === 0) return [];
+  const gap = opts.gap ?? LAYOUT.gap;
+  const origin = opts.origin ?? {
+    x: Math.min(...items.map((i) => i.x)),
+    y: Math.min(...items.map((i) => i.y)),
+  };
+
+  if (layout === 'row') {
+    let x = origin.x;
+    return items.map((it) => {
+      const placed = { id: it.id, x, y: origin.y };
+      x += it.width + gap;
+      return placed;
+    });
+  }
+
+  if (layout === 'column') {
+    let y = origin.y;
+    return items.map((it) => {
+      const placed = { id: it.id, x: origin.x, y };
+      y += it.height + gap;
+      return placed;
+    });
+  }
+
+  // grid：行主序，列宽 = 该列最宽、行高 = 该行最高。
+  const n = items.length;
+  const cols = Math.max(1, Math.floor(opts.cols ?? Math.ceil(Math.sqrt(n))));
+  const rows = Math.ceil(n / cols);
+  const at = (r: number, c: number): ArrangeItem | undefined => items[r * cols + c];
+
+  const colWidths: number[] = [];
+  for (let c = 0; c < cols; c++) {
+    let w = 0;
+    for (let r = 0; r < rows; r++) w = Math.max(w, at(r, c)?.width ?? 0);
+    colWidths[c] = w;
+  }
+  const colX: number[] = [];
+  let cx = origin.x;
+  for (let c = 0; c < cols; c++) {
+    colX[c] = cx;
+    cx += colWidths[c]! + gap;
+  }
+
+  const out: Array<{ id: string; x: number; y: number }> = [];
+  let ry = origin.y;
+  for (let r = 0; r < rows; r++) {
+    let rowHeight = 0;
+    for (let c = 0; c < cols; c++) {
+      const it = at(r, c);
+      if (!it) continue;
+      out.push({ id: it.id, x: colX[c]!, y: ry });
+      rowHeight = Math.max(rowHeight, it.height);
+    }
+    ry += rowHeight + gap;
+  }
+  return out;
+}
+
 /** 容器需要的最小高度（容纳全部子元素，规格 §9.1 步骤 3）。 */
 export function requiredHeight(container: Rect, children: Rect[]): number {
   const bottom = children.reduce(

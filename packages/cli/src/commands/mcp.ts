@@ -46,6 +46,7 @@ import { cmdSnapshot, cmdRestore } from './snapshot.js';
 import { cmdLog } from './log.js';
 import { cmdElement } from './element.js';
 import { cmdInfo } from './info.js';
+import { cmdArrangeCommand } from './arrange.js';
 
 /** 由位置参数 / 选项 / 开关构造一个 ParsedArgs（喂给 cmd* 函数）。 */
 function mkArgs(
@@ -1299,6 +1300,63 @@ export async function runMcpServer(
           label: a.label,
           arrow: a.arrow,
           routing: a.routing,
+          actor: a.agent,
+        }),
+        port,
+      )),
+  );
+
+  // ── 写：把一批元素重排成整齐布局（M5 L3）────────────────────
+  server.registerTool(
+    'board_arrange',
+    {
+      description:
+        '把一批**已有**元素重排成整齐布局（grid / row / column）。' +
+        '用于：你逐个 add 了若干元素（引擎已保证它们不堆叠、但只是散落）后，' +
+        '一次把它们排成网格 / 一行 / 一列。算完整批坐标原子写回，结果即整齐。' +
+        '目标二选一：elementIds（按给定顺序）或 region（该区域全部子元素）。' +
+        'connector / region / folder 不参与（连线跟随端点、容器移动不带子元素）。' +
+        '需要「节点+边」的流程图 / 树状层级，用 board_add_flow（dagre）而非本工具。',
+      inputSchema: {
+        ...boardSelector,
+        layout: z
+          .enum(['grid', 'row', 'column'])
+          .describe('布局：grid 网格 / row 一行平铺 / column 一列堆叠'),
+        elementIds: z
+          .array(z.string())
+          .optional()
+          .describe('要排版的元素 id 列表（按此顺序排布）；与 region 二选一'),
+        region: z
+          .string()
+          .optional()
+          .describe('排版该区域内的全部子元素（按场景顺序）；与 elementIds 二选一'),
+        gap: z.number().optional().describe('元素间距 px，默认 24'),
+        cols: z
+          .number()
+          .int()
+          .optional()
+          .describe('grid 列数；省略 = 自动 ceil(sqrt(n))（接近正方形）'),
+        at: z
+          .string()
+          .optional()
+          .describe(
+            '整块左上角锚点 "x,y"；省略 = 维持当前包围盒左上角（原地重排）。' +
+              '想把整块挪到空白处时传一个空位坐标。',
+          ),
+        agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
+      },
+    },
+    withBoard(async (boardPath, a) =>
+      runCmd(
+        'board_arrange',
+        cmdArrangeCommand,
+        mkArgs([boardPath], {
+          layout: a.layout,
+          ids: a.elementIds && a.elementIds.length > 0 ? a.elementIds.join(',') : undefined,
+          region: a.region,
+          gap: a.gap !== undefined ? String(a.gap) : undefined,
+          cols: a.cols !== undefined ? String(a.cols) : undefined,
+          at: a.at,
           actor: a.agent,
         }),
         port,

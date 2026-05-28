@@ -47,6 +47,7 @@ import { cmdServe } from './commands/serve.js';
 import { cmdLog } from './commands/log.js';
 import { cmdDelete } from './commands/delete.js';
 import { cmdElement } from './commands/element.js';
+import { cmdArrangeCommand } from './commands/arrange.js';
 
 /** 命令处理函数签名。 */
 type Handler = (args: ParsedArgs) => Promise<CmdResult>;
@@ -79,6 +80,7 @@ const HANDLERS: Record<string, Handler> = {
   log: cmdLog,
   delete: cmdDelete,
   element: cmdElement,
+  arrange: cmdArrangeCommand,
 };
 
 /** 已登记但尚未实现的命令（规格 §2，逐里程碑补全）。 */
@@ -149,6 +151,7 @@ function printHelp(): void {
   console.log('  comment <路径> <元素id> "<文本>"              给元素加一条评论');
   console.log('  style <路径> <元素id> [--stroke <色>] [--fill <色>] [--opacity <n>]   改元素样式');
   console.log('  element move <路径> <元素id> --to "x,y" [--size "w,h"]    按画布坐标摆位元素（connector 除外）');
+  console.log('  arrange <路径> (--ids "id1,id2" | --region <名>) --layout <grid|row|column> [--gap n] [--cols n] [--at "x,y"]  把一批元素排成整齐布局（M5 L3）');
   console.log('  region rm <路径> <区域名>                          删除区域（级联删内容 + 文件夹移回收站，可恢复）');
   console.log('  region describe <路径> <区域名> --desc "<描述>"     改区域描述');
   console.log('  region assign <路径> <区域名> --agent <id>          指派区域给 Agent');

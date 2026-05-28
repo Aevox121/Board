@@ -107,4 +107,8 @@ export const GLOBAL_VALUE_KEYS: ReadonlySet<string> = new Set([
   'task',
   'text',
   'role',
+  'ids',
+  'layout',
+  'gap',
+  'cols',
 ]);
