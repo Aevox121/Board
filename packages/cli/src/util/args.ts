@@ -64,12 +64,14 @@ export function parseArgs(
 /** 所有命令通用的取值选项（规格 §1.2 全局选项）。 */
 export const GLOBAL_VALUE_KEYS: ReadonlySet<string> = new Set([
   'board',
+  'board-id',
   'actor',
   'dir',
   'depth',
   'format',
   'region',
   'at',
+  'force-at',
   'to',
   'display',
   'port',

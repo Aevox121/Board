@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
+import { apiPrefix } from '../util/server-api-prefix.js';
 
 interface OpEntry {
   ts: string;
@@ -45,13 +46,14 @@ async function tailFromDisk(dir: string, n: number): Promise<OpEntry[]> {
 
 /** 优先经 HTTP 拉；server 不可达回退磁盘直读。 */
 async function fetchTail(
+  args: ParsedArgs,
   dir: string,
   n: number,
   host: string,
   port: string,
 ): Promise<{ entries: OpEntry[]; source: 'server' | 'disk' }> {
   try {
-    const r = await fetch(`http://${host}:${port}/api/oplog?tail=${n}`);
+    const r = await fetch(`http://${host}:${port}${apiPrefix(args)}/oplog?tail=${n}`);
     if (r.ok) {
       const j = (await r.json()) as {
         ok: boolean;
@@ -93,7 +95,7 @@ export async function cmdLog(args: ParsedArgs): Promise<CmdResult> {
   const host = args.options.get('host') ?? '127.0.0.1';
   const port = args.options.get('port') ?? '4500';
 
-  const { entries, source } = await fetchTail(dir, n, host, port);
+  const { entries, source } = await fetchTail(args, dir, n, host, port);
 
   if (entries.length === 0) {
     return {

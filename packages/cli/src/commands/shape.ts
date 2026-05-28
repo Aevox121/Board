@@ -19,7 +19,7 @@ import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
 import { openBoard } from '../util/board-io.js';
 import { resolveActor, buildAgentActivity } from '../util/actor.js';
-import { autoPlace } from '../util/layout.js';
+import { autoPlace, autoPlaceNear } from '../util/layout.js';
 
 /** 流程图方框默认尺寸。 */
 const DEFAULT_SHAPE_SIZE = { width: 160, height: 72 };
@@ -77,36 +77,41 @@ async function shapeAdd(args: ParsedArgs): Promise<CmdResult> {
   const width = size ? size[0] : DEFAULT_SHAPE_SIZE.width;
   const height = size ? size[1] : DEFAULT_SHAPE_SIZE.height;
 
-  // 定位：--region 放进区域内（设 parentId）；否则 --at 显式坐标；否则自动错开。
+  // 摆放（M5 L2 仲裁）：--force-at 硬坐标 / --at 锚点避让 / 缺省自动落位。
+  // --region 时容器为该区域，否则为收件区（顶层）。
+  const forceAt = parsePair(args.options.get('force-at'));
   const at = parsePair(args.options.get('at'));
   const regionName = args.options.get('region')?.trim();
   let parentId: string | null = null;
   let x: number;
   let y: number;
+  let nudged = false;
+  let region: ReturnType<typeof regionsOf>[number] | undefined;
   if (regionName) {
-    const region = regionsOf(scene.elements).find(
+    region = regionsOf(scene.elements).find(
       (r) => r.label === regionName || r.path === regionName,
     );
     if (!region) {
       throw new CliError(`未找到区域：${regionName}`, EXIT.NOT_FOUND);
     }
     parentId = region.id;
-    if (at) {
-      [x, y] = at;
-    } else {
-      // 无 --at：区域内碰撞规避落位（不与同区域元素重叠）。
-      const pos = autoPlace(scene.elements, region.id, region, {
-        width,
-        height,
-      });
-      x = pos.x;
-      y = pos.y;
-    }
+  }
+  if (forceAt) {
+    [x, y] = forceAt;
   } else if (at) {
-    [x, y] = at;
+    const pos = autoPlaceNear(
+      scene.elements,
+      parentId,
+      { x: at[0], y: at[1] },
+      { width, height },
+      region ? region.width : undefined,
+    );
+    x = pos.x;
+    y = pos.y;
+    nudged = pos.nudged;
   } else {
-    // 无 --at：收件区内碰撞规避落位。
-    const pos = autoPlace(scene.elements, null, INBOX_RECT, { width, height });
+    const container = region ?? INBOX_RECT;
+    const pos = autoPlace(scene.elements, parentId, container, { width, height });
     x = pos.x;
     y = pos.y;
   }
@@ -120,7 +125,7 @@ async function shapeAdd(args: ParsedArgs): Promise<CmdResult> {
     createdBy: actor,
     z,
     parentId,
-    autoPlaced: at === null,
+    autoPlaced: forceAt === null && at === null,
     shape: kind as ShapeKind,
     label,
   });
@@ -130,7 +135,7 @@ async function shapeAdd(args: ParsedArgs): Promise<CmdResult> {
 
   return {
     code: EXIT.OK,
-    text: `已添加 ${kind} 图形 ${element.id}${label ? `「${label}」` : ''}  (at ${x},${y})`,
+    text: `已添加 ${kind} 图形 ${element.id}${label ? `「${label}」` : ''}  (at ${x},${y})${nudged ? ' [已避让]' : ''}`,
     data: {
       elementId: element.id,
       shape: kind,
@@ -139,6 +144,8 @@ async function shapeAdd(args: ParsedArgs): Promise<CmdResult> {
       width,
       height,
       label: label ?? null,
+      placedAt: { x, y },
+      nudged,
     },
   };
 }

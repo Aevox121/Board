@@ -14,6 +14,7 @@
  */
 import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
+import { apiPrefix } from '../util/server-api-prefix.js';
 
 const DEFAULT_PORT = '4500';
 
@@ -79,7 +80,7 @@ export async function cmdSnapshot(args: ParsedArgs): Promise<CmdResult> {
     const actor = args.options.get('actor') ?? 'u_local';
     const data = (await callServer(
       'POST',
-      `${serverBase(args)}/api/snapshots`,
+      `${serverBase(args)}${apiPrefix(args)}/snapshots`,
       { name, actor },
     )) as { snapshot: SnapEntry };
     return {
@@ -90,7 +91,7 @@ export async function cmdSnapshot(args: ParsedArgs): Promise<CmdResult> {
     };
   }
   if (sub === 'ls') {
-    const data = (await callServer('GET', `${serverBase(args)}/api/snapshots`)) as {
+    const data = (await callServer('GET', `${serverBase(args)}${apiPrefix(args)}/snapshots`)) as {
       snapshots: SnapEntry[];
     };
     if (data.snapshots.length === 0) {
@@ -111,7 +112,7 @@ export async function cmdSnapshot(args: ParsedArgs): Promise<CmdResult> {
     if (!id) {
       throw new CliError('用法: board snapshot rm <snapshotId>', EXIT.USAGE);
     }
-    await callServer('DELETE', `${serverBase(args)}/api/snapshots/${encodeURIComponent(id)}`);
+    await callServer('DELETE', `${serverBase(args)}${apiPrefix(args)}/snapshots/${encodeURIComponent(id)}`);
     return { code: EXIT.OK, text: `已删除快照 ${id}`, data: { id } };
   }
   throw new CliError(
@@ -129,7 +130,7 @@ export async function cmdRestore(args: ParsedArgs): Promise<CmdResult> {
   const actor = args.options.get('actor') ?? 'u_local';
   const data = (await callServer(
     'POST',
-    `${serverBase(args)}/api/snapshots/${encodeURIComponent(id)}/restore`,
+    `${serverBase(args)}${apiPrefix(args)}/snapshots/${encodeURIComponent(id)}/restore`,
     { actor },
   )) as { restored: string; preRestoreSnapshotId: string };
   return {

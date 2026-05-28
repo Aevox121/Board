@@ -156,8 +156,8 @@ function printHelp(): void {
   console.log('  suggest reject <路径> <suggestionId>                              拒绝建议');
   console.log('  suggest describe <路径> <suggestionId> --text "<反馈>" [--role human|agent]  向建议追加反馈');
   console.log('  add text <路径> "<markdown>" --draft          添加 draft 态文本卡');
-  console.log('  mcp <路径> --actor a_<id> [--agent-name "<名>"] [--agent-color "#hex"] [--port <n>]');
-  console.log('                                                启动 MCP Server (stdio)，启动时绑定 Agent 身份');
+  console.log('  mcp [boards-root] --actor a_<id> [--board <初始白板路径>] [--agent-name "<名>"] [--agent-color "#hex"] [--port <n>]');
+  console.log('                                                启动 MCP Server (stdio)。多白板模式:可经 board_open_board 工具运行时切换');
   console.log('');
   console.log('已实现命令 (M3，需 board-server 在运行):');
   console.log('  task start --title "<做什么>" [--region <名>] [--agent <id>]   新建 Agent 任务');
@@ -205,14 +205,28 @@ async function main(argv: string[]): Promise<number> {
 
   // mcp —— 长驻 stdio MCP Server，不走「命令返回 CmdResult」的常规分发。
   // 启动时绑定 Agent 身份：所有 MCP 工具操作自动套用，无需每次工具调用都带。
+  //
+  // 多白板模式(2026-05 起):位置参数 = boards-root(白板根目录,可选,缺省 cwd),
+  // MCP 内部维护「当前白板」状态,可经 board_open_board 工具运行时切换;
+  // 单个工具入参也可显式传 boardId/boardPath 覆盖。
   if (cmd === 'mcp') {
-    const boardPath = args.positionals[0];
-    if (boardPath === undefined) {
-      emitError(
-        '用法: board mcp <白板路径> --actor a_<id> [--agent-name "<名>"] [--agent-color "#hex"] [--port <n>]',
-        json,
-      );
-      return EXIT.USAGE;
+    // 位置参数 = boards-root(可选)。向后兼容:如果位置参数是个 .board 目录,
+    // 自动拆成 boardsRoot=父目录,initialBoard=该 .board(等价老的「单白板」模式)。
+    let boardsRoot = args.positionals[0];
+    let initialBoard = args.options.get('board');
+    if (boardsRoot !== undefined) {
+      const { existsSync, statSync } = await import('node:fs');
+      const { dirname, join, resolve, isAbsolute } = await import('node:path');
+      const abs = isAbsolute(boardsRoot) ? boardsRoot : resolve(process.cwd(), boardsRoot);
+      const looksLikeBoardDir = (() => {
+        try {
+          return statSync(abs).isDirectory() && existsSync(join(abs, 'board.json'));
+        } catch { return false; }
+      })();
+      if (looksLikeBoardDir) {
+        if (initialBoard === undefined) initialBoard = abs;
+        boardsRoot = dirname(abs);
+      }
     }
     const port =
       args.options.get('port') ?? process.env['BOARD_PORT'] ?? '4500';
@@ -222,14 +236,14 @@ async function main(argv: string[]): Promise<number> {
       (process.env['BOARD_AGENT_ID']?.trim() || undefined);
     if (actor === undefined) {
       emitError(
-        'board mcp 必须显式绑定 Agent 身份（spec §1.5）：请加 --actor a_<id>，或设 BOARD_AGENT_ID env',
+        'board mcp 必须显式绑定 Agent 身份(spec §1.5):请加 --actor a_<id>,或设 BOARD_AGENT_ID env',
         json,
       );
       return EXIT.USAGE;
     }
     if (!actor.startsWith('a_')) {
       emitError(
-        `actor "${actor}" 必须以 a_ 开头（server 端硬约束）`,
+        `actor "${actor}" 必须以 a_ 开头(server 端硬约束)`,
         json,
       );
       return EXIT.USAGE;
@@ -243,7 +257,9 @@ async function main(argv: string[]): Promise<number> {
     // 把 MCP 自己绑定的 board-server URL 落到 env,让 cmd*(走 openBoard 探 server)
     // 探得到正确端口。否则默认 :4500,如果 dev 时常驻一个老 server 在 4500 会撞到。
     process.env['BOARD_SERVER_URL'] = `http://127.0.0.1:${port}`;
-    await runMcpServer(boardPath, {
+    await runMcpServer({
+      boardsRoot,
+      initialBoard,
       port,
       agentIdentity: { actor, name: agentName, color: agentColor },
     });

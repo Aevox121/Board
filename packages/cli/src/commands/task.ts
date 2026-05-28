@@ -11,6 +11,7 @@
  */
 import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
+import { apiPrefix } from '../util/server-api-prefix.js';
 
 /** server 默认端口（与 board-server BOARD_PORT 默认一致）。 */
 const DEFAULT_PORT = '4500';
@@ -91,7 +92,7 @@ async function taskStart(args: ParsedArgs): Promise<CmdResult> {
   const at = parseAt(args.options.get('at'));
   if (at) body['at'] = at;
 
-  const data = (await postJson(`${serverBase(args)}/api/tasks`, body)) as {
+  const data = (await postJson(`${serverBase(args)}${apiPrefix(args)}/tasks`, body)) as {
     taskId: string;
   };
   return {
@@ -121,7 +122,7 @@ async function taskProgress(args: ParsedArgs): Promise<CmdResult> {
     }
     body['percent'] = p;
   }
-  await postJson(`${serverBase(args)}/api/tasks/progress`, body);
+  await postJson(`${serverBase(args)}${apiPrefix(args)}/tasks/progress`, body);
   return { code: EXIT.OK, text: `任务 ${taskId} 进度已更新`, data: { taskId } };
 }
 
@@ -137,7 +138,7 @@ async function taskFinish(args: ParsedArgs): Promise<CmdResult> {
   const body: Record<string, unknown> = { taskId };
   const summary = args.options.get('summary');
   if (summary) body['summary'] = summary;
-  await postJson(`${serverBase(args)}/api/tasks/finish`, body);
+  await postJson(`${serverBase(args)}${apiPrefix(args)}/tasks/finish`, body);
   return { code: EXIT.OK, text: `任务 ${taskId} 已完成`, data: { taskId } };
 }
 

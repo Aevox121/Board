@@ -21,7 +21,7 @@ import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
 import { openBoard, type BoardSession } from '../util/board-io.js';
 import { resolveActor, buildAgentActivity } from '../util/actor.js';
-import { autoPlace } from '../util/layout.js';
+import { autoPlace, autoPlaceNear } from '../util/layout.js';
 
 /** 解析 `--at "x,y"` → `[x,y]`；缺省 / 非法返回 null。 */
 function parseAtOption(raw: string | undefined): [number, number] | null {
@@ -72,13 +72,27 @@ async function addText(args: ParsedArgs): Promise<CmdResult> {
   const z = nextZ(scene.elements);
   const actor = resolveActor(args);
 
-  // --at "x,y" 显式定位；否则在收件区碰撞规避落位（不与现有元素重叠）。
+  // 摆放（M5 L2 仲裁）：
+  //  --force-at "x,y" → 硬坐标，跳过避让（Agent 自负不重叠）；
+  //  --at "x,y"       → 锚点偏好，被占则网格行优先外扩到最近空位（不堆叠）；
+  //  都不给           → 收件区自动落位。
+  const forceAt = parseAtOption(args.options.get('force-at'));
   const at = parseAtOption(args.options.get('at'));
-  const pos = at
-    ? { x: at[0], y: at[1] }
-    : autoPlace(scene.elements, null, INBOX_RECT, size);
-  const x = pos.x;
-  const y = pos.y;
+  let x: number;
+  let y: number;
+  let nudged = false;
+  if (forceAt) {
+    [x, y] = forceAt;
+  } else if (at) {
+    const pos = autoPlaceNear(scene.elements, null, { x: at[0], y: at[1] }, size);
+    x = pos.x;
+    y = pos.y;
+    nudged = pos.nudged;
+  } else {
+    const pos = autoPlace(scene.elements, null, INBOX_RECT, size);
+    x = pos.x;
+    y = pos.y;
+  }
 
   const element = createTextElement({
     x,
@@ -87,7 +101,8 @@ async function addText(args: ParsedArgs): Promise<CmdResult> {
     height: size.height,
     createdBy: actor,
     z,
-    autoPlaced: at === null,
+    // forceAt / at 都是用户位置意图 → 不参与后续自动重排；仅纯自动落位标 autoPlaced。
+    autoPlaced: forceAt === null && at === null,
     markdown,
   });
   // --draft：标记为 draft 态 —— Pencil 式过程可视化中 Agent 进行中的产出
@@ -102,13 +117,15 @@ async function addText(args: ParsedArgs): Promise<CmdResult> {
 
   return {
     code: EXIT.OK,
-    text: `已添加文本元素 ${element.id}  (z: ${element.z}, at: ${element.x},${element.y})`,
+    text: `已添加文本元素 ${element.id}  (z: ${element.z}, at: ${element.x},${element.y})${nudged ? ' [已避让]' : ''}`,
     data: {
       elementId: element.id,
       type: element.type,
       x: element.x,
       y: element.y,
       z: element.z,
+      placedAt: { x: element.x, y: element.y },
+      nudged,
     },
   };
 }

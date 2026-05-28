@@ -40,8 +40,11 @@ import {
   describeSuggestion,
   growRegions,
   guessMime,
+  INBOX_RECT,
+  nextSlot,
   nextZ,
   normalizePath,
+  placeNearAnchor,
   regionForFile,
   regionsOf,
   rejectSuggestion,
@@ -545,8 +548,13 @@ async function handleCreateRegion(
   }
   const num = (v: unknown, d: number): number =>
     typeof v === 'number' && Number.isFinite(v) ? v : d;
-  const x = num(b['x'], 0);
-  const y = num(b['y'], 0);
+  const hasXY =
+    typeof b['x'] === 'number' &&
+    Number.isFinite(b['x']) &&
+    typeof b['y'] === 'number' &&
+    Number.isFinite(b['y']);
+  let x = num(b['x'], 0);
+  let y = num(b['y'], 0);
   const width = Math.max(120, num(b['width'], 360));
   const height = Math.max(80, num(b['height'], 240));
   const description =
@@ -557,6 +565,16 @@ async function handleCreateRegion(
   if (regionsOf(handle.scene.elements).some((r) => r.path === name)) {
     fail(res, 409, `区域已存在: ${name}`);
     return;
+  }
+  // M5 L2:Web 拖拽给定 x/y → 用其精确框（含吸入选区语义）；CLI/MCP 不给坐标
+  // → 自动落位到顶层空地，避免多个区域全堆在 (0,0)。
+  if (!hasXY) {
+    const occupied = handle.scene.elements
+      .filter((e) => (e.parentId ?? null) === null)
+      .map((e) => ({ x: e.x, y: e.y, width: e.width, height: e.height }));
+    const placed = nextSlot(INBOX_RECT, occupied, { width, height });
+    x = placed.x;
+    y = placed.y;
   }
   const regionDir = resolve(deps.dir, 'files', name);
   let dirExists = true;
@@ -1527,6 +1545,8 @@ async function handleTextCreate(
   const actor = typeof rec['actor'] === 'string' ? rec['actor'] : 'u_local';
   const num = (v: unknown, d: number): number =>
     typeof v === 'number' && Number.isFinite(v) ? v : d;
+  const hasX = typeof rec['x'] === 'number' && Number.isFinite(rec['x']);
+  const hasY = typeof rec['y'] === 'number' && Number.isFinite(rec['y']);
   let x = num(rec['x'], 0);
   let y = num(rec['y'], 0);
   const width = Math.max(80, num(rec['width'], 480));
@@ -1534,18 +1554,42 @@ async function handleTextCreate(
   const markdown = typeof rec['markdown'] === 'string' ? rec['markdown'] : '';
   const regionName = typeof rec['region'] === 'string' ? rec['region'] : '';
 
+  const curScene = readSnapshot(deps).scene;
   let parentId: string | null = null;
+  let regionRect: { x: number; y: number; width: number; height: number } | null =
+    null;
   if (regionName) {
-    const cur = readSnapshot(deps).scene;
-    const r = regionsOf(cur.elements).find((e) => e.label === regionName);
+    const r = regionsOf(curScene.elements).find((e) => e.label === regionName);
     if (!r) {
       fail(res, 404, `未找到区域：${regionName}`);
       return;
     }
     parentId = r.id;
+    regionRect = { x: r.x, y: r.y, width: r.width, height: r.height };
     // x/y 视为区域内相对偏移
-    x = r.x + (rec['x'] === undefined ? 20 : x);
-    y = r.y + (rec['y'] === undefined ? 60 : y);
+    x = r.x + (hasX ? x : 20);
+    y = r.y + (hasY ? y : 60);
+  }
+
+  // M5 L2 摆放仲裁:坐标给定(含区域内偏移)→ 锚点避让;完全未给 → 容器自动落位。
+  {
+    const occupied = curScene.elements
+      .filter((e) => (e.parentId ?? null) === parentId)
+      .map((e) => ({ x: e.x, y: e.y, width: e.width, height: e.height }));
+    if (hasX || hasY || parentId !== null) {
+      const placed = placeNearAnchor(
+        occupied,
+        { width, height },
+        { x, y },
+        regionRect ? { maxRowWidth: regionRect.width } : undefined,
+      );
+      x = placed.x;
+      y = placed.y;
+    } else {
+      const placed = nextSlot(INBOX_RECT, occupied, { width, height });
+      x = placed.x;
+      y = placed.y;
+    }
   }
 
   const el = createTextElement({

@@ -423,6 +423,45 @@ async function main() {
     }
   }
 
+  // 14. 多白板管理:list_boards / create_board / open_board 闭环
+  section('多白板管理 — list/create/open');
+  {
+    const rList = await call('board_list_boards', {});
+    const sList = rList.structuredContent;
+    if (sList?.current === 'smoke' && Array.isArray(sList?.boards) && sList.boards.length >= 1) {
+      ok('list_boards 初始', `current=${sList.current} boards=${sList.boards.length}`);
+    } else {
+      bad('list_boards 初始', JSON.stringify(sList));
+    }
+
+    const rCreate = await call('board_create_board', { name: 'second', openAfterCreate: false });
+    const sCreate = rCreate.structuredContent;
+    if (sCreate?.id === 'second' && sCreate?.dir) {
+      ok('create_board', `id=${sCreate.id}`);
+    } else bad('create_board', JSON.stringify(sCreate));
+
+    // 切到 second
+    const rOpen = await call('board_open_board', { boardId: 'second' });
+    if (rOpen.structuredContent?.boardId === 'second') {
+      ok('open_board → second');
+    } else bad('open_board', JSON.stringify(rOpen.structuredContent));
+
+    // 此时 info 应返回 second 的 meta
+    const rInfo = await call('board_info', {});
+    if (rInfo.structuredContent?.name === 'second') {
+      ok('当前白板已切到 second');
+    } else bad('切换后 info', JSON.stringify(rInfo.structuredContent));
+
+    // 显式 boardId 覆盖:不切回,直接读 smoke 的 info
+    const rExplicit = await call('board_info', { boardId: 'smoke' });
+    if (rExplicit.structuredContent?.name === 'smoke') {
+      ok('显式 boardId 覆盖当前白板', 'smoke');
+    } else bad('显式 boardId', JSON.stringify(rExplicit.structuredContent));
+
+    // 切回 smoke 以免后续 cleanup 路径混乱
+    await call('board_open_board', { boardId: 'smoke' });
+  }
+
   // ── 收尾 ────────────────────────────────────────────────────────
   await client.close();
   await cleanup();

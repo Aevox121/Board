@@ -17,6 +17,7 @@
  */
 import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
+import { apiPrefix } from '../util/server-api-prefix.js';
 
 const DEFAULT_ACTOR = 'a_agent';
 
@@ -38,7 +39,7 @@ async function postJson<T>(
   const p = port(args);
   let res: Response;
   try {
-    res = await fetch(`http://127.0.0.1:${p}${path}`, {
+    res = await fetch(`http://127.0.0.1:${p}${apiPrefix(args)}${path}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -99,7 +100,7 @@ async function textCreate(args: ParsedArgs): Promise<CmdResult> {
 
   const data = await postJson<{ elementId: string }>(
     args,
-    '/api/elements/text-create',
+    '/elements/text-create',
     body,
   );
   return {
@@ -136,7 +137,7 @@ async function textAppend(args: ParsedArgs): Promise<CmdResult> {
 
   const data = await postJson<{ ok: boolean; length: number; lineIndex: number }>(
     args,
-    '/api/elements/text-append',
+    '/elements/text-append',
     body,
   );
   return {
@@ -168,7 +169,7 @@ async function textSet(args: ParsedArgs): Promise<CmdResult> {
 
   const data = await postJson<{ ok: boolean; length: number }>(
     args,
-    '/api/elements/text-set',
+    '/elements/text-set',
     { actor, elementId, markdown },
   );
   return {

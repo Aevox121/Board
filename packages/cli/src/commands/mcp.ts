@@ -14,14 +14,15 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { readFile, writeFile, stat, mkdtemp, rm } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { join, resolve, sep } from 'node:path';
+import { existsSync, readdirSync, statSync, type Dirent } from 'node:fs';
+import { basename, isAbsolute, join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { guessMime } from '@board/core';
 import { readBoard } from '../util/board-io.js';
 import type { ParsedArgs } from '../util/args.js';
-import { CliError, type CmdResult } from '../util/io.js';
+import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
+import { cmdNew } from './new.js';
 import { cmdShow } from './show.js';
 import { cmdTree } from './tree.js';
 import { cmdAdd } from './add.js';
@@ -76,12 +77,20 @@ function structuredResult(text: string, data: unknown): CallToolResult {
   };
 }
 
-/** 尽力通知 server 刷新（写操作后让 Web 实时更新）；server 未运行则忽略。 */
-async function pingRefresh(port: string): Promise<void> {
+/**
+ * 尽力通知 server 刷新(写操作后让 Web 实时更新);server 未运行则忽略。
+ * 多白板模式:传 boardId 时走 `/api/boards/<id>/refresh`,server 会精确广播给
+ * 该 board 的订阅者;不传走 `/api/refresh`(server 回退到默认 board)。
+ */
+async function pingRefresh(port: string, boardId?: string): Promise<void> {
+  const prefix =
+    boardId !== undefined && boardId !== ''
+      ? `/api/boards/${encodeURIComponent(boardId)}`
+      : '/api';
   try {
-    await fetch(`http://127.0.0.1:${port}/api/refresh`, { method: 'POST' });
+    await fetch(`http://127.0.0.1:${port}${prefix}/refresh`, { method: 'POST' });
   } catch {
-    // server 未运行 —— 操作本身已落盘，忽略刷新失败。
+    // server 未运行 —— 操作本身已落盘,忽略刷新失败。
   }
 }
 
@@ -96,14 +105,25 @@ async function runCmdBare(
   fn: (a: ParsedArgs) => Promise<CmdResult>,
   args: ParsedArgs,
   refreshPort?: string,
+  injectBoardIdFrom?: string,
 ): Promise<CallToolResult> {
+  // server-direct 命令(cmdTask/cmdText/cmdSnapshot/cmdLog)位置参数不是 boardPath,
+  // 它们读 'board-id' 选项决定 server 路由前缀。MCP 工具调用时给 injectBoardIdFrom
+  // 传当前 boardPath,这里派生 boardId 注入 args.options。
+  if (injectBoardIdFrom && !args.options.has('board-id')) {
+    const id = injectBoardIdFrom.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? '';
+    args.options.set('board-id', id.replace(/\.board$/i, ''));
+  }
   try {
     const r = await fn(args);
     const baseText = r.text ?? '';
     if (r.code !== 0) {
       return textResult(`${label}失败：${baseText}`, true);
     }
-    if (refreshPort) await pingRefresh(refreshPort);
+    if (refreshPort) {
+      // 从 args 取 board-id(若工具 mkArgs 时塞了),让 refresh 走多白板路由。
+      await pingRefresh(refreshPort, args.options.get('board-id'));
+    }
     const text =
       r.data !== undefined
         ? `${baseText}\n${JSON.stringify(r.data, null, 2)}`.trim()
@@ -203,14 +223,19 @@ async function subscribeEvents(
   port: string,
   since: number | undefined,
   region: string | undefined,
+  boardId?: string,
 ): Promise<CallToolResult> {
   const qs = new URLSearchParams();
   if (since !== undefined) qs.set('since', String(since));
   if (region) qs.set('region', region);
+  const prefix =
+    boardId !== undefined && boardId !== ''
+      ? `/api/boards/${encodeURIComponent(boardId)}`
+      : '/api';
   let env: { ok?: boolean; data?: unknown; error?: string | null };
   try {
     const r = await fetch(
-      `http://127.0.0.1:${port}/api/events/log?${qs.toString()}`,
+      `http://127.0.0.1:${port}${prefix}/events/log?${qs.toString()}`,
     );
     env = (await r.json()) as typeof env;
   } catch {
@@ -352,18 +377,73 @@ const SubscribeEventsOutput = {
   cursor: z.number(),
 };
 
+/** 判断目录是否为有效 .board(含 board.json)。 */
+function isBoardDir(p: string): boolean {
+  try {
+    return statSync(p).isDirectory() && existsSync(join(p, 'board.json'));
+  } catch {
+    return false;
+  }
+}
+
+/** 从一个 root 目录扫一层 + 直接子层,找所有 .board 目录。 */
+function scanBoardsRoot(root: string): string[] {
+  const found = new Set<string>();
+  let entries: Dirent[] = [];
+  try {
+    entries = readdirSync(root, { withFileTypes: true }) as Dirent[];
+  } catch {
+    return [];
+  }
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    if (e.name === '_trash' || e.name === 'node_modules') continue;
+    const full = join(root, e.name);
+    if (isBoardDir(full)) {
+      found.add(full);
+      continue;
+    }
+    // 下钻一层
+    let subEntries: Dirent[] = [];
+    try {
+      subEntries = readdirSync(full, { withFileTypes: true }) as Dirent[];
+    } catch {
+      continue;
+    }
+    for (const se of subEntries) {
+      if (!se.isDirectory()) continue;
+      const subFull = join(full, se.name);
+      if (isBoardDir(subFull)) found.add(subFull);
+    }
+  }
+  return [...found].sort();
+}
+
+/** boardPath → boardId(取 basename 去掉 .board 后缀)。 */
+function deriveBoardId(boardPath: string): string {
+  return basename(boardPath).replace(/\.board$/i, '');
+}
+
 /**
- * 启动 MCP Server（stdio）。Promise 在 Agent 断开 stdio 连接前不会 resolve。
+ * 启动 MCP Server(stdio)。Promise 在 Agent 断开 stdio 连接前不会 resolve。
  *
- * @param boardPath 白板目录（.board）路径
- * @param opts.port            board-server 端口（report_progress 与刷新用），默认 4500
- * @param opts.agentIdentity   启动时绑定的 Agent 身份；所有 MCP 工具默认以此
- *   归属操作，工具入参里仍可显式 `actor` 覆盖。`actor` 必填且以 `a_` 开头，
+ * 多白板模式(2026-05):MCP 进程内维护「当前白板」状态,工具按以下优先级解析白板:
+ *  1. 工具入参 `boardPath`(显式绝对路径或相对 boardsRoot)
+ *  2. 工具入参 `boardId`(扫 boardsRoot 找匹配的 .board)
+ *  3. 闭包状态 `currentBoardPath`(`board_open_board` 设置)
+ *  4. 都没有 → 报错让 Agent 先 open_board
+ *
+ * @param opts.boardsRoot      boards 根目录(可选,缺省 cwd),用于扫描 / 新建 / boardId 解析
+ * @param opts.initialBoard    启动期预选的当前白板(可选),给一个直接能用的 currentBoardPath
+ * @param opts.port            board-server 端口(report_progress 与刷新用),默认 4500
+ * @param opts.agentIdentity   启动时绑定的 Agent 身份;所有 MCP 工具默认以此
+ *   归属操作,工具入参里仍可显式 `actor` 覆盖。`actor` 必填且以 `a_` 开头,
  *   `name` / `color` 可选。
  */
 export async function runMcpServer(
-  boardPath: string,
   opts: {
+    boardsRoot?: string;
+    initialBoard?: string;
     port?: string;
     agentIdentity?: {
       actor?: string;
@@ -373,18 +453,100 @@ export async function runMcpServer(
   } = {},
 ): Promise<void> {
   const port = opts.port ?? '4500';
+  const boardsRoot = opts.boardsRoot
+    ? isAbsolute(opts.boardsRoot)
+      ? opts.boardsRoot
+      : resolve(process.cwd(), opts.boardsRoot)
+    : process.cwd();
   const boundActor = opts.agentIdentity?.actor;
   const boundName = opts.agentIdentity?.name;
   const boundColor = opts.agentIdentity?.color;
 
+  /** 当前白板路径(运行时可经 board_open_board 切换)。 */
+  let currentBoardPath: string | undefined = undefined;
+  if (opts.initialBoard !== undefined) {
+    const abs = isAbsolute(opts.initialBoard)
+      ? opts.initialBoard
+      : resolve(boardsRoot, opts.initialBoard);
+    if (isBoardDir(abs)) currentBoardPath = abs;
+    else
+      console.error(
+        `[board mcp] 初始白板 ${opts.initialBoard} 不是有效 .board,忽略`,
+      );
+  }
+
   /**
-   * 把启动时绑定的 Agent 身份注入到本次 ParsedArgs：
-   *   - `actor` 已显式传(工具入参 override) → 不动；
+   * 解析工具调用对应的白板路径。
+   * 优先级:显式 boardPath > 显式 boardId > 当前白板。
+   * @throws CliError 找不到白板时。调用方应 catch 转 textResult。
+   */
+  function resolveBoard(a?: {
+    boardId?: string;
+    boardPath?: string;
+  }): string {
+    if (a?.boardPath !== undefined && a.boardPath !== '') {
+      const abs = isAbsolute(a.boardPath)
+        ? a.boardPath
+        : resolve(boardsRoot, a.boardPath);
+      if (!isBoardDir(abs)) {
+        throw new CliError(
+          `boardPath 不是有效 .board(缺 board.json): ${a.boardPath}`,
+          EXIT.NOT_FOUND,
+        );
+      }
+      return abs;
+    }
+    if (a?.boardId !== undefined && a.boardId !== '') {
+      const candidates = [
+        join(boardsRoot, `${a.boardId}.board`),
+        join(boardsRoot, a.boardId),
+      ];
+      for (const c of candidates) {
+        if (isBoardDir(c)) return c;
+      }
+      // 兜底:扫一层子目录找 <id>.board
+      for (const found of scanBoardsRoot(boardsRoot)) {
+        if (deriveBoardId(found) === a.boardId) return found;
+      }
+      throw new CliError(
+        `boardId "${a.boardId}" 在 boards-root(${boardsRoot}) 下找不到`,
+        EXIT.NOT_FOUND,
+      );
+    }
+    if (currentBoardPath !== undefined) return currentBoardPath;
+    throw new CliError(
+      '当前未选择白板:先调用 board_open_board 选,或工具入参里显式传 boardId/boardPath',
+      EXIT.USAGE,
+    );
+  }
+
+  /**
+   * handler 包装器:resolveBoard 抛错时转为 MCP 错误结果,正常时把
+   * boardPath 作为第一个参数喂给真正的 handler。
+   */
+  function withBoard<T extends { boardId?: string; boardPath?: string }>(
+    fn: (boardPath: string, a: T) => Promise<CallToolResult>,
+  ): (a: T) => Promise<CallToolResult> {
+    return async (a) => {
+      let bp: string;
+      try {
+        bp = resolveBoard(a);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return textResult(msg, true);
+      }
+      return fn(bp, a);
+    };
+  }
+
+  /**
+   * 把启动时绑定的 Agent 身份注入到本次 ParsedArgs:
+   *   - `actor` 已显式传(工具入参 override) → 不动;
    *   - 未传 → 设为 boundActor。
-   *   - `agent-name` / `agent-color` 同理：未显式传则填 bound 值。
+   *   - `agent-name` / `agent-color` 同理:未显式传则填 bound 值。
    *
-   * 注：`agent` 键在某些命令里是 payload（如 region assign 的被指派人），
-   * 故只设 `actor`，不动 `agent`。resolveActor 优先取 actor 故无歧义。
+   * 注:`agent` 键在某些命令里是 payload(如 region assign 的被指派人),
+   * 故只设 `actor`,不动 `agent`。resolveActor 优先取 actor 故无歧义。
    */
   function bindAgent(args: ParsedArgs): ParsedArgs {
     if (boundActor !== undefined && !args.options.has('actor')) {
@@ -399,16 +561,226 @@ export async function runMcpServer(
     return args;
   }
 
-  /** 本地 runCmd —— 注入身份后委托给模块级 runCmdBare。 */
+  /**
+   * 本地 runCmd —— 注入身份后委托给模块级 runCmdBare。
+   * `injectBoardIdFrom`(boardPath):传给走 server-direct 路径的 cmd*,让其
+   * 多白板模式下正确路由(否则 server 回退默认 board → 撞错白板)。
+   */
   const runCmd = (
     label: string,
     fn: (a: ParsedArgs) => Promise<CmdResult>,
     args: ParsedArgs,
     refreshPort?: string,
+    injectBoardIdFrom?: string,
   ): Promise<CallToolResult> =>
-    runCmdBare(label, fn, bindAgent(args), refreshPort);
+    runCmdBare(label, fn, bindAgent(args), refreshPort, injectBoardIdFrom);
 
-  const server = new McpServer({ name: 'board', version: '0.1.0' });
+  /** 工具入参常用的「白板选择」字段(所有现存工具的 inputSchema 都加这俩)。 */
+  const boardSelector = {
+    boardId: z
+      .string()
+      .optional()
+      .describe(
+        '显式指定白板 id(= .board 目录名去掉 .board 后缀);省略 = 用当前白板' +
+          '(board_open_board 切换的那个)。与 boardPath 二选一。',
+      ),
+    boardPath: z
+      .string()
+      .optional()
+      .describe(
+        '显式指定白板路径(绝对路径,或相对 boards-root);与 boardId 二选一。',
+      ),
+  };
+
+  const server = new McpServer({ name: 'board', version: '0.2.0' });
+
+  // ══ 白板管理工具(多白板模式新增) ══════════════════════════════
+  //
+  // 启动期 MCP 不绑死一个白板;Agent 经下面三个工具列出 / 切换 / 新建白板,
+  // 其余 25 个工具默认对「当前白板」生效。
+
+  // ── 管理:列出 boards-root 下所有白板 ─────────────────────────
+  server.registerTool(
+    'board_list_boards',
+    {
+      description:
+        '列出 boards-root 下所有 .board 白板(扫一层 + 下钻一层),含当前白板' +
+        '标记。board-server 在跑时优先取 server 托管列表(权威),否则扫盘。',
+      inputSchema: {},
+    },
+    async () => {
+      // 优先走 server(权威 — 含运行时新建的 board)
+      // server 端 GET /api/boards 返回 `{boards: BoardSummary[]}`,不是 envelope。
+      const serverBoards: Array<{
+        id: string;
+        name: string;
+        dir: string;
+        isDefault: boolean;
+      }> = [];
+      try {
+        const r = await fetch(`http://127.0.0.1:${port}/api/boards`);
+        if (r.ok) {
+          const body = (await r.json()) as { boards?: typeof serverBoards };
+          if (body.boards) serverBoards.push(...body.boards);
+        }
+      } catch {
+        /* server 未起,回退到扫盘 */
+      }
+
+      const diskBoards = scanBoardsRoot(boardsRoot).map((dir) => ({
+        id: deriveBoardId(dir),
+        dir,
+        source: 'disk' as const,
+      }));
+
+      // 合并:server 优先(标记 source=server),不在 server 的从 disk 补
+      const merged = new Map<string, {
+        id: string;
+        name?: string;
+        dir: string;
+        source: 'server' | 'disk';
+        isDefault?: boolean;
+        isCurrent: boolean;
+      }>();
+      for (const b of serverBoards) {
+        merged.set(b.id, {
+          id: b.id,
+          name: b.name,
+          dir: b.dir,
+          source: 'server',
+          isDefault: b.isDefault,
+          isCurrent: currentBoardPath === b.dir,
+        });
+      }
+      for (const b of diskBoards) {
+        if (!merged.has(b.id)) {
+          merged.set(b.id, {
+            id: b.id,
+            dir: b.dir,
+            source: 'disk',
+            isCurrent: currentBoardPath === b.dir,
+          });
+        }
+      }
+      const list = [...merged.values()];
+      const currentId =
+        currentBoardPath !== undefined ? deriveBoardId(currentBoardPath) : null;
+      const text =
+        list.length === 0
+          ? `boards-root(${boardsRoot}) 下未发现白板。`
+          : list
+              .map(
+                (b) =>
+                  `${b.isCurrent ? '* ' : '  '}${b.id}${b.name ? `  ${b.name}` : ''}  [${b.source}${b.isDefault ? ',default' : ''}]\n    ${b.dir}`,
+              )
+              .join('\n');
+      return structuredResult(
+        `boards-root: ${boardsRoot}\n当前白板: ${currentId ?? '(未选择)'}\n\n${text}`,
+        { boardsRoot, current: currentId, boards: list },
+      );
+    },
+  );
+
+  // ── 管理:切换当前白板 ────────────────────────────────────────
+  server.registerTool(
+    'board_open_board',
+    {
+      description:
+        '把指定白板设为当前白板(此后所有不显式带 boardId/boardPath 的工具' +
+        '都默认对它生效)。boardId 或 boardPath 二选一。',
+      inputSchema: {
+        boardId: z
+          .string()
+          .optional()
+          .describe('要打开的白板 id(= .board 目录名去掉 .board)。'),
+        boardPath: z
+          .string()
+          .optional()
+          .describe('要打开的白板路径(绝对或相对 boards-root)。'),
+      },
+    },
+    async (a) => {
+      let bp: string;
+      try {
+        bp = resolveBoard(a);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return textResult(msg, true);
+      }
+      currentBoardPath = bp;
+      const id = deriveBoardId(bp);
+      return structuredResult(
+        `已切换当前白板为 ${id}\n  ${bp}`,
+        { boardId: id, boardPath: bp },
+      );
+    },
+  );
+
+  // ── 管理:新建白板 ───────────────────────────────────────────
+  server.registerTool(
+    'board_create_board',
+    {
+      description:
+        '新建一个空白白板。board-server 在跑时经 POST /api/boards 让 server ' +
+        '装入运行时(Web 端即时可见);否则回退到 fs 直建(cmd new --dir boards-root)。' +
+        '建好后默认不切换为当前白板,需 Agent 显式调用 board_open_board。',
+      inputSchema: {
+        name: z.string().describe('白板名称(将作为目录名 <name>.board)'),
+        openAfterCreate: z
+          .boolean()
+          .optional()
+          .describe('建好后立即设为当前白板(默认 false)'),
+      },
+    },
+    async (a) => {
+      // 优先 server。server POST /api/boards 成功返回 201 + BoardSummary(非 envelope);
+      // 失败走 fail() 信封 `{ok:false, error: ...}`。
+      let created: { id: string; name: string; dir: string } | null = null;
+      let serverReached = false;
+      try {
+        const r = await fetch(`http://127.0.0.1:${port}/api/boards`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: a.name }),
+        });
+        serverReached = true;
+        const body = (await r.json()) as
+          | { id: string; name: string; dir: string }
+          | { ok?: false; error?: string };
+        if (!r.ok) {
+          const msg =
+            (body as { error?: string }).error ?? `HTTP ${r.status}`;
+          return textResult(`board_create_board 失败(server):${msg}`, true);
+        }
+        created = body as { id: string; name: string; dir: string };
+      } catch {
+        /* server 未起 — 回退到 cmd new */
+      }
+      if (!created && !serverReached) {
+        try {
+          const r = await cmdNew(
+            mkArgs([a.name], { dir: boardsRoot }),
+          );
+          if (r.code !== 0) {
+            return textResult(`board_create_board 失败:${r.text ?? ''}`, true);
+          }
+          const data = r.data as { dir: string; id: string; name: string };
+          created = data;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return textResult(`board_create_board 失败:${msg}`, true);
+        }
+      }
+      if (!created) {
+        return textResult('board_create_board 失败:未知原因,无返回数据', true);
+      }
+      if (a.openAfterCreate) currentBoardPath = created.dir;
+      return structuredResult(
+        `已创建白板 ${created.id}  ${created.name}\n  ${created.dir}${a.openAfterCreate ? '\n(已设为当前白板)' : ''}`,
+        created,
+      );
+    },
+  );
 
   // ── 读：白板上下文 ──────────────────────────────────────────
   server.registerTool(
@@ -418,6 +790,7 @@ export async function runMcpServer(
         '读取白板上下文（Board Context）：区域、元素、连线、建议的概览，供 Agent ' +
         '理解白板当前状态。渐进式披露 —— 先 depth 0 看概览，再按需取更深层级。',
       inputSchema: {
+        ...boardSelector,
         depth: z
           .number()
           .int()
@@ -432,7 +805,7 @@ export async function runMcpServer(
       },
       outputSchema: ReadContextOutput,
     },
-    async (a) =>
+    withBoard(async (boardPath, a) =>
       runCmd(
         'board_read_context',
         cmdShow,
@@ -440,7 +813,7 @@ export async function runMcpServer(
           depth: a.depth !== undefined ? String(a.depth) : undefined,
           region: a.region,
         }),
-      ),
+      )),
   );
 
   // ── 读：白板元信息 + 统计 ────────────────────────────────────
@@ -451,10 +824,10 @@ export async function runMcpServer(
         '取白板的元信息与全板统计(对照 board_read_context: 那是场景/区域结构,' +
         '本工具是 meta + counts)。返回 id / name / 元素数 / 区域数 / 文件数 / ' +
         '参与者数 / 创建与更新时间。',
-      inputSchema: {},
+      inputSchema: { ...boardSelector },
       outputSchema: InfoOutput,
     },
-    async () => runCmd('board_info', cmdInfo, mkArgs([boardPath])),
+    withBoard(async (boardPath) => runCmd('board_info', cmdInfo, mkArgs([boardPath]))),
   );
 
   // ── 读：文件树 ──────────────────────────────────────────────
@@ -462,9 +835,9 @@ export async function runMcpServer(
     'board_list_files',
     {
       description: '以文件树形式列出白板 files/ 下的全部文件与文件夹。',
-      inputSchema: {},
+      inputSchema: { ...boardSelector },
     },
-    async () => runCmd('board_list_files', cmdTree, mkArgs([boardPath])),
+    withBoard(async (boardPath) => runCmd('board_list_files', cmdTree, mkArgs([boardPath]))),
   );
 
   // ── 写：创建区域 ────────────────────────────────────────────
@@ -473,17 +846,18 @@ export async function runMcpServer(
     {
       description: '创建一个区域（= 在 files/ 下建一个文件夹）。',
       inputSchema: {
+        ...boardSelector,
         name: z.string().describe('区域名'),
         description: z.string().optional().describe('区域用途描述'),
       },
     },
-    async (a) =>
+    withBoard(async (boardPath, a) =>
       runCmd(
         'board_create_region',
         cmdRegion,
         mkArgs(['create', boardPath, a.name], { desc: a.description }),
         port,
-      ),
+      )),
   );
 
   // ── 写：添加文本卡片 ────────────────────────────────────────
@@ -494,29 +868,37 @@ export async function runMcpServer(
         '在白板上添加一张 Markdown 文本卡片。draft=true 时为「进行中」草稿态' +
         '（半透明虚线渲染），可由 report_progress 的 finish 阶段转为正式。',
       inputSchema: {
+        ...boardSelector,
         markdown: z.string().describe('卡片正文（Markdown）'),
         at: z
           .string()
           .optional()
           .describe(
-            '画布坐标 "x,y"（元素左上角）；省略则自动避让落位（不与现有元素' +
-              '重叠）。手工指定时务必为相邻元素留足间距，避免方框 / 连线 / 文字重叠',
+            '锚点坐标 "x,y"（元素左上角偏好位置）。**引擎保证不堆叠**：放在 at，' +
+              '若被占则自动就近避让到空位。省略则纯自动落位。推荐用 at（不必精算间距）。',
+          ),
+        forceAt: z
+          .string()
+          .optional()
+          .describe(
+            '硬坐标 "x,y"，跳过避让直接落（你自负不与他人重叠）。仅在你已自行算好' +
+              '整批互不重叠坐标时用；一般用 at 即可。与 at 互斥。',
           ),
         draft: z.boolean().optional().describe('是否为 draft 草稿态'),
         agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
       },
     },
-    async (a) =>
+    withBoard(async (boardPath, a) =>
       runCmd(
         'board_add_text',
         cmdAdd,
         mkArgs(
           ['text', boardPath, a.markdown],
-          { at: a.at, actor: a.agent },
+          { at: a.at, 'force-at': a.forceAt, actor: a.agent },
           a.draft ? ['draft'] : [],
         ),
         port,
-      ),
+      )),
   );
 
   // ── 写：流式文本卡 ──────────────────────────────────────────
@@ -535,6 +917,7 @@ export async function runMcpServer(
         'N × 22px 的纵向空间，否则会与下方元素重叠。' +
         '需要 board-server 在运行。',
       inputSchema: {
+        ...boardSelector,
         region: z.string().optional().describe('区域名（卡片归属该区域；不传则落画布顶层）'),
         at: z
           .string()
@@ -551,7 +934,7 @@ export async function runMcpServer(
         agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
       },
     },
-    async (a) =>
+    withBoard(async (boardPath, a) =>
       runCmd(
         'board_text_stream_create',
         cmdText,
@@ -567,7 +950,8 @@ export async function runMcpServer(
           },
         ),
         port,
-      ),
+        boardPath,
+      )),
   );
 
   server.registerTool(
@@ -580,6 +964,7 @@ export async function runMcpServer(
         '产生视觉重叠 —— 摆位时应预留余量，或在追加前用 board_add_text / ' +
         '其它工具调整周围元素位置。',
       inputSchema: {
+        ...boardSelector,
         elementId: z.string().describe('文本卡元素 id（board_text_stream_create 返回值）'),
         chunk: z.string().describe('要追加的文本片段（保留 \\n 等格式字符）'),
         line: z
@@ -589,7 +974,7 @@ export async function runMcpServer(
         agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
       },
     },
-    async (a) =>
+    withBoard(async (boardPath, a) =>
       runCmd(
         'board_text_stream_append',
         cmdText,
@@ -602,7 +987,8 @@ export async function runMcpServer(
           },
         ),
         port,
-      ),
+        boardPath,
+      )),
   );
 
   // ── 写：整体替换文本卡 markdown ────────────────────────────
@@ -618,12 +1004,13 @@ export async function runMcpServer(
         '\n\n与 board_text_stream_append 区别:append 是字符级 CRDT 追加(打字' +
         '动画,流式),本工具是整体重置(一次性,无动画)。需 board-server 在运行。',
       inputSchema: {
+        ...boardSelector,
         elementId: z.string().describe('目标 text 元素 id'),
         markdown: z.string().describe('新 markdown 全文(覆盖原内容)'),
         agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
       },
     },
-    async (a) =>
+    withBoard(async (boardPath, a) =>
       runCmd(
         'board_edit_text',
         cmdText,
@@ -633,7 +1020,8 @@ export async function runMcpServer(
           port,
         }),
         port,
-      ),
+        boardPath,
+      )),
   );
 
   // ── 写：上报任务进度（Pencil 式过程可视化）──────────────────
@@ -645,6 +1033,7 @@ export async function runMcpServer(
         '（返回 taskId）；progress 追加步骤 / 更新百分比；finish 完成任务并把' +
         ' draft 元素转为正式。需 board-server 在运行。',
       inputSchema: {
+        ...boardSelector,
         phase: z.enum(['start', 'progress', 'finish']).describe('任务阶段'),
         title: z.string().optional().describe('start：任务标题（在做什么）'),
         region: z.string().optional().describe('start：任务卡所在区域名'),
@@ -659,7 +1048,7 @@ export async function runMcpServer(
         agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写（仅 start 阶段生效）'),
       },
     },
-    async (a): Promise<CallToolResult> => {
+    withBoard(async (boardPath, a): Promise<CallToolResult> => {
       if (a.phase === 'start') {
         if (!a.title) return textResult('start 阶段需要 title', true);
         return runCmd(
@@ -672,6 +1061,8 @@ export async function runMcpServer(
             actor: a.agent,
             port,
           }),
+          port,
+          boardPath,
         );
       }
       if (!a.taskId) {
@@ -686,14 +1077,18 @@ export async function runMcpServer(
             percent: a.percent !== undefined ? String(a.percent) : undefined,
             port,
           }),
+          port,
+          boardPath,
         );
       }
       return runCmd(
         'board_report_progress',
         cmdTask,
         mkArgs(['finish', a.taskId], { summary: a.summary, port }),
+        port,
+        boardPath,
       );
-    },
+    }),
   );
 
   // ── 写：创建建议（建议机制，PRD §7.3）────────────────────────
@@ -707,6 +1102,7 @@ export async function runMcpServer(
         '关键：`markdown` 只放「同意后会并入白板的纯内容」，把「为什么这么改」' +
         '之类的说明放进 `reason` —— 二者分开，同意时只并入 markdown，reason 不并入。',
       inputSchema: {
+        ...boardSelector,
         targetId: z.string().describe('被建议的目标元素 id'),
         markdown: z
           .string()
@@ -725,7 +1121,7 @@ export async function runMcpServer(
           .describe('发起建议的 Agent id（写入 authorId）'),
       },
     },
-    async (a) =>
+    withBoard(async (boardPath, a) =>
       runCmd(
         'board_create_suggestion',
         cmdSuggest,
@@ -739,7 +1135,7 @@ export async function runMcpServer(
           },
         ),
         port,
-      ),
+      )),
   );
 
   // ── 写：处理建议 — accept / reject / describe（PRD §7.3 反馈回路）─────
@@ -753,17 +1149,18 @@ export async function runMcpServer(
         '同意一条建议：replace 替换目标内容 / add 落地新元素,移除建议元素。' +
         'Agent 处理「提给自己的建议」时使用本工具。',
       inputSchema: {
+        ...boardSelector,
         suggestionId: z.string().describe('被处理的建议元素 id'),
         agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
       },
     },
-    async (a) =>
+    withBoard(async (boardPath, a) =>
       runCmd(
         'board_accept_suggestion',
         cmdSuggest,
         mkArgs(['accept', boardPath, a.suggestionId], { actor: a.agent }),
         port,
-      ),
+      )),
   );
 
   server.registerTool(
@@ -772,17 +1169,18 @@ export async function runMcpServer(
       description:
         '拒绝一条建议：删除建议元素,原件不变。Agent 不接受别人提给它的建议时使用。',
       inputSchema: {
+        ...boardSelector,
         suggestionId: z.string().describe('被拒绝的建议元素 id'),
         agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
       },
     },
-    async (a) =>
+    withBoard(async (boardPath, a) =>
       runCmd(
         'board_reject_suggestion',
         cmdSuggest,
         mkArgs(['reject', boardPath, a.suggestionId], { actor: a.agent }),
         port,
-      ),
+      )),
   );
 
   server.registerTool(
@@ -794,6 +1192,7 @@ export async function runMcpServer(
         '但想给出修改方向时使用,默认 role=agent；人在 Web 端写描述时 role=human。' +
         '读 thread 用 board_get_element(对 suggestion 元素会返回 thread 字段)。',
       inputSchema: {
+        ...boardSelector,
         suggestionId: z.string().describe('被反馈的建议元素 id'),
         text: z.string().describe('反馈正文（说明哪里不满意 / 想怎么改）'),
         role: z
@@ -803,7 +1202,7 @@ export async function runMcpServer(
         agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
       },
     },
-    async (a) =>
+    withBoard(async (boardPath, a) =>
       runCmd(
         'board_describe_suggestion',
         cmdSuggest,
@@ -813,7 +1212,7 @@ export async function runMcpServer(
           actor: a.agent,
         }),
         port,
-      ),
+      )),
   );
 
   // ── 写：添加几何图形（画流程图）────────────────────────────
@@ -823,10 +1222,10 @@ export async function runMcpServer(
       description:
         '添加一个几何图形（rectangle / ellipse / diamond）。Agent 画流程图用 —— ' +
         '配合 board_connect 连线即可表达方框 + 箭头的流程图。手绘不开放。' +
-        '排版建议：画流程图务必为各节点留足间距 —— 节点默认约 160x72，相邻节点' +
-        '纵向中心间隔 ≥200、横向 ≥240，否则方框 / 连线 / 文字会挤成一团。' +
-        '省略 at 则自动避让落位（不与现有元素重叠）。',
+        '**摆放由引擎仲裁、保证不堆叠**：给 at 当锚点、被占自动避让，省略则自动落位。' +
+        '画多个节点想要规整网格时，建议直接用 board_add_flow（引擎整体排版）。',
       inputSchema: {
+        ...boardSelector,
         kind: z
           .enum(['rectangle', 'ellipse', 'diamond'])
           .describe('图形类型'),
@@ -835,8 +1234,14 @@ export async function runMcpServer(
           .string()
           .optional()
           .describe(
-            '画布坐标 "x,y"（元素左上角）；省略则自动避让落位（不与现有元素' +
-              '重叠）。手工指定时务必为相邻元素留足间距，避免方框 / 连线 / 文字重叠',
+            '锚点坐标 "x,y"（偏好位置）。引擎放在 at、被占则就近避让到空位（不堆叠）。' +
+              '省略则纯自动落位。推荐用 at，不必精算间距。',
+          ),
+        forceAt: z
+          .string()
+          .optional()
+          .describe(
+            '硬坐标 "x,y"，跳过避让直接落（自负不重叠）。仅在已算好整批互不重叠坐标时用。与 at 互斥。',
           ),
         size: z
           .string()
@@ -846,19 +1251,20 @@ export async function runMcpServer(
         agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
       },
     },
-    async (a) =>
+    withBoard(async (boardPath, a) =>
       runCmd(
         'board_add_shape',
         cmdShape,
         mkArgs(['add', boardPath, a.kind], {
           label: a.label,
           at: a.at,
+          'force-at': a.forceAt,
           size: a.size,
           region: a.region,
           actor: a.agent,
         }),
         port,
-      ),
+      )),
   );
 
   // ── 写：在两元素间连线 ──────────────────────────────────────
@@ -870,6 +1276,7 @@ export async function runMcpServer(
         '文本卡 / 区域；连线自动贴元素边缘、随元素移动与缩放实时跟随，不会戳进' +
         '卡片内部。画流程图：先 board_add_shape 建节点，再用本工具连。',
       inputSchema: {
+        ...boardSelector,
         from: z.string().describe('源元素 id'),
         to: z.string().describe('目标元素 id'),
         label: z.string().optional().describe('连线上的文字'),
@@ -884,7 +1291,7 @@ export async function runMcpServer(
         agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
       },
     },
-    async (a) =>
+    withBoard(async (boardPath, a) =>
       runCmd(
         'board_connect',
         cmdConnect,
@@ -895,7 +1302,7 @@ export async function runMcpServer(
           actor: a.agent,
         }),
         port,
-      ),
+      )),
   );
 
   // ── 读：搜索 ────────────────────────────────────────────────
@@ -905,12 +1312,13 @@ export async function runMcpServer(
       description:
         '搜索白板：元素文字 / 文件名 / 文本类文件内容。结果含元素 id 与命中片段。',
       inputSchema: {
+        ...boardSelector,
         keyword: z.string().describe('搜索关键词（大小写不敏感）'),
       },
       outputSchema: SearchOutput,
     },
-    async (a) =>
-      runCmd('board_search', cmdSearch, mkArgs([boardPath, a.keyword])),
+    withBoard(async (boardPath, a) =>
+      runCmd('board_search', cmdSearch, mkArgs([boardPath, a.keyword]))),
   );
 
   // ── 写：删除元素 ────────────────────────────────────────────
@@ -921,16 +1329,17 @@ export async function runMcpServer(
         '删除一个元素。file 元素的真实文件移入回收站；引用该元素的连线 / 建议' +
         '一并清理。region / folder 元素不在删除范围。',
       inputSchema: {
+        ...boardSelector,
         elementId: z.string().describe('要删除的元素 id'),
       },
     },
-    async (a) =>
+    withBoard(async (boardPath, a) =>
       runCmd(
         'board_delete_element',
         cmdRm,
         mkArgs([boardPath, a.elementId]),
         port,
-      ),
+      )),
   );
 
   // ── 写：加评论 ──────────────────────────────────────────────
@@ -939,18 +1348,19 @@ export async function runMcpServer(
     {
       description: '给某个元素加一条评论（PRD §8.4）。',
       inputSchema: {
+        ...boardSelector,
         elementId: z.string().describe('被评论的元素 id'),
         text: z.string().describe('评论内容'),
         agent: z.string().optional().describe('覆盖启动绑定的评论者 Agent id；通常无需填写'),
       },
     },
-    async (a) =>
+    withBoard(async (boardPath, a) =>
       runCmd(
         'board_add_comment',
         cmdComment,
         mkArgs([boardPath, a.elementId, a.text], { actor: a.agent }),
         port,
-      ),
+      )),
   );
 
   // ── 写：改区域描述 ──────────────────────────────────────────
@@ -959,17 +1369,18 @@ export async function runMcpServer(
     {
       description: '修改区域描述（同步落地为区域文件夹的 README.md）。',
       inputSchema: {
+        ...boardSelector,
         region: z.string().describe('区域名'),
         description: z.string().describe('新的区域描述'),
       },
     },
-    async (a) =>
+    withBoard(async (boardPath, a) =>
       runCmd(
         'board_describe_region',
         cmdRegion,
         mkArgs(['describe', boardPath, a.region], { desc: a.description }),
         port,
-      ),
+      )),
   );
 
   // ── 写：指派区域给 Agent ────────────────────────────────────
@@ -979,17 +1390,18 @@ export async function runMcpServer(
       description:
         '把区域指派给某个 Agent（PRD §7.6 区域委派）—— Agent 的工作范围聚焦此区域。',
       inputSchema: {
+        ...boardSelector,
         region: z.string().describe('区域名'),
         agent: z.string().describe('被指派的 Agent id'),
       },
     },
-    async (a) =>
+    withBoard(async (boardPath, a) =>
       runCmd(
         'board_assign_region',
         cmdRegion,
         mkArgs(['assign', boardPath, a.region], { agent: a.agent }),
         port,
-      ),
+      )),
   );
 
   // ── 写：改元素样式 ──────────────────────────────────────────
@@ -1000,6 +1412,7 @@ export async function runMcpServer(
         '修改元素的统一样式（PRD §6.7）：描边色 / 填充色 / 描边宽度 / 线型 / 透明度。' +
         '可用于给元素做视觉编码（如重要项标红框）。',
       inputSchema: {
+        ...boardSelector,
         elementId: z.string().describe('目标元素 id'),
         stroke: z.string().optional().describe('描边色（hex 或颜色名）'),
         fill: z
@@ -1015,7 +1428,7 @@ export async function runMcpServer(
         agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
       },
     },
-    async (a) =>
+    withBoard(async (boardPath, a) =>
       runCmd(
         'board_style_element',
         cmdStyle,
@@ -1029,7 +1442,7 @@ export async function runMcpServer(
           actor: a.agent,
         }),
         port,
-      ),
+      )),
   );
 
   // ── 写：添加本地文件 ────────────────────────────────────────
@@ -1040,6 +1453,7 @@ export async function runMcpServer(
         '把一个文件添加进白板（复制进 files/，可指定区域）。两种来源二选一：' +
         'source = 本地文件的绝对路径；或 content + filename = 由文本内容直接生成文件。',
       inputSchema: {
+        ...boardSelector,
         source: z
           .string()
           .optional()
@@ -1056,7 +1470,7 @@ export async function runMcpServer(
         agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
       },
     },
-    async (a): Promise<CallToolResult> =>
+    withBoard(async (boardPath, a): Promise<CallToolResult> =>
       safeHandler('board_add_file', async () => {
         let src = a.source;
         let tmpDir: string | undefined;
@@ -1086,7 +1500,7 @@ export async function runMcpServer(
         } finally {
           if (tmpDir) await rm(tmpDir, { recursive: true, force: true });
         }
-      }),
+      })),
   );
 
   // ── 写：添加本地目录 ────────────────────────────────────────
@@ -1095,12 +1509,13 @@ export async function runMcpServer(
     {
       description: '把一个本地目录（连同内部文件）整体添加进白板的 files/。',
       inputSchema: {
+        ...boardSelector,
         source: z.string().describe('本地目录的绝对路径'),
         region: z.string().optional().describe('放入的区域名；省略 = 收件区'),
         agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
       },
     },
-    async (a) =>
+    withBoard(async (boardPath, a) =>
       runCmd(
         'board_add_folder',
         cmdAdd,
@@ -1109,7 +1524,7 @@ export async function runMcpServer(
           actor: a.agent,
         }),
         port,
-      ),
+      )),
   );
 
   // ── 写：按画布坐标摆位元素（与 Web 端拖拽 / 缩放等价）────────
@@ -1123,6 +1538,7 @@ export async function runMcpServer(
         '注意：`connector` 不能直接移动（位置由两端点派生，自动跟随被连元素）。' +
         '排版建议：流程图节点纵向中心间隔 ≥200、横向 ≥240，避免方框 / 连线 / 文字重叠。',
       inputSchema: {
+        ...boardSelector,
         elementId: z.string().describe('目标元素 id'),
         to: z
           .string()
@@ -1134,7 +1550,7 @@ export async function runMcpServer(
         agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
       },
     },
-    async (a) =>
+    withBoard(async (boardPath, a) =>
       runCmd(
         'board_move_element',
         cmdElement,
@@ -1144,7 +1560,7 @@ export async function runMcpServer(
           actor: a.agent,
         }),
         port,
-      ),
+      )),
   );
 
   // ── 写：移动 files/ 内的文件（改归属 / 改名）─────────────────
@@ -1156,6 +1572,7 @@ export async function runMcpServer(
         '某区域文件夹即「改归属」（与 Web 端拖拽文件卡改归属等价）。文件的相对' +
         '路径可从 board_list_files 或 board_read_context 获得。',
       inputSchema: {
+        ...boardSelector,
         from: z.string().describe('源文件相对 files/ 的路径，如 "tickets.pdf"'),
         to: z
           .string()
@@ -1163,13 +1580,13 @@ export async function runMcpServer(
         agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
       },
     },
-    async (a) =>
+    withBoard(async (boardPath, a) =>
       runCmd(
         'board_move_file',
         cmdMv,
         mkArgs([boardPath, a.from, a.to], { actor: a.agent }),
         port,
-      ),
+      )),
   );
 
   // ── 读：读取 files/ 内某文件正文 ─────────────────────────────
@@ -1180,11 +1597,12 @@ export async function runMcpServer(
         '读取白板 files/ 下某个文件的正文。文本类文件内联返回内容（过长截断），' +
         '二进制文件只返回类型与大小。相对路径可从 board_list_files 获得。',
       inputSchema: {
+        ...boardSelector,
         path: z.string().describe('相对 files/ 的文件路径，如 "路线/day1.md"'),
       },
     },
-    async (a) =>
-      safeHandler('board_read_file', () => readBoardFile(boardPath, a.path)),
+    withBoard(async (boardPath, a) =>
+      safeHandler('board_read_file', () => readBoardFile(boardPath, a.path))),
   );
 
   // ── 读：取单个元素的完整详情 ────────────────────────────────
@@ -1195,14 +1613,15 @@ export async function runMcpServer(
         '取单个元素的完整详情（JSON）。对 suggestion 元素会连同 `thread` —— ' +
         '即「描述」反馈回路里人留下的修改意见 —— 一并返回，Agent 据此修订建议。',
       inputSchema: {
+        ...boardSelector,
         elementId: z.string().describe('元素 id'),
       },
       outputSchema: GetElementOutput,
     },
-    async (a) =>
+    withBoard(async (boardPath, a) =>
       safeHandler('board_get_element', () =>
         getBoardElement(boardPath, a.elementId),
-      ),
+      )),
   );
 
   // ── 读：订阅白板事件流（增量游标）─────────────────────────────
@@ -1215,6 +1634,7 @@ export async function runMcpServer(
         'events + cursor；之后每次把上次返回的 cursor 作为 since 再调，即可增量' +
         '获知白板变化，省去反复全量 board_read_context。需 board-server 在运行。',
       inputSchema: {
+        ...boardSelector,
         since: z
           .number()
           .int()
@@ -1227,10 +1647,10 @@ export async function runMcpServer(
       },
       outputSchema: SubscribeEventsOutput,
     },
-    async (a) =>
+    withBoard(async (boardPath, a) =>
       safeHandler('board_subscribe_events', () =>
-        subscribeEvents(port, a.since, a.region),
-      ),
+        subscribeEvents(port, a.since, a.region, deriveBoardId(boardPath)),
+      )),
   );
 
   // ── 导出 / 导入 / 分享（PRD §10.2 与 CLI 对齐）─────────────────────
@@ -1249,6 +1669,7 @@ export async function runMcpServer(
         '/assets/...），out 缺省落到 cwd 的 <name>.board.zip。等价于 CLI ' +
         '`board export`，与 Web 顶栏的「导出 board.json / 导出 zip」对等。',
       inputSchema: {
+        ...boardSelector,
         format: z
           .enum(['json', 'zip'])
           .optional()
@@ -1259,7 +1680,7 @@ export async function runMcpServer(
           .describe('输出路径；json 不传则把内容回到 MCP 调用方，zip 不传则 cwd'),
       },
     },
-    async (a) => {
+    withBoard(async (boardPath, a) => {
       const opts: Record<string, string | undefined> = {};
       if (a.out) opts['out'] = a.out;
       const flags = [a.format === 'zip' ? 'zip' : 'json'];
@@ -1268,7 +1689,7 @@ export async function runMcpServer(
         cmdExport,
         mkArgs([boardPath], opts, flags),
       );
-    },
+    }),
   );
 
   // 导入：把 zip 还原成一个新 .board 目录；不绑当前白板。
@@ -1313,6 +1734,7 @@ export async function runMcpServer(
         'no_token 都可选；默认取 BOARD_SHARE_HOST / BOARD_SHARE_PORT 环境变量或 ' +
         'localhost:4510。',
       inputSchema: {
+        ...boardSelector,
         host: z.string().optional().describe('URL 的 host；省略走环境变量或 localhost'),
         port: z.string().optional().describe('URL 的端口；省略走环境变量或 4510'),
         scheme: z.enum(['http', 'https']).optional().describe('默认 http'),
@@ -1322,7 +1744,7 @@ export async function runMcpServer(
           .describe('true 时不在 URL 里拼 token（用于 BOARD_REQUIRE_TOKEN=false 部署）'),
       },
     },
-    async (a) => {
+    withBoard(async (boardPath, a) => {
       const opts: Record<string, string | undefined> = {};
       if (a.host) opts['host'] = a.host;
       if (a.port) opts['port'] = a.port;
@@ -1333,7 +1755,7 @@ export async function runMcpServer(
         cmdShare,
         mkArgs([boardPath], opts, flags),
       );
-    },
+    }),
   );
 
   // ── 存档点（PRD §8.5，依赖运行中的 board-server）────────────────
@@ -1347,13 +1769,14 @@ export async function runMcpServer(
         '建一份手动存档点（PRD §8.5）。server 把当前 board.json/meta.json/files/ ' +
         '完整复制进 history/snapshots/<id>/。需 board-server 正在运行。',
       inputSchema: {
+        ...boardSelector,
         name: z
           .string()
           .optional()
           .describe('快照名；缺省 = 自动生成（含时间戳）'),
       },
     },
-    async (a) => {
+    withBoard(async (boardPath, a) => {
       const opts: Record<string, string | undefined> = {};
       if (a.name) opts['name'] = a.name;
       return runCmd(
@@ -1361,8 +1784,9 @@ export async function runMcpServer(
         cmdSnapshot,
         mkArgs(['create'], opts),
         port,
+        boardPath,
       );
-    },
+    }),
   );
 
   server.registerTool(
@@ -1370,10 +1794,10 @@ export async function runMcpServer(
     {
       description:
         '列出当前白板的全部存档点（含手动 / 自动 / 复原前自动档）。需 board-server 正在运行。',
-      inputSchema: {},
+      inputSchema: { ...boardSelector },
     },
-    async () =>
-      runCmd('board_snapshot_list', cmdSnapshot, mkArgs(['ls'])),
+    withBoard(async (boardPath) =>
+      runCmd('board_snapshot_list', cmdSnapshot, mkArgs(['ls']), undefined, boardPath)),
   );
 
   server.registerTool(
@@ -1382,16 +1806,18 @@ export async function runMcpServer(
       description:
         '删除一份存档点（含磁盘目录 + meta 索引）。需 board-server 正在运行。',
       inputSchema: {
+        ...boardSelector,
         snapshotId: z.string().describe('要删除的存档 id（取自 board_snapshot_list）'),
       },
     },
-    async (a) =>
+    withBoard(async (boardPath, a) =>
       runCmd(
         'board_snapshot_delete',
         cmdSnapshot,
         mkArgs(['rm', a.snapshotId]),
         port,
-      ),
+        boardPath,
+      )),
   );
 
   server.registerTool(
@@ -1402,16 +1828,18 @@ export async function runMcpServer(
         '再把整套 board.json/meta.json/files/ 换成快照内容；Y.Doc 重新同步给所有 ' +
         'ws 客户端。需 board-server 正在运行。',
       inputSchema: {
+        ...boardSelector,
         snapshotId: z.string().describe('要复原到的存档 id'),
       },
     },
-    async (a) =>
+    withBoard(async (boardPath, a) =>
       runCmd(
         'board_restore',
         cmdRestore,
         mkArgs([a.snapshotId]),
         port,
-      ),
+        boardPath,
+      )),
   );
 
   // ── 操作日志（PRD §6.9）────────────────────────────────────
@@ -1424,6 +1852,7 @@ export async function runMcpServer(
         '时回退磁盘直读 history/oplog.jsonl。每条含 ts / actor / op / details。' +
         '比 board_subscribe_events 留存更长（事件流是内存环），适合事后审计。',
       inputSchema: {
+        ...boardSelector,
         tail: z
           .number()
           .int()
@@ -1432,15 +1861,17 @@ export async function runMcpServer(
       },
       outputSchema: LogOutput,
     },
-    async (a) => {
+    withBoard(async (boardPath, a) => {
       const opts: Record<string, string | undefined> = { port };
       if (a.tail !== undefined) opts['tail'] = String(a.tail);
       return runCmd(
         'board_log',
         cmdLog,
         mkArgs([boardPath], opts),
+        undefined,
+        boardPath,
       );
-    },
+    }),
   );
 
   // 列出某根目录下所有 .board（fs 扫描，不依赖 server）。
@@ -1486,8 +1917,12 @@ export async function runMcpServer(
   const idLine = boundActor
     ? `Agent=${boundActor}${boundName ? ` "${boundName}"` : ''}${boundColor ? ` ${boundColor}` : ''}`
     : 'Agent=（未绑定，回退 u_local）';
+  const currentLine =
+    currentBoardPath !== undefined
+      ? `当前白板：${deriveBoardId(currentBoardPath)} (${currentBoardPath})`
+      : '当前白板：（未选择 — Agent 需先 board_open_board）';
   console.error(
-    `[board mcp] MCP Server 已启动（stdio）— 白板：${boardPath} ｜ ${idLine}`,
+    `[board mcp] MCP Server 已启动（stdio）｜ boards-root: ${boardsRoot} ｜ ${currentLine} ｜ ${idLine}`,
   );
 
   // 阻塞直到 Agent 断开 stdio 连接 —— 否则进程会立即退出、连接中断。

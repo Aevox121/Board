@@ -102,6 +102,52 @@ export function nextSlot(
   return { x: left, y: top };
 }
 
+/**
+ * 锚点优先的防重叠落位（网格行优先外扩，M5 L2 摆放仲裁）。
+ *
+ * 语义：`at` 是「锚点偏好」而非硬坐标 —— 引擎优先放在 anchor，若与现有元素
+ * 相交，则以 anchor 为起点按**网格行优先**（左→右排满一行宽度再换行下移）
+ * 向外扫描，落到第一个不相交的格位。anchor 处空闲（常见情形：Agent 给了
+ * 互不重叠的坐标）则原地返回，零位移。
+ *
+ * 与 `nextSlot` 区别：`nextSlot` 从容器左上角开始填格（适合"丢进收件区"语义）；
+ * 本函数从 anchor 开始（适合"我想放这儿附近"语义），不依赖容器左上基准。
+ *
+ * @param occupied    需要避让的矩形（同层已有元素，尺寸应已 L1 自适应过）
+ * @param size        待放元素尺寸
+ * @param anchor      锚点（元素左上角偏好坐标）
+ * @param opts.gap        元素间距，默认 LAYOUT.gap
+ * @param opts.maxRowWidth 单行向右扫描的最大宽度（超出换行），默认 2400
+ */
+export function placeNearAnchor(
+  occupied: Rect[],
+  size: Size,
+  anchor: { x: number; y: number },
+  opts: { gap?: number; maxRowWidth?: number } = {},
+): { x: number; y: number } {
+  const gap = opts.gap ?? LAYOUT.gap;
+  const maxRowWidth = opts.maxRowWidth ?? 2400;
+  const free = (x: number, y: number): boolean => {
+    const cand: Rect = { x, y, width: size.width, height: size.height };
+    return !occupied.some((o) => overlaps(o, cand));
+  };
+  // anchor 本身空闲 —— 零位移返回（最常见路径）。
+  if (free(anchor.x, anchor.y)) return { x: anchor.x, y: anchor.y };
+
+  const stepX = size.width + gap;
+  const stepY = size.height + gap;
+  for (let row = 0; row < 10_000; row++) {
+    const y = anchor.y + row * stepY;
+    for (let col = 0; col < 10_000; col++) {
+      const x = anchor.x + col * stepX;
+      // 单行宽度护栏：超出 maxRowWidth 换到下一行（col 0 总要试一次）。
+      if (col > 0 && x - anchor.x > maxRowWidth) break;
+      if (free(x, y)) return { x, y };
+    }
+  }
+  return { x: anchor.x, y: anchor.y };
+}
+
 /** 容器需要的最小高度（容纳全部子元素，规格 §9.1 步骤 3）。 */
 export function requiredHeight(container: Rect, children: Rect[]): number {
   const bottom = children.reduce(
