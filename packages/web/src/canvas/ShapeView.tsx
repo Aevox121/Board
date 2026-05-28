@@ -148,7 +148,11 @@ export function ShapeView({
   const commit = (): void => {
     if (finishedRef.current) return;
     finishedRef.current = true;
-    onLabelCommit?.(labelRef.current?.textContent ?? '');
+    // 用 innerText 而非 textContent —— contentEditable 里回车会插入 <div>/<br>，
+    // textContent 会把这些块界丢掉（"line1line2"），innerText 才会还原成 "\n"。
+    // .cv-shape__label 是 white-space:pre-wrap，故 \n 会按多行渲染。去掉末尾多余换行。
+    const text = (labelRef.current?.innerText ?? '').replace(/\n+$/, '');
+    onLabelCommit?.(text);
   };
   const cancel = (): void => {
     if (finishedRef.current) return;
