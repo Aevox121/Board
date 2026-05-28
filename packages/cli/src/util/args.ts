@@ -114,4 +114,6 @@ export const GLOBAL_VALUE_KEYS: ReadonlySet<string> = new Set([
   'nodes',
   'edges',
   'direction',
+  'bbox',
+  'max-size',
 ]);

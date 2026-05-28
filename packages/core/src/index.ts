@@ -8,6 +8,7 @@ export * from './ids.js';
 export * from './style.js';
 export * from './layout.js';
 export * from './flow.js';
+export * from './render.js';
 export * from './fs-mapping.js';
 export * from './factory.js';
 export * from './serialize.js';

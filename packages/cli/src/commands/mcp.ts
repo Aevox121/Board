@@ -17,8 +17,9 @@ import { readFile, writeFile, stat, mkdtemp, rm } from 'node:fs/promises';
 import { existsSync, readdirSync, statSync, type Dirent } from 'node:fs';
 import { basename, isAbsolute, join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
-import { guessMime } from '@board/core';
+import { guessMime, renderSceneSvg, regionsOf, type RenderOptions } from '@board/core';
 import { readBoard } from '../util/board-io.js';
+import { svgToPng } from '../util/rasterize.js';
 import type { ParsedArgs } from '../util/args.js';
 import { CliError, EXIT, type CmdResult } from '../util/io.js';
 import { resolveBoardDir } from '../util/board.js';
@@ -212,6 +213,74 @@ async function getBoardElement(
     return textResult(`board_get_element 失败：未找到元素 ${elementId}`, true);
   }
   return structuredResult(JSON.stringify(el, null, 2), { element: el });
+}
+
+/**
+ * board_render 实现 —— 渲白板缩略图，**回一张 PNG image content 让模型读图自查**
+ * （M5 L4）。MCP 专属（无对应 CLI 命令直接产 image content）。
+ *
+ * 默认 png：core 拼 SVG → resvg 光栅化 → base64 image block，模型能真看到版面
+ * （对齐 / 成组 / 出框 / 越界）。resvg 加载失败时回退返回 SVG 文本 + 提示。
+ * format=svg 时直接回 SVG 文本（轻、可程序化检查，但模型不一定能「看」）。
+ */
+async function renderBoardImage(
+  boardPath: string,
+  a: { region?: string; bbox?: string; maxSize?: number; format?: 'png' | 'svg' },
+): Promise<CallToolResult> {
+  const dir = resolveBoardDir(boardPath, undefined);
+  const { scene } = await readBoard(dir);
+
+  const opts: RenderOptions = {};
+  if (a.maxSize !== undefined) opts.maxSize = a.maxSize;
+  if (a.bbox) {
+    const p = a.bbox.split(',').map((s) => Number(s.trim()));
+    if (p.length === 4 && p.every((n) => Number.isFinite(n)) && p[2]! > 0 && p[3]! > 0) {
+      opts.bbox = { x: p[0]!, y: p[1]!, width: p[2]!, height: p[3]! };
+    } else {
+      return textResult('board_render 失败：bbox 必须形如 "x,y,w,h"（w/h 为正）', true);
+    }
+  }
+  if (a.region) {
+    const region = regionsOf(scene.elements).find(
+      (r) => r.label === a.region || r.path === a.region,
+    );
+    if (!region) {
+      return textResult(`board_render 失败：未找到区域 ${a.region}`, true);
+    }
+    opts.regionId = region.id;
+  }
+
+  const result = renderSceneSvg(scene, opts);
+  const note =
+    `已渲染 ${result.elementCount} 个元素 · ${result.pixelWidth}×${result.pixelHeight}px · ` +
+    `视图 bbox=${result.bbox.x},${result.bbox.y},${result.bbox.width},${result.bbox.height}`;
+
+  if (a.format === 'svg') {
+    return {
+      content: [{ type: 'text', text: `${note}\n\n${result.svg}` }],
+    };
+  }
+
+  try {
+    const png = await svgToPng(result.svg, result.pixelWidth);
+    return {
+      content: [
+        { type: 'text', text: note },
+        { type: 'image', data: png.toString('base64'), mimeType: 'image/png' },
+      ],
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `${note}\n\n[PNG 光栅化失败，回退 SVG 文本：${msg}]\n\n${result.svg}`,
+        },
+      ],
+      isError: false,
+    };
+  }
 }
 
 /**
@@ -1772,6 +1841,44 @@ export async function runMcpServer(
     withBoard(async (boardPath, a) =>
       safeHandler('board_get_element', () =>
         getBoardElement(boardPath, a.elementId),
+      )),
+  );
+
+  // ── 读：渲染白板缩略图（M5 L4，回 PNG 让模型读图自查）──────────
+  server.registerTool(
+    'board_render',
+    {
+      description:
+        '把白板渲成一张缩略图并**直接返回 PNG 图片**，让你「看见」自己摆出来的版面 —— ' +
+        '检查对齐 / 成组 / 留白 / 出框 / 越界这类肉眼才好判断的问题（堆叠已由摆放引擎兜住）。' +
+        '建议：批量摆放 / 画流程图后调一次本工具自查，发现问题再用 board_arrange / element move 调整。' +
+        '可选 region（只渲某区域）或 bbox（只渲某画布范围）聚焦细节。',
+      inputSchema: {
+        ...boardSelector,
+        region: z.string().optional().describe('只渲染该区域（含其子元素）'),
+        bbox: z
+          .string()
+          .optional()
+          .describe('只渲染某画布范围 "x,y,w,h"；与 region 二选一，都不给则渲全板'),
+        maxSize: z
+          .number()
+          .int()
+          .optional()
+          .describe('输出图最大边长 px，默认 1200；细看可调大'),
+        format: z
+          .enum(['png', 'svg'])
+          .optional()
+          .describe('png（默认，可视）/ svg（文本，轻量但模型不一定能看）'),
+      },
+    },
+    withBoard(async (boardPath, a) =>
+      safeHandler('board_render', () =>
+        renderBoardImage(boardPath, {
+          region: a.region,
+          bbox: a.bbox,
+          maxSize: a.maxSize,
+          format: a.format,
+        }),
       )),
   );
 
