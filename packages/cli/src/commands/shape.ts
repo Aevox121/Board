@@ -9,6 +9,8 @@
  */
 import {
   createShapeElement,
+  DEFAULT_STYLE,
+  measureLabelHeight,
   nextZ,
   regionsOf,
   INBOX_RECT,
@@ -74,8 +76,17 @@ async function shapeAdd(args: ParsedArgs): Promise<CmdResult> {
   const z = nextZ(scene.elements);
 
   const size = parsePair(args.options.get('size'));
+  const label = args.options.get('label');
   const width = size ? size[0] : DEFAULT_SHAPE_SIZE.width;
-  const height = size ? size[1] : DEFAULT_SHAPE_SIZE.height;
+  // M5 L1 自适应高度：未显式给 --size 且有 label 时，按 label 折行后所需高度
+  // 撑大盒子（≥默认高），杜绝 label 溢出方框（出框）。给了 --size 即尊重用户值。
+  let height = size ? size[1] : DEFAULT_SHAPE_SIZE.height;
+  if (!size && label) {
+    height = Math.max(
+      DEFAULT_SHAPE_SIZE.height,
+      measureLabelHeight(label, width, DEFAULT_STYLE.fontSize),
+    );
+  }
 
   // 摆放（M5 L2 仲裁）：--force-at 硬坐标 / --at 锚点避让 / 缺省自动落位。
   // --region 时容器为该区域，否则为收件区（顶层）。
@@ -116,7 +127,6 @@ async function shapeAdd(args: ParsedArgs): Promise<CmdResult> {
     y = pos.y;
   }
 
-  const label = args.options.get('label');
   const element = createShapeElement({
     x,
     y,

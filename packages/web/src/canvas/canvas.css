@@ -30,6 +30,9 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   pointer-events: none;
+  /* M5 L1 兜底：盒子高度已按 label 折行在创建时 measureLabelHeight 自适应；
+     此处再加 overflow:hidden，防极端情形文字溢出方框、压到相邻元素。 */
+  overflow: hidden;
 }
 
 /* 标签就地编辑区 —— 居中布局由外层 .cv-shape__label 提供；编辑区本身

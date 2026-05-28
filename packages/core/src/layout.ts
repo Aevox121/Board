@@ -102,6 +102,90 @@ export function nextSlot(
   return { x: left, y: top };
 }
 
+// ── 文字度量（M5 L1 自适应高度）──────────────────────────────
+// 默认字体（PRD §13 决策 13）：CJK 思源宋体（衬线，字面 em 方块）+ 拉丁
+// Code New Roman（等宽）。两类度量可预测、与具体发行版几乎无关：
+//   - CJK / 全角 → advance ≈ 1.0em
+//   - 拉丁等宽   → advance ≈ 0.6em（Code New Roman 校准）
+// 故无需 canvas，纯规则即贴近 web 实际渲染。
+
+/** CJK / 全角字符的 advance（em）。 */
+const CJK_ADVANCE_EM = 1.0;
+/** 等宽拉丁 / 其它窄字符的 advance（em）。 */
+const NARROW_ADVANCE_EM = 0.6;
+/** 与 .cv-shape__label 一致的行高倍数。 */
+const LABEL_LINE_HEIGHT = 1.3;
+
+/** 判断字符是否按「全角 ≈ 1em」计（CJK 汉字 / 假名 / 谚文 / 全角符号等）。 */
+function isWideChar(cp: number): boolean {
+  return (
+    (cp >= 0x1100 && cp <= 0x115f) || // Hangul Jamo
+    (cp >= 0x2e80 && cp <= 0x9fff) || // CJK 部首扩展 .. CJK 统一表意
+    (cp >= 0xa000 && cp <= 0xa4cf) || // Yi
+    (cp >= 0xac00 && cp <= 0xd7a3) || // Hangul 音节
+    (cp >= 0xf900 && cp <= 0xfaff) || // CJK 兼容表意
+    (cp >= 0xfe30 && cp <= 0xfe4f) || // CJK 兼容形式
+    (cp >= 0xff00 && cp <= 0xff60) || // 全角 ASCII / 标点
+    (cp >= 0xffe0 && cp <= 0xffe6) || // 全角符号
+    (cp >= 0x20000 && cp <= 0x3fffd) // CJK 扩展 B+
+  );
+}
+
+/**
+ * 估算一段文字在给定宽度 / 字号下渲染所需高度（px）—— M5 L1 自适应高度。
+ *
+ * 纯规则折行：按 `CJK/全角 ≈ 1em、其余 ≈ 0.6em` 累加行宽，超过内容宽折行，
+ * 显式 `\n` 强制断行；高度 = 行数 × lineHeight × fontSize + 上下 padding。
+ * CJK 为主的 label 这等于精确（思源宋体 em 方块）。
+ *
+ * @param text       文字内容（含 `\n`）
+ * @param widthPx    元素宽度（含 padding）
+ * @param fontSizePx 字号
+ * @param opts.padX/padY  单侧内边距（默认 10 / 6，对齐 .cv-shape__label）
+ * @param opts.lineHeight 行高倍数（默认 1.3）
+ * @param opts.minLines   最少行数（默认 1）
+ */
+export function measureLabelHeight(
+  text: string,
+  widthPx: number,
+  fontSizePx: number,
+  opts: {
+    padX?: number;
+    padY?: number;
+    lineHeight?: number;
+    minLines?: number;
+  } = {},
+): number {
+  const padX = opts.padX ?? 10;
+  const padY = opts.padY ?? 6;
+  const lineHeight = opts.lineHeight ?? LABEL_LINE_HEIGHT;
+  const contentWidth = Math.max(1, widthPx - padX * 2);
+  const advWide = CJK_ADVANCE_EM * fontSizePx;
+  const advNarrow = NARROW_ADVANCE_EM * fontSizePx;
+
+  let totalLines = 0;
+  for (const rawLine of text.split('\n')) {
+    if (rawLine === '') {
+      totalLines += 1;
+      continue;
+    }
+    let cur = 0;
+    let lineCount = 1;
+    for (const ch of rawLine) {
+      const adv = isWideChar(ch.codePointAt(0) ?? 0) ? advWide : advNarrow;
+      if (cur + adv > contentWidth && cur > 0) {
+        lineCount += 1;
+        cur = adv;
+      } else {
+        cur += adv;
+      }
+    }
+    totalLines += lineCount;
+  }
+  totalLines = Math.max(totalLines, opts.minLines ?? 1);
+  return Math.ceil(totalLines * lineHeight * fontSizePx + padY * 2);
+}
+
 /**
  * 锚点优先的防重叠落位（网格行优先外扩，M5 L2 摆放仲裁）。
  *

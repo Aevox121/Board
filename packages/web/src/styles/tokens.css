@@ -53,11 +53,15 @@
     'Source Han Serif', '思源宋体', 'Source Han Serif CN',
     'Noto Serif CJK SC', 'Songti SC', 'STSong', 'SimSun';
 
-  /* 手写体：拉丁走 Excalifont 系，CJK 经 --font-cjk-serif 落到思源宋体；
-     若两边都不可用最终 cursive 兜底。 */
-  --font-hand: 'Excalifont', 'Virgil', 'Patrick Hand', 'Source Han Serif SC',
-    'Noto Serif SC', 'Source Han Serif', '思源宋体', 'Source Han Serif CN',
-    'Noto Serif CJK SC', 'Songti SC', 'STSong', 'SimSun', cursive;
+  /* 画布默认字体（PRD §13 决策 13，2026-05-28 弃手写体）：拉丁走 Code New
+     Roman（等宽），CJK 经思源宋体；两类度量可预测（CJK em 方块 + 拉丁等宽），
+     便于服务端排版精确预测尺寸（见 Agent布局引擎设计 L1）。Code New Roman 未
+     bundle 时回退系统等宽（Cascadia/Consolas），仍保持等宽度量；最终 monospace 兜底。
+     变量名沿用 --font-hand（历史名，现已非手写体）以减少改动面。 */
+  --font-hand: 'Code New Roman', 'Cascadia Mono', 'JetBrains Mono', 'Consolas',
+    'Source Han Serif SC', 'Noto Serif SC', 'Source Han Serif', '思源宋体',
+    'Source Han Serif CN', 'Noto Serif CJK SC', 'Songti SC', 'STSong',
+    'SimSun', monospace;
   /* UI 字体：拉丁走 Inter / system，CJK 同样落到思源宋体。 */
   --font-ui: 'Inter', system-ui, -apple-system, 'Segoe UI',
     'Source Han Serif SC', 'Noto Serif SC', 'Source Han Serif', '思源宋体',
