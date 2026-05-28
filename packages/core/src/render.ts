@@ -70,6 +70,62 @@ function truncateLabel(text: string, widthPx: number, fontSize: number): string 
   return out;
 }
 
+/** 单字宽度估算（CJK/全角 ≈ 1em，其余 ≈ 0.6em）—— 与 truncateLabel 同口径。 */
+function charAdvance(ch: string, fontSize: number): number {
+  const cp = ch.codePointAt(0) ?? 0;
+  const wide =
+    (cp >= 0x2e80 && cp <= 0x9fff) ||
+    (cp >= 0xff00 && cp <= 0xffef) ||
+    (cp >= 0xac00 && cp <= 0xd7a3);
+  return wide ? fontSize : fontSize * 0.6;
+}
+
+/**
+ * 把文本（含 `\n`）折成最多 maxLines 行以适配卡宽 —— 文本卡多行预览用。
+ * 轻去 markdown 行首标记（标题、列表、引用、有序号）让缩略图更易读；超出 maxLines 末行加 …。
+ */
+function wrapToLines(
+  text: string,
+  widthPx: number,
+  fontSize: number,
+  maxLines: number,
+): string[] {
+  const stripMd = (s: string): string =>
+    s
+      .replace(/^\s*#{1,6}\s+/, '')
+      .replace(/^\s*[-*+]\s+/, '• ')
+      .replace(/^\s*>\s+/, '')
+      .replace(/^\s*\d+\.\s+/, '');
+  const all: string[] = [];
+  for (const src of text.split('\n')) {
+    const line = stripMd(src);
+    if (line === '') {
+      all.push('');
+    } else {
+      let cur = '';
+      let curW = 0;
+      for (const ch of line) {
+        const adv = charAdvance(ch, fontSize);
+        if (curW + adv > widthPx && cur) {
+          all.push(cur);
+          cur = ch;
+          curW = adv;
+        } else {
+          cur += ch;
+          curW += adv;
+        }
+      }
+      if (cur) all.push(cur);
+    }
+    if (all.length > maxLines + 2) break; // 够判断是否溢出即可，长文不必全折
+  }
+  if (all.length <= maxLines) return all;
+  const shown = all.slice(0, maxLines);
+  const last = shown[maxLines - 1] ?? '';
+  shown[maxLines - 1] = (last.length > 0 ? last.slice(0, -1) : '') + '…';
+  return shown;
+}
+
 function isRenderableRect(e: Element): boolean {
   return e.type !== 'connector' && e.type !== 'draw';
 }
@@ -286,9 +342,26 @@ export function renderSceneSvg(
       );
     }
 
-    // 文字 label（居中截断）。region 的 label 放左上角。
+    // 文字渲染：region → 左上角粗体单行；text → 多行折行（看得到正文,便于自查）；
+    // 其余（shape/file/folder/...）→ 居中单行截断（标签短,够用）。
     const raw = labelOf(e);
-    if (raw) {
+    if (raw && e.type === 'text') {
+      const padX = 10;
+      const padY = 8;
+      const contentW = Math.max(1, e.width - padX * 2);
+      const lineH = fontSize * 1.3;
+      const maxLines = Math.max(1, Math.floor((e.height - padY * 2) / lineH));
+      const lines = wrapToLines(raw, contentW, fontSize, maxLines);
+      let ty = e.y + padY + fontSize; // 首行基线
+      for (const ln of lines) {
+        if (ln !== '') {
+          parts.push(
+            `<text x="${e.x + padX}" y="${ty.toFixed(1)}" font-size="${fontSize}" fill="#1a1915">${esc(ln)}</text>`,
+          );
+        }
+        ty += lineH;
+      }
+    } else if (raw) {
       const label = truncateLabel(raw, e.width, fontSize);
       if (e.type === 'region') {
         parts.push(

@@ -93,6 +93,10 @@
     'Noto Serif CJK SC', 'Songti SC', 'STSong', 'SimSun', Georgia, serif;
   /* 等宽（代码块 / 角标 / 快捷键）：Code New Roman 本就是等宽编程字体，统一用它。 */
   --font-mono: 'Code New Roman', 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
+  /* 画布元素 fontFamily='code' 走这里（ShapeView/TextCard 的 fontStack 引用
+     var(--font-code)）—— 别名到 --font-mono，确保也走 Code New Roman（此前未
+     定义会落到系统 ui-monospace，与「英文全统一」不符）。 */
+  --font-code: var(--font-mono);
 
   /* ── 字号 ─────────────────────────────────── */
   --text-xs: 12px;
