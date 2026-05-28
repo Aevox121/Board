@@ -22,6 +22,27 @@ let snapshot: CanvasViewport = INITIAL_VIEWPORT;
 const listeners = new Set<() => void>();
 const transformEls = new Set<HTMLElement>();
 
+// ── 手势期 will-change 开关（缩放清晰 ↔ 手势顺滑 两全）─────────────
+// 静止时 transform 容器**不挂** will-change → 浏览器按缩放后的有效分辨率重栅格,
+// 文字（含纯文本卡）保持清晰。手势进行中（每次 set，即 zoom/pan）临时挂
+// `will-change: transform` → 容器提升为合成层、变换走合成线程，手势顺滑（代价是
+// 此刻按原始像素 GPU 放大、略糊）；手势停止 SHARPEN_AFTER_IDLE_MS 后撤掉 will-change
+// → 触发重栅格、回到清晰矢量缩放。这样移动时顺、停下后清晰，二者兼得。
+const SHARPEN_AFTER_IDLE_MS = 300;
+let sharpenTimer: ReturnType<typeof setTimeout> | null = null;
+
+function markTransformActiveThenSharpen(): void {
+  for (const el of transformEls) {
+    if (el.style.willChange !== 'transform') el.style.willChange = 'transform';
+  }
+  if (sharpenTimer !== null) clearTimeout(sharpenTimer);
+  sharpenTimer = setTimeout(() => {
+    sharpenTimer = null;
+    // 撤掉 will-change —— 浏览器对该层重走 paint，按当前缩放分辨率重栅格 → 清晰。
+    for (const el of transformEls) el.style.willChange = 'auto';
+  }, SHARPEN_AFTER_IDLE_MS);
+}
+
 function applyTransformTo(el: HTMLElement, vp: CanvasViewport): void {
   el.style.transform =
     `translate(${vp.scrollX * vp.zoom}px, ${vp.scrollY * vp.zoom}px) ` +
@@ -52,6 +73,8 @@ export const viewportStore = {
     snapshot = value;
     // DOM 先写，再走订阅 —— 让没订阅的 DOM 节点至少能立刻看到正确位置。
     for (const el of transformEls) applyTransformTo(el, snapshot);
+    // 手势进行中挂 will-change（顺滑），停止 1s 后撤掉（重栅格回清晰）。
+    markTransformActiveThenSharpen();
     for (const l of listeners) l();
   },
   /** 订阅视口变化（标准 useSyncExternalStore 协议）。 */

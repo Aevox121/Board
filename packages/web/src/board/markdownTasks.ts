@@ -21,6 +21,11 @@
 import { marked } from 'marked';
 import type { Element, RegionElement } from '@board/core';
 
+// 单个换行也当硬换行（<br>）渲染 —— 用户在文本卡里敲的回车、以及 Agent 写入
+// 的多行 markdown，都按所见保留，不被 CommonMark「单换行并成空格」吃掉。
+// 仍启用 GFM（任务列表 / 表格 / 删除线）。文本卡与文件 md 预览共用此配置。
+marked.setOptions({ gfm: true, breaks: true });
+
 /** 匹配「任务行的方括号位置」—— 仅取方括号本身，避免误改正文里的 `[x]`。 */
 const TASK_LINE_RE = /^([ \t]*(?:>\s*)*[-*+]\s+)\[([ xX])\]/gm;
 

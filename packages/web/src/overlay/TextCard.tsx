@@ -13,7 +13,6 @@
 import { memo, useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { Style, TextElement } from '@board/core';
 import { useBoard } from '../board/BoardContext';
-import { cardRotation } from './util';
 import {
   renderMarkdownRich,
   toggleMarkdownTask,
@@ -62,7 +61,6 @@ function TextCardImpl({
   const [draft, setDraft] = useState(markdown);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const bodyRef = useRef<HTMLElement | null>(null);
-  const rotation = cardRotation(element.id);
 
   // 自适应高度：ResizeObserver 观察 body 实际高度，与 element.height 偏差
   // 超过 4px 即回调（防抖由 OverlayLayer 端做）。编辑态不上报 —— textarea
@@ -202,8 +200,11 @@ function TextCardImpl({
   const className =
     'ov-card ov-text' + (editing ? ' ov-text--editing' : '');
 
+  // 不加 transform: rotate —— 哪怕 ±0.6° 也会把卡片内容钉在合成层纹理上，
+  // 缩放时按原始像素 GPU 放大 → 文字糊。轴对齐（无 rotate）才能像 shape 标签
+  // 那样按缩放后分辨率重栅化、保持清晰。（手写体微旋装饰已随弃用手写字体作废。）
   return (
-    <div className={className} style={{ transform: `rotate(${rotation}deg)` }}>
+    <div className={className}>
       {editing ? (
         <textarea
           ref={taRef}

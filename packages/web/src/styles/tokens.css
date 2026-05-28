@@ -80,16 +80,19 @@
     'Source Han Serif SC', 'Noto Serif SC', 'Source Han Serif', '思源宋体',
     'Source Han Serif CN', 'Noto Serif CJK SC', 'Songti SC', 'STSong',
     'SimSun', monospace;
-  /* UI 字体：拉丁走 Inter / system，CJK 同样落到思源宋体。 */
-  --font-ui: 'Inter', system-ui, -apple-system, 'Segoe UI',
+  /* UI 字体（2026-05-28 决策：英文全局统一 Code New Roman）：拉丁走 Code New
+     Roman（等宽），CJK 落到思源宋体；系统缺该字体时回退 system-ui/sans。 */
+  --font-ui: 'Code New Roman', system-ui, -apple-system, 'Segoe UI',
     'Source Han Serif SC', 'Noto Serif SC', 'Source Han Serif', '思源宋体',
     'Source Han Serif CN', 'Noto Serif CJK SC', 'Songti SC', 'STSong',
     'SimSun', sans-serif;
-  /* 衬线体（文件预览正文）：拉丁走 Tiempos / Source Serif，CJK 思源宋体。 */
-  --font-serif: 'Tiempos', 'Source Serif 4', 'Source Han Serif SC',
+  /* 文件预览正文：英文亦统一 Code New Roman（2026-05-28），CJK 思源宋体；
+     回退 Georgia/serif。 */
+  --font-serif: 'Code New Roman', 'Source Han Serif SC',
     'Noto Serif SC', 'Source Han Serif', '思源宋体', 'Source Han Serif CN',
     'Noto Serif CJK SC', 'Songti SC', 'STSong', 'SimSun', Georgia, serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
+  /* 等宽（代码块 / 角标 / 快捷键）：Code New Roman 本就是等宽编程字体，统一用它。 */
+  --font-mono: 'Code New Roman', 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
 
   /* ── 字号 ─────────────────────────────────── */
   --text-xs: 12px;

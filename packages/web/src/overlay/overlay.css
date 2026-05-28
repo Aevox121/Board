@@ -39,23 +39,25 @@
   position: absolute;
   top: 0;
   left: 0;
-  /* transform / transform-origin 由 viewportStore 直接 mutate（不走 React）。 */
-  /* will-change: transform —— 把容器提升为 GPU 合成层，wheel / pan 的 transform
-   * 变化由合成线程独立完成，主线程零成本。代价：高 zoom（≥200%）下文字依
-   * 原始像素 GPU 放大可能微糊；本团队接受为换取手势顺滑的代价。若要在
-   * 静止时恢复清晰，可后续做 gesture-only 的 toggle。 */
-  will-change: transform;
+  /* transform / transform-origin 由 viewportStore 直接 mutate（不走 React）。
+   *
+   * will-change 不在 CSS 静态设置 —— 改由 viewportStore 做 **gesture-only 开关**
+   * （问题记录 20 的两全方案）：静止时不挂 will-change → 浏览器按缩放后分辨率重
+   * 栅格，文字（含纯文本卡）清晰；手势进行中临时挂 will-change:transform → 合成层
+   * GPU 变换、顺滑（此刻略糊）；停止 1s 后撤掉 → 重栅格回清晰。详见
+   * viewportStore.ts 的 markTransformActiveThenSharpen。
+   * （shape 即便此前一直挂 will-change 也"看着清晰"，是因为其 SVG 几何按矢量重栅格；
+   *  HTML 文本卡无 SVG 兜底，故必须靠 idle 时撤 will-change 才清晰。） */
 }
 
 /* 单个元素的定位槽 —— 按画布坐标绝对定位。
  *
- * will-change: transform —— 把每个 slot 提升为独立的 GPU 合成层。拖动期间
- * `dragStore.setOffset()` 直接 mutate slot 的 style.transform，合成层让这次
- * 变更在合成线程完成，主线程零成本（否则会触发整个 .ov-transform 层重绘）。
- * 代价：每个 slot 多占一些显存；10-20 元素规模可忽略。 */
+ * 不设 will-change（同 .ov-transform，问题记录 20）：若每个 slot 都提升为合成层
+ * bitmap，缩放时会被 GPU 放大 → 文字糊（即便父层不糊）。去掉后随父层一起重栅格、
+ * 缩放清晰。拖动期 dragStore 仍直接 mutate slot 的 style.transform —— 此时走主线程
+ * 重绘（元素规模下可接受），换取静止/缩放时的清晰。 */
 .ov-slot {
   position: absolute;
-  will-change: transform;
 }
 
 /* 创建预览槽 —— 拖拽创建过程中的预览，不接收指针。 */
