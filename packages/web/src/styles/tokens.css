@@ -1,8 +1,26 @@
 /**
  * Board 设计 token — 见 docs/design-system.md
- * 基调：Excalidraw 手绘风 × Claude 官网暖色调。
+ * 基调：Claude 官网暖色调 + 画布手绘描边（字体见下方 @font-face）。
  * 组件样式一律引用本文件的变量，不写死色值。
  */
+
+/* 默认拉丁字体 Code New Roman（等宽，OFL，PRD §13 决策 13）。bundle 进包，
+   各端一致渲染，使服务端排版的「等宽 0.6em」度量精确成立。
+   字体文件：src/styles/fonts/（OFL 协议见同目录 LICENSE.txt）。 */
+@font-face {
+  font-family: 'Code New Roman';
+  src: url('./fonts/CodeNewRoman-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Code New Roman';
+  src: url('./fonts/CodeNewRoman-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
 
 :root {
   /* ── 基础中性色 ───────────────────────────── */
