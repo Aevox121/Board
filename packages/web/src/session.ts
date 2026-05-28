@@ -26,7 +26,39 @@ function hashIndex(seed: string, mod: number): number {
   return Math.abs(h) % mod;
 }
 
-const clientId = crypto.randomUUID();
+/**
+ * 生成本会话 clientId。
+ *
+ * `crypto.randomUUID()` **仅安全上下文（https / localhost）可用** —— 别人用
+ * `http://<局域网IP>:4511` 打开时它是 undefined，会直接抛错让整页崩。故回退：
+ *  ① 有 randomUUID 就用（localhost / https 保持原行为）；
+ *  ② 否则用 `crypto.getRandomValues`（非安全上下文亦可用）拼一个 UUIDv4；
+ *  ③ 再兜底 `Math.random`。这样局域网明文 HTTP 分享也能正常协作。
+ */
+function randomClientId(): string {
+  const c: Crypto | undefined = globalThis.crypto;
+  if (c && typeof c.randomUUID === 'function') {
+    try {
+      return c.randomUUID();
+    } catch {
+      /* 落到下面的回退 */
+    }
+  }
+  if (c && typeof c.getRandomValues === 'function') {
+    const b = new Uint8Array(16);
+    c.getRandomValues(b);
+    b[6] = (b[6]! & 0x0f) | 0x40; // version 4
+    b[8] = (b[8]! & 0x3f) | 0x80; // variant 10
+    const h = Array.from(b, (x) => x.toString(16).padStart(2, '0'));
+    return (
+      `${h.slice(0, 4).join('')}-${h.slice(4, 6).join('')}-` +
+      `${h.slice(6, 8).join('')}-${h.slice(8, 10).join('')}-${h.slice(10, 16).join('')}`
+    );
+  }
+  return `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+const clientId = randomClientId();
 const identity = IDENTITIES[hashIndex(clientId, IDENTITIES.length)]!;
 
 /** 本会话身份。 */
