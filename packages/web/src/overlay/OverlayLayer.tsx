@@ -49,6 +49,7 @@ import {
   createImageElement,
   createEmbedElement,
   createFolderElement,
+  measureLabelHeight,
   DEFAULT_STYLE,
 } from '@board/core';
 import { useBoard } from '../board/BoardContext';
@@ -88,6 +89,17 @@ import {
 import { computeSnap, snapResize, type SnapGuide } from './snap';
 import { CommentPopover } from './CommentPopover';
 import './overlay.css';
+
+/**
+ * 人手路径接入布局引擎 L1（防出框）总开关 —— 2026-05-28 按用户「Option 1」。
+ *
+ * true 时：人手在图形里打的 label 若超出盒高,自动把盒子撑高到容得下（**只增不减**,
+ * 绝不缩小你画的尺寸,也绝不改你点/拖的位置 —— 摆放永远听你的）。文本卡本就由
+ * ResizeObserver 自适应高度,故只补图形这一处。
+ *
+ * 这是对「人手画」行为的改动,用户对其效果尚不确定 —— 置 false 即可**一键整体回退**
+ * 到纯手动（图形 label 超框则裁切,由用户手动 resize）。 */
+const HUMAN_LAYOUT_AUTOHEIGHT = true;
 
 /** 视口状态 —— 与 canvas/viewport.ts 的 CanvasViewport 同构。 */
 export interface OverlayViewport {
@@ -4065,7 +4077,15 @@ export function OverlayLayer({
       elements: cur.elements.map((e): Element => {
         if (e.id !== id || e.type !== 'shape') return e;
         const label = text.trim() ? { ...(e.label ?? {}), text } : null;
-        return { ...e, label, updatedBy: actorId, updatedAt: ts } as Element;
+        // L1 防出框（grow-only）：label 在当前宽度下折行所需高度若超过盒高,撑高;
+        // 只增不减,不动你画的尺寸/位置。总开关 HUMAN_LAYOUT_AUTOHEIGHT 可一键回退。
+        let height = e.height;
+        if (HUMAN_LAYOUT_AUTOHEIGHT && label) {
+          const fs = label.fontSize ?? e.style.fontSize;
+          const need = measureLabelHeight(text, e.width, fs);
+          if (need > height) height = need;
+        }
+        return { ...e, label, height, updatedBy: actorId, updatedAt: ts } as Element;
       }),
     };
     replaceScene(next, 'canvas');
