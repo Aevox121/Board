@@ -21,10 +21,17 @@
 import { marked } from 'marked';
 import type { Element, RegionElement } from '@board/core';
 
-// 单个换行也当硬换行（<br>）渲染 —— 用户在文本卡里敲的回车、以及 Agent 写入
-// 的多行 markdown，都按所见保留，不被 CommonMark「单换行并成空格」吃掉。
-// 仍启用 GFM（任务列表 / 表格 / 删除线）。文本卡与文件 md 预览共用此配置。
-marked.setOptions({ gfm: true, breaks: true });
+/**
+ * marked 解析选项 —— **每次 parse 显式传入**（而非依赖全局 `marked.setOptions`）。
+ *
+ * 为什么不用全局 setOptions：那是模块级副作用，依赖加载顺序、且 vite HMR 不保证
+ * 重跑，marked 又是单例 —— 实测全局设置在运行时没生效。per-call 传参与加载顺序
+ * 无关、最可靠。
+ *
+ * `breaks:true` —— 单个换行也渲成 `<br>`：用户在文本卡敲的回车、Agent 写入的多行
+ * markdown 都按所见保留，不被 CommonMark「单换行并成空格」吃掉。`gfm` 保任务列表/
+ * 表格/删除线。 */
+const MD_OPTIONS = { gfm: true, breaks: true } as const;
 
 /** 匹配「任务行的方括号位置」—— 仅取方括号本身，避免误改正文里的 `[x]`。 */
 const TASK_LINE_RE = /^([ \t]*(?:>\s*)*[-*+]\s+)\[([ xX])\]/gm;
@@ -37,7 +44,7 @@ const TASK_LINE_RE = /^([ \t]*(?:>\s*)*[-*+]\s+)\[([ xX])\]/gm;
  * 解析开销；任何其它 `<input>` 不动。
  */
 export function renderMarkdownWithTaskIndex(md: string): string {
-  const html = marked.parse(md ?? '') as string;
+  const html = marked.parse(md ?? '', MD_OPTIONS) as string;
   let idx = 0;
   return html.replace(
     /<input([^>]*?)type="checkbox"([^>]*?)>/g,
@@ -209,7 +216,7 @@ export function renderMarkdownRich(
   md: string,
   elements: ReadonlyArray<Element>,
 ): string {
-  const withTasks = renderMarkdownWithTaskIndex(md);
+  const withTasks = renderMarkdownWithTaskIndex(md); // 内部已用 MD_OPTIONS(breaks)
   return replaceInternalLinksInHtml(withTasks, elements);
 }
 

@@ -44,7 +44,7 @@ export function SuggestionCard({ element }: SuggestionCardProps): JSX.Element {
   // payload 预览 —— MVP 阶段建议内容均为文本，渲染其 Markdown。
   const previewHtml =
     payload.type === 'text' && payload.markdown
-      ? (marked.parse(payload.markdown) as string)
+      ? (marked.parse(payload.markdown, { gfm: true, breaks: true }) as string)
       : '';
   // 建议理由 —— 与可并入的 payload 严格分开，同意时不进入目标。
   const reasonText = element.reason?.trim() ?? '';
