@@ -955,6 +955,14 @@ export async function runMcpServer(
             '硬坐标 "x,y"，跳过避让直接落（你自负不与他人重叠）。仅在你已自行算好' +
               '整批互不重叠坐标时用；一般用 at 即可。与 at 互斥。',
           ),
+        size: z
+          .string()
+          .optional()
+          .describe(
+            '尺寸 "w" 或 "w,h"。文本卡宽度固定、高度随内容自适应 —— 给宽度 w ' +
+              '控制折行（默认 280，装长文 / 大标题时建议加宽到 400-600 免得被撑太高）；' +
+              'h 可选，仅作初值（web 仍按实际渲染精修高度）。',
+          ),
         draft: z.boolean().optional().describe('是否为 draft 草稿态'),
         agent: z.string().optional().describe('覆盖启动绑定的 Agent id；通常无需填写'),
       },
@@ -965,7 +973,7 @@ export async function runMcpServer(
         cmdAdd,
         mkArgs(
           ['text', boardPath, a.markdown],
-          { at: a.at, 'force-at': a.forceAt, actor: a.agent },
+          { at: a.at, 'force-at': a.forceAt, size: a.size, actor: a.agent },
           a.draft ? ['draft'] : [],
         ),
         port,

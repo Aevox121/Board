@@ -13,6 +13,8 @@ import {
   createTextElement,
   nextZ,
   defaultSizeFor,
+  measureLabelHeight,
+  DEFAULT_STYLE,
   regionsOf,
   INBOX_RECT,
 } from '@board/core';
@@ -42,6 +44,23 @@ function parseAtOption(raw: string | undefined): [number, number] | null {
 }
 
 /**
+ * 解析 `--size "w"` 或 `"w,h"` → {width, height?}；非法 / 缺省返回 null。
+ * 文本卡只需控制**宽度**（决定折行进而决定高度）；高度可选，web 端仍会按
+ * 实际渲染自适应修正，这里给的高度只作初值。
+ */
+function parseSizeOption(
+  raw: string | undefined,
+): { width: number; height: number | null } | null {
+  if (!raw) return null;
+  const parts = raw.split(',').map((s) => Number(s.trim()));
+  const w = parts[0];
+  if (w === undefined || !Number.isFinite(w) || w <= 0) return null;
+  const h = parts[1];
+  const height = h !== undefined && Number.isFinite(h) && h > 0 ? h : null;
+  return { width: w, height };
+}
+
+/**
  * `board add text <白板路径> "<markdown内容>"`
  *
  * 用工厂建文本元素（autoPlaced:true），位置在已有元素基础上简单错开，
@@ -68,7 +87,20 @@ async function addText(args: ParsedArgs): Promise<CmdResult> {
   const handle = await openBoard(dir);
   const { scene } = handle;
 
-  const size = defaultSizeFor('text');
+  // 尺寸：--size 控制宽度（窄卡装长文 / heading 会被撑很高，故开放宽度）；
+  // 高度按 markdown 在该宽度下折行估个初值（L1 measureLabelHeight），用户显式
+  // 给 h 时取 max。web 端 ResizeObserver 会按实际渲染精修高度，这里只为减少跳动。
+  const sizeOpt = parseSizeOption(args.options.get('size'));
+  const defSize = defaultSizeFor('text');
+  const width = sizeOpt ? sizeOpt.width : defSize.width;
+  let height = sizeOpt?.height ?? defSize.height;
+  if (markdown) {
+    height = Math.max(
+      height,
+      measureLabelHeight(markdown, width, DEFAULT_STYLE.fontSize),
+    );
+  }
+  const size = { width, height };
   const z = nextZ(scene.elements);
   const actor = resolveActor(args);
 

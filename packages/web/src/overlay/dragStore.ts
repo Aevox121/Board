@@ -83,6 +83,7 @@ export const dragStore = {
     // 若该元素正在被拖动，立即把当前 offset 应用上去（防止刚 mount 的元素
     // 短暂错位）。
     if (snapshot.active && snapshot.memberIds.has(elementId)) {
+      el.style.willChange = 'transform'; // 拖拽中挂载的成员也补上 will-change
       applyOffsetTo(el, baseTransform, snapshot.offsetX, snapshot.offsetY);
     } else {
       applyOffsetTo(el, baseTransform, 0, 0);
@@ -117,7 +118,12 @@ export const dragStore = {
     // 初始 offset 为 0，但仍要 apply 把可能残留的 transform 清掉。
     for (const id of memberIds) {
       const entry = memberSlots.get(id);
-      if (entry) applyOffsetTo(entry.el, entry.baseTransform, 0, 0);
+      if (entry) {
+        // 拖拽期挂 will-change：被拖 slot 升为合成层、translate 走合成线程顺滑;
+        // end() 撤掉。拖拽是纯 translate（不缩放）故无模糊问题，纯性能收益。
+        entry.el.style.willChange = 'transform';
+        applyOffsetTo(entry.el, entry.baseTransform, 0, 0);
+      }
     }
     for (const l of listeners) l();
     for (const l of offsetListeners) l();
@@ -145,7 +151,10 @@ export const dragStore = {
     offsetVersion++;
     for (const id of old.memberIds) {
       const entry = memberSlots.get(id);
-      if (entry) applyOffsetTo(entry.el, entry.baseTransform, 0, 0);
+      if (entry) {
+        applyOffsetTo(entry.el, entry.baseTransform, 0, 0);
+        entry.el.style.willChange = 'auto'; // 拖拽结束撤 will-change，回静止清晰态
+      }
     }
     for (const l of listeners) l();
     for (const l of offsetListeners) l();
