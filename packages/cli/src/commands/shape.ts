@@ -78,12 +78,14 @@ async function shapeAdd(args: ParsedArgs): Promise<CmdResult> {
   const size = parsePair(args.options.get('size'));
   const label = args.options.get('label');
   const width = size ? size[0] : DEFAULT_SHAPE_SIZE.width;
-  // M5 L1 自适应高度：未显式给 --size 且有 label 时，按 label 折行后所需高度
-  // 撑大盒子（≥默认高），杜绝 label 溢出方框（出框）。给了 --size 即尊重用户值。
-  let height = size ? size[1] : DEFAULT_SHAPE_SIZE.height;
-  if (!size && label) {
+  // M5 L1 自适应高度：label 在给定宽度下折行所需高度作为「地板」 —— 盒子至少
+  // 容得下 label，杜绝出框。`--size` 的高度仅作最小值（宽度仍按用户给的），
+  // 仍会被更长的 label 撑高；不给 `--size` 时以默认尺寸为最小值。
+  const baseHeight = size ? size[1] : DEFAULT_SHAPE_SIZE.height;
+  let height = baseHeight;
+  if (label) {
     height = Math.max(
-      DEFAULT_SHAPE_SIZE.height,
+      baseHeight,
       measureLabelHeight(label, width, DEFAULT_STYLE.fontSize),
     );
   }
