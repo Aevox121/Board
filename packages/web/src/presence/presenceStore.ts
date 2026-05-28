@@ -37,8 +37,25 @@ export interface RemotePresence {
 let users: RemotePresence[] = [];
 const listeners = new Set<() => void>();
 
+// ── rAF 合并通知（性能：人越多越卡的对策之一）────────────────────────
+// 每个对端每秒约 10 次光标上报，N 人时每秒 ~10N 次 applyUpdate。若每次都同步
+// 通知，PresenceLayer 会每秒重渲 ~10N 次（且每次重建全部光标）—— 人一多就卡。
+// 改为把通知合并到下一帧：`users` 引用同步更新（getSnapshot 始终最新、不会
+// tearing），但订阅者每帧最多被通知一次，重渲频率与人数 / 上报频率解耦、
+// 封顶在屏幕刷新率。
+let emitScheduled = false;
+const scheduleFrame: (cb: () => void) => void =
+  typeof requestAnimationFrame === 'function'
+    ? requestAnimationFrame
+    : (cb) => setTimeout(cb, 16);
+
 function emit(): void {
-  for (const l of listeners) l();
+  if (emitScheduled) return;
+  emitScheduled = true;
+  scheduleFrame(() => {
+    emitScheduled = false;
+    for (const l of listeners) l();
+  });
 }
 
 /** 在场参与者外部 store。 */

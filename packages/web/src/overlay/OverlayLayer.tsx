@@ -54,7 +54,7 @@ import {
 } from '@board/core';
 import { useBoard } from '../board/BoardContext';
 import { moveFile } from '../server/files';
-import { deleteElement, uploadFile } from '../server/client';
+import { deleteElement, isAlreadyGoneError, uploadFile } from '../server/client';
 import { apiUrl } from '../server/boardSession';
 import { FileCard, isFileEditable } from './FileCard';
 import { FolderCard } from './FolderCard';
@@ -2700,6 +2700,9 @@ export function OverlayLayer({
         await deleteElement(id);
         // server 已落盘并广播 board-changed，SSE 会刷回权威场景。
       } catch (err) {
+        // 404 = server 上这个元素早已不存在（本地视图滞后于同步）。用户意图
+        // 「删掉它」已达成，保留乐观移除、不弹错；其余错误才回滚 + 提示。
+        if (isAlreadyGoneError(err)) return;
         replaceScene(cur, 'canvas');
         const msg = err instanceof Error ? err.message : String(err);
         toast.error(`删除失败：${msg}`);
@@ -2767,6 +2770,7 @@ export function OverlayLayer({
       try {
         await deleteElement(f.id);
       } catch (err) {
+        if (isAlreadyGoneError(err)) continue; // 已被删，静默跳过
         const msg = err instanceof Error ? err.message : String(err);
         toast.error(`删除文件「${fileBaseName(f.path)}」失败：${msg}`);
       }
@@ -2782,6 +2786,7 @@ export function OverlayLayer({
       try {
         await deleteElement(r.id);
       } catch (err) {
+        if (isAlreadyGoneError(err)) continue; // 已被删，静默跳过
         const msg = err instanceof Error ? err.message : String(err);
         toast.error(`删除区域「${r.label}」失败：${msg}`);
       }

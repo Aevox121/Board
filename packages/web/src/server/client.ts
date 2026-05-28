@@ -42,9 +42,13 @@ interface Envelope<T> {
  * 涵盖网络不可达、超时、HTTP 错误码、信封 `ok:false`、响应体解析失败。
  */
 export class ServerError extends Error {
-  constructor(message: string) {
+  /** HTTP 状态码 —— 仅 server 返回了响应时有值；网络不可达 / 超时为 undefined。
+   *  调用方据此区分「真错」与「资源已不存在（404，可静默处理）」。 */
+  readonly status?: number;
+  constructor(message: string, status?: number) {
     super(message);
     this.name = 'ServerError';
+    this.status = status;
   }
 }
 
@@ -103,7 +107,7 @@ async function readEnvelope<T>(res: Response, path: string): Promise<T> {
   }
   if (!res.ok || !body.ok) {
     const reason = body.error ?? `HTTP ${res.status}`;
-    throw new ServerError(`${path} 失败：${reason}`);
+    throw new ServerError(`${path} 失败：${reason}`, res.status);
   }
   if (body.data === null || body.data === undefined) {
     throw new ServerError(`${path} 响应缺少 data 字段`);
@@ -317,6 +321,17 @@ export async function deleteElement(
     body: JSON.stringify({ elementId }),
   });
   return readEnvelope<DeleteElementResult>(res, 'POST /api/elements/delete');
+}
+
+/**
+ * 删除操作遇到的错误是否等价于「目标已不存在」（server 回 404）。
+ *
+ * 多人协作下「别人的」元素靠收同步更新，本地视图可能滞后：点删时发的是
+ * server 已没有的旧 id → 404。这种情况应视作「已被删」—— 本地静默移除即可，
+ * 不该弹错（用户的意图「删掉它」已达成）。
+ */
+export function isAlreadyGoneError(err: unknown): boolean {
+  return err instanceof ServerError && err.status === 404;
 }
 
 /**

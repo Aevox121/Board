@@ -12,11 +12,11 @@
  */
 import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { computeEditAnchor } from '@board/core';
-import { SESSION } from '../session';
+import { SESSION, resolveIdentity } from '../session';
 import { sendPresence } from '../server/client';
 import { presenceStore } from './presenceStore';
 import { useBoard } from '../board/BoardContext';
-import { useViewport, viewportStore } from '../canvas/viewportStore';
+import { useZoomBucket, viewportStore } from '../canvas/viewportStore';
 import './presence.css';
 
 /** 光标上报节流间隔（毫秒）。 */
@@ -44,9 +44,17 @@ export function PresenceLayer({
   // 给 Agent 轨道光标用 —— Agent 的 targetElementId 解析为 bbox
   const elementById = new Map(scene.elements.map((e) => [e.id, e]));
   const rootRef = useRef<HTMLDivElement>(null);
-  // 渲染对端光标需要随视口实时换算屏幕位置 —— 订阅 viewport store。
-  // 处理函数（mousemove / heartbeat）走 viewportStore.get() 读快照即可。
-  const viewport = useViewport();
+  // 光标容器注册为 viewportStore 的 transform 容器 —— 平移/缩放时由 store 直接
+  // mutate 它的 transform（与 .ov-transform 用同一套变换串、完全同步），不经
+  // React。故平移整画板时对端光标随容器一起 GPU 平移、不再每帧 React 重渲算
+  // 屏幕坐标，消除「他人光标抽搐」。
+  const viewportElRef = useRef<HTMLDivElement>(null);
+  useEffect(() => viewportStore.registerTransformEl(viewportElRef.current), []);
+  // 只订阅「缩放档」（5% 一跳）—— 用于光标内容的反向缩放 1/zoom，保持屏幕恒定
+  // 大小。平移不改 zoom 故不触发本组件重渲；缩放按档更新（档间 ≤5% 误差，
+  // 手势停下即精确）。
+  useZoomBucket();
+  const invZoom = 1 / viewportStore.get().zoom;
 
   // ── 本端光标上报：鼠标移动节流 + 心跳 + 离开 ──────────────────
   useEffect(() => {
@@ -58,10 +66,17 @@ export function PresenceLayer({
       // viewport（PRD §8.2 跟随视角）—— 视口左上角的画布坐标 + zoom；
       // 受让方按此对齐自己的视口。
       const { scrollX, scrollY, zoom } = viewportStore.get();
+      // 显示名 / 配色按「当前在线真人集合」协调得出 —— 各端确定性算法一致，
+      // 不会撞名（Agent 自带名字、不参与，故按 !isAgent 过滤）。
+      const humanIds = presenceStore
+        .getSnapshot()
+        .filter((p) => p.clientId !== SESSION.clientId && !p.isAgent)
+        .map((p) => p.clientId);
+      const me = resolveIdentity(SESSION.clientId, humanIds);
       void sendPresence({
         clientId: SESSION.clientId,
-        name: SESSION.name,
-        color: SESSION.color,
+        name: me.name,
+        color: me.color,
         cursor,
         viewport: { x: -scrollX, y: -scrollY, zoom },
       });
@@ -123,22 +138,24 @@ export function PresenceLayer({
   }, []);
 
   // ── 渲染对端光标 ─────────────────────────────────────────────
-  const { scrollX, scrollY, zoom } = viewport;
+  // 位置全部用「画布坐标」，由外层 .presence-viewport 的 transform 统一换算到屏幕
+  // （和 .ov-transform 同步）；光标本体 / 名牌按 invZoom 反向缩放，保持屏幕恒定大小。
+  const arrowPath =
+    'M5 3 L5 19 L9.6 14.7 L12.6 21 L15.2 19.8 L12.2 13.6 L18.4 13.6 Z';
   return (
     <div className="presence-layer" ref={rootRef}>
-      {users.map((u) => {
-        if (u.clientId === SESSION.clientId) return null;
-        // Agent 轨道光标 —— targetElementId 命中场景元素时，围绕该元素 bbox 运动
-        if (u.targetElementId) {
-          const target = elementById.get(u.targetElementId);
-          if (target) {
+      <div className="presence-viewport" ref={viewportElRef}>
+        {users.map((u) => {
+          if (u.clientId === SESSION.clientId) return null;
+          // Agent 轨道光标 —— targetElementId 命中场景元素时，围绕该元素 bbox 运动
+          if (u.targetElementId) {
+            const target = elementById.get(u.targetElementId);
+            if (!target) return null; // 找不到目标 —— 等下一帧 / 目标出现
             // Agent 焦点点 = element 本地坐标的 targetOffset；缺省由 core 的
-            // computeEditAnchor 据元素类型算（text 取标题行；region 头部 label；
-            // shape 中心；connector 折线中点 …）。用 element 本地坐标 + zoom
-            // 换算到屏幕坐标。
+            // computeEditAnchor 据元素类型算。结果是「画布坐标」，交给容器变换。
             const offset = u.targetOffset ?? computeEditAnchor(target);
-            const cx = (target.x + offset.x + scrollX) * zoom;
-            const cy = (target.y + offset.y + scrollY) * zoom;
+            const cx = target.x + offset.x;
+            const cy = target.y + offset.y;
             // 让不同 client 的 jitter 不同步 —— 给每个 cursor 一个独立 phase
             // delay（基于 clientId 简单哈希）。
             let phase = 0;
@@ -150,96 +167,100 @@ export function PresenceLayer({
               <div
                 key={u.clientId}
                 className="presence-focus"
-                style={{ left: `${cx}px`, top: `${cy}px` }}
+                style={{ transform: `translate(${cx}px, ${cy}px)` }}
               >
                 <div
-                  className="presence-focus__cursor"
-                  style={{
-                    ['--c' as string]: u.color,
-                    ['--jitter-phase' as string]: `${phaseSec.toFixed(2)}s`,
-                  }}
+                  className="presence-focus__scale"
+                  style={{ transform: `scale(${invZoom})` }}
                 >
-                  <svg viewBox="0 0 24 24" width="22" height="22">
-                    <path
-                      d="M5 3 L5 19 L9.6 14.7 L12.6 21 L15.2 19.8 L12.2 13.6 L18.4 13.6 Z"
-                      fill={u.color}
-                      stroke="#ffffff"
-                      strokeWidth="1.4"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                  <span
-                    className={
-                      'presence-focus__name' +
-                      (onFollowClient ? ' presence-name--clickable' : '')
-                    }
-                    style={{ background: u.color }}
-                    onClick={
-                      onFollowClient
-                        ? (e) => {
-                            e.stopPropagation();
-                            onFollowClient(u.clientId);
-                          }
-                        : undefined
-                    }
-                    title={onFollowClient ? `跟随 ${u.name} 视角` : undefined}
+                  <div
+                    className="presence-focus__cursor"
+                    style={{
+                      ['--c' as string]: u.color,
+                      ['--jitter-phase' as string]: `${phaseSec.toFixed(2)}s`,
+                    }}
                   >
-                    ◆ {u.name}
-                  </span>
+                    <svg viewBox="0 0 24 24" width="22" height="22">
+                      <path
+                        d={arrowPath}
+                        fill={u.color}
+                        stroke="#ffffff"
+                        strokeWidth="1.4"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                    <span
+                      className={
+                        'presence-focus__name' +
+                        (onFollowClient ? ' presence-name--clickable' : '')
+                      }
+                      style={{ background: u.color }}
+                      onClick={
+                        onFollowClient
+                          ? (e) => {
+                              e.stopPropagation();
+                              onFollowClient(u.clientId);
+                            }
+                          : undefined
+                      }
+                      title={onFollowClient ? `跟随 ${u.name} 视角` : undefined}
+                    >
+                      ◆ {u.name}
+                    </span>
+                  </div>
                 </div>
               </div>
             );
           }
-          // target 找不到 —— 静默忽略，等下一帧 presence 更新或 target 出现在场景
-          return null;
-        }
-        // 普通人类光标 —— 静态箭头
-        if (!u.cursor) return null;
-        return (
-          <div
-            key={u.clientId}
-            className="presence-cursor"
-            style={{
-              transform: `translate(${(u.cursor.x + scrollX) * zoom}px, ${
-                (u.cursor.y + scrollY) * zoom
-              }px)`,
-            }}
-          >
-            <svg
-              className="presence-arrow"
-              viewBox="0 0 24 24"
-              width="22"
-              height="22"
+          // 普通人类光标 —— 静态箭头
+          if (!u.cursor) return null;
+          return (
+            <div
+              key={u.clientId}
+              className="presence-cursor"
+              style={{ transform: `translate(${u.cursor.x}px, ${u.cursor.y}px)` }}
             >
-              <path
-                d="M5 3 L5 19 L9.6 14.7 L12.6 21 L15.2 19.8 L12.2 13.6 L18.4 13.6 Z"
-                fill={u.color}
-                stroke="#ffffff"
-                strokeWidth="1.4"
-                strokeLinejoin="round"
-              />
-            </svg>
-            <span
-              className={
-                'presence-name' +
-                (onFollowClient ? ' presence-name--clickable' : '')
-              }
-              style={{ background: u.color }}
-              onClick={
-                onFollowClient
-                  ? (e) => {
-                      e.stopPropagation();
-                      onFollowClient(u.clientId);
-                    }
-                  : undefined
-              }
-              title={onFollowClient ? `跟随 ${u.name} 视角` : undefined}
-            >
-              {u.name}
-            </span>
-          </div>
-        );
-      })}
+              <div
+                className="presence-cursor__inner"
+                style={{ transform: `scale(${invZoom})` }}
+              >
+                <svg
+                  className="presence-arrow"
+                  viewBox="0 0 24 24"
+                  width="22"
+                  height="22"
+                >
+                  <path
+                    d={arrowPath}
+                    fill={u.color}
+                    stroke="#ffffff"
+                    strokeWidth="1.4"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+                <span
+                  className={
+                    'presence-name' +
+                    (onFollowClient ? ' presence-name--clickable' : '')
+                  }
+                  style={{ background: u.color }}
+                  onClick={
+                    onFollowClient
+                      ? (e) => {
+                          e.stopPropagation();
+                          onFollowClient(u.clientId);
+                        }
+                      : undefined
+                  }
+                  title={onFollowClient ? `跟随 ${u.name} 视角` : undefined}
+                >
+                  {u.name}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

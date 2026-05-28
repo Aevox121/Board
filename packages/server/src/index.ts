@@ -179,6 +179,13 @@ async function main(): Promise<void> {
       socket.destroy();
       return;
     }
+    // 关 Nagle（TCP_NODELAY）—— Y.Doc 增量帧小，避免被攒包，实时同步更跟手。
+    // 这是 server↔(vite proxy) 的回环腿；client↔vite 的 WiFi 腿在 vite 侧关。
+    if (typeof (socket as { setNoDelay?: unknown }).setNoDelay === 'function') {
+      (socket as unknown as { setNoDelay: (b: boolean) => void }).setNoDelay(
+        true,
+      );
+    }
     wss.handleUpgrade(req, socket, head, (ws) => {
       rt.room.handleWsConnection(ws);
     });

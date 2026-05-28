@@ -9,13 +9,33 @@
   z-index: 50;
 }
 
+/* 光标变换容器 —— 注册到 viewportStore，平移/缩放时由 store 直接 mutate 它的
+   transform（与 .ov-transform 同一套变换串、完全同步）。本身 0 尺寸，子光标用
+   画布坐标定位，溢出由 .presence-layer 的 overflow:hidden 裁剪到视口。 */
+.presence-viewport {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+}
+
 .presence-cursor {
   position: absolute;
   top: 0;
   left: 0;
-  /* transform 把光标定位到对端位置；过渡让节流上报的步进更顺滑 */
+  /* transform 现在是「画布坐标」位移（容器再统一换算到屏幕）；过渡让节流上报的
+     步进更顺滑。平移整画板时本值不变，由容器 GPU 平移，不重渲。 */
   transition: transform 90ms linear;
   will-change: transform;
+}
+
+/* 人类光标内容的反向缩放层 —— scale(1/zoom) 抵消容器的 scale(zoom)，
+   使箭头 / 名牌在任意缩放下都保持屏幕恒定大小。 */
+.presence-cursor__inner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
 }
 
 .presence-arrow {
@@ -51,10 +71,20 @@
  */
 .presence-focus {
   position: absolute;
+  top: 0;
+  left: 0;
   width: 0;
   height: 0;
   pointer-events: none;
   z-index: 51;
+}
+
+/* Agent 焦点光标内容的反向缩放层 —— 同 .presence-cursor__inner，抵消容器缩放。 */
+.presence-focus__scale {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
 }
 
 .presence-focus__cursor {
@@ -225,8 +255,14 @@
   filter: grayscale(0.3);
 }
 
-/* 折叠态：剩余人数计数 */
+/* 折叠态：`+N` 计数按钮 + 悬浮展开列表 */
+.presence-bar__more {
+  position: relative;
+  display: inline-flex;
+}
+
 .presence-bar__overflow {
+  appearance: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -239,6 +275,84 @@
   font-family: var(--font-ui);
   font-size: var(--text-xs, 12px);
   color: var(--c-ink-2, #6e6b62);
+  cursor: pointer;
+  transition: background var(--dur-micro, 150ms),
+    border-color var(--dur-micro, 150ms);
+}
+.presence-bar__more:hover .presence-bar__overflow,
+.presence-bar__more:focus-within .presence-bar__overflow {
+  background: var(--c-surface, #fff);
+  border-color: var(--c-border-strong, #d4d0c0);
+}
+
+/* 折叠列表 —— 默认收起，悬浮 / 聚焦时展开（含一段透明桥避免移入时闪烁）。 */
+.presence-bar__more-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 60;
+  display: none;
+  flex-direction: column;
+  gap: var(--space-1, 4px);
+  min-width: 160px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: var(--space-1, 4px);
+  background: var(--c-surface, #fff);
+  border: 1px solid var(--c-border, #e6e3d8);
+  border-radius: var(--radius-md, 8px);
+  box-shadow: var(--shadow-md);
+}
+.presence-bar__more-pop::before {
+  /* 透明桥：盖住触发器与浮层之间的 6px 间隙，鼠标移入不会丢 hover */
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -8px;
+  height: 8px;
+}
+.presence-bar__more:hover .presence-bar__more-pop,
+.presence-bar__more:focus-within .presence-bar__more-pop {
+  display: flex;
+}
+
+/* 折叠列表里的单行参与者 —— 与 chip 共用 followed/agent 修饰类。 */
+.presence-bar__row {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1, 4px);
+  width: 100%;
+  padding: 2px var(--space-2, 8px) 2px 2px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill, 999px);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs, 12px);
+  color: var(--c-ink);
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--dur-micro, 150ms);
+}
+.presence-bar__row:hover {
+  background: var(--c-surface-sunken, #f4f2ea);
+}
+
+/* 新参与者入场轻微淡入（chip 首次挂载时播放一次）。 */
+.presence-bar__chip--clickable,
+.presence-bar__row {
+  animation: presence-chip-in var(--dur-base, 200ms) var(--ease, ease) both;
+}
+@keyframes presence-chip-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 /* 跟随中横幅 —— CanvasShell 渲染（顶部居中）。 */

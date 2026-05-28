@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type PluginOption } from 'vite';
 import react from '@vitejs/plugin-react';
 
 /**
@@ -7,8 +7,28 @@ import react from '@vitejs/plugin-react';
  */
 const BOARD_API_PORT = process.env.BOARD_API_PORT ?? '4500';
 
+/**
+ * 给 vite dev server 的所有 TCP 连接关掉 Nagle 算法（TCP_NODELAY）。
+ *
+ * 局域网他人经 vite 的 `/yjs` ws proxy 协作时，Y.Doc 增量帧都很小；Nagle 会把
+ * 小帧攒到下个 ACK 才发，叠加延迟 ACK 可造成几十~上百 ms 的「等一段才刷新」。
+ * 这条 client↔vite（WiFi）腿的 socket 由 vite 的 httpServer 持有，故在此统一
+ * setNoDelay。ws 升级走的也是同一批连接（upgrade 前先触发 connection 事件），
+ * 一并覆盖。本机直连 4500 不经此 proxy，故之前感觉本地快、远端慢。
+ */
+function tcpNoDelay(): PluginOption {
+  return {
+    name: 'board-tcp-no-delay',
+    configureServer(server) {
+      server.httpServer?.on('connection', (socket) => {
+        socket.setNoDelay(true);
+      });
+    },
+  };
+}
+
 export default defineConfig(({ mode }) => ({
-  plugins: [react()],
+  plugins: [react(), tcpNoDelay()],
   // Excalidraw 的入口 main.js 在运行时读 process.env.*，而浏览器没有 process。
   // 用 define 在构建期把它们替换为字面量，避免 "process is not defined" 崩溃。
   define: {

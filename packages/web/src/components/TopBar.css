@@ -38,6 +38,7 @@
   font-size: var(--text-lg);
   color: var(--c-ink);
   line-height: 1.25;
+  white-space: nowrap;
 }
 
 .topbar__name {
@@ -72,6 +73,7 @@
   font-family: var(--font-ui);
   font-size: var(--text-xs);
   color: var(--c-ink-3);
+  white-space: nowrap;
 }
 
 /* ── 连接状态指示（M1 web ⇄ server 对接）──────────── */
@@ -147,6 +149,10 @@
   padding: 0 var(--space-3);
   border-radius: var(--radius-md);
   cursor: pointer;
+  /* 小屏下顶栏被挤窄时，CJK 文本会逐字换行竖排。nowrap 强制单行，
+     flex-shrink:0 让按钮保持完整宽度（宁可整条横向溢出，也不要竖排文字）。 */
+  white-space: nowrap;
+  flex-shrink: 0;
   transition:
     background var(--dur-micro) var(--ease),
     border-color var(--dur-micro) var(--ease);
